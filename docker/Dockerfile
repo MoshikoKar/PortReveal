@@ -1,8 +1,25 @@
 # Production image: built frontend + FastAPI backend + nmap, served by uvicorn on one port.
 # Build context is the repository root:  docker compose build
+#
+# Linux Docker host only (matches docker-compose host networking).
+#
+# Build egress (required):
+#   - registry.npmjs.org / deb.debian.org / pypi.org (or mirrors)
+#   - cdn.playwright.dev and storage.googleapis.com:443
+#     Playwright Chromium redirects to Google Storage; if that host is blocked,
+#     `playwright install chromium` fails. Allow it on the firewall, or set
+#     HTTP_PROXY / HTTPS_PROXY in .env so the build can reach it through a proxy.
 
 # ---- 1. frontend build ---------------------------------------------------------
 FROM node:22-alpine AS frontend
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
 WORKDIR /src
 COPY package.json package-lock.json ./
 COPY frontend/package.json frontend/
@@ -12,6 +29,13 @@ RUN npx tsc -p frontend && npx vite build frontend
 
 # ---- 2. runtime ------------------------------------------------------------------
 FROM python:3.12-slim
+
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -33,6 +57,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
+# Chromium download needs storage.googleapis.com:443 (or a proxy that can reach it).
 RUN pip install -r backend/requirements.txt \
  && playwright install --with-deps chromium
 

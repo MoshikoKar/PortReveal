@@ -135,7 +135,17 @@ To try PostgreSQL in development, point `DATABASE_URL` at any PostgreSQL server 
 
 ## Production (Docker Compose)
 
-Requirements: a Linux VM inside the monitored network with Docker Engine + Compose plugin.
+Requirements:
+
+- A **Linux** VM/host inside the monitored network with Docker Engine + Compose plugin
+  (host networking; not Docker Desktop on Windows/macOS).
+- **Build egress:** `storage.googleapis.com:443` must be reachable from the host (Playwright
+  Chromium). Also needed: package indexes (Debian/PyPI/npm) or your usual mirrors. If the
+  host uses an HTTP proxy, set `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` in `.env`.
+- **Inbound:** TCP `APP_PORT` (default `8080`) open to clients that use the UI.
+- Place the host on the LAN segment you want ARP/MAC for (e.g. `10.10.0.0/16`). Routed
+  scopes (e.g. `10.0.0.0/16` via a gateway) can be scanned for IP/ports but not MACs.
+  CIDRs are set in the first-run wizard, not in Compose.
 
 ```bash
 git clone <repo> network_finder && cd network_finder
