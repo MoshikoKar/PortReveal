@@ -341,6 +341,8 @@ def test_real_hal_console_not_flagged_as_soft_404():
     ("Welcome to nginx!", "nginx"),
     ("Apache2 Ubuntu Default Page: It works", "Apache"),
     ("Apache Tomcat/9.0.52", "Tomcat"),
+    ("Apache Tomcat (TomEE)/9.0.35 (8.0.2)", "Tomcat"),
+    ("Test Page for the HTTP Server on Red Hat Enterprise Linux", "Red Hat"),
     ("Welcome to JBoss EAP 8", "JBoss"),
 ])
 def test_default_server_pages_detected(title, server):
@@ -355,6 +357,29 @@ def test_jboss_welcome_body_detected():
         "</body></html>"
     )
     assert unusable_page_reason(200, "Something", html) == "default server page (JBoss)"
+
+
+def test_tomcat_welcome_body_detected():
+    html = (
+        "<html><head><title>Welcome</title><link rel=\"stylesheet\" href=\"tomcat.css\"></head>"
+        "<body><div id=\"wrapper\">"
+        "<h1>If you're seeing this, you've successfully installed Tomcat. Congratulations!</h1>"
+        "</div></body></html>"
+    )
+    assert unusable_page_reason(200, "Welcome", html) == "default server page (Tomcat)"
+
+
+def test_soft_not_found_body_is_unusable():
+    assert unusable_page_reason(200, None, body_text="Not Found") == "error page (soft 404)"
+
+
+def test_stored_title_rematch_without_html():
+    """Existing captures keep only title/status — new rules must apply without re-capture."""
+    assert unusable_page_reason(200, "Apache Tomcat (TomEE)/9.0.35 (8.0.2)") == "default server page (Tomcat)"
+    assert unusable_page_reason(200, "Not Found") is not None
+    assert unusable_page_reason(200, "Test Page for the HTTP Server on Red Hat Enterprise Linux") == (
+        "default server page (Red Hat)"
+    )
 
 
 @pytest.mark.parametrize("title", ["My Real App", "VMware ESXi", "Acme Portal", "Login", "HAL Management Console"])

@@ -393,7 +393,18 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                         elif result.status == "skipped":
                             page.screenshot_status = SCREENSHOT_SKIPPED
                             page.capture_error = result.error
-                            if result.error == BLANK_PAGE_REASON:
+                            # Browser-rendered title can expose SPA soft-404s the probe HTML missed
+                            if not page.title and getattr(result, "title", None):
+                                page.title = result.title
+                            if result.error in (BLANK_PAGE_REASON,) or (
+                                result.error
+                                and (
+                                    result.error.startswith("default server page")
+                                    or result.error.startswith("error page")
+                                    or result.error == "redirect"
+                                    or result.error.startswith("redirect ")
+                                )
+                            ):
                                 shot_cache[cache_key] = (SCREENSHOT_SKIPPED, None, result.error)
                             if result.error == "Chromium unavailable":
                                 browser_missing = True

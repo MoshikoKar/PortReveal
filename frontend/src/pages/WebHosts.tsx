@@ -8,6 +8,47 @@ import { relTime, useApi } from '../util';
 /** A host is a real "web app" if its latest capture produced at least one usable web service. */
 const isApp = (h: WebHost) => h.services.length > 0;
 
+type NoAppKind = 'default' | 'error' | 'redirect' | 'no_response' | 'blank' | 'other';
+
+const NO_APP_FILTERS: { id: NoAppKind; label: string }[] = [
+  { id: 'default', label: 'Default server pages' },
+  { id: 'error', label: 'Errors' },
+  { id: 'redirect', label: 'Redirects' },
+  { id: 'no_response', label: 'No response' },
+  { id: 'blank', label: 'Blank pages' },
+  { id: 'other', label: 'Other' },
+];
+
+/** Why this host has no usable web application (general rules, not per-IP). */
+function noAppKind(h: WebHost): NoAppKind {
+  const p = h.hero;
+  const reason = (p.error_reason ?? p.capture_error ?? '').toLowerCase();
+  if (reason.startsWith('default server page')) return 'default';
+  if (reason === 'blank page' || reason.startsWith('blank page')) return 'blank';
+  if (
+    p.external_redirect
+    || reason === 'redirect'
+    || reason.startsWith('redirect')
+    || (p.http_status != null && p.http_status >= 300 && p.http_status < 400)
+  ) {
+    return 'redirect';
+  }
+  if (p.http_status == null || reason.includes('no http response') || reason === 'no response') {
+    return 'no_response';
+  }
+  if (reason.startsWith('error page') || p.http_status >= 400) return 'error';
+  return 'other';
+}
+
+function noAppLabel(h: WebHost): string {
+  const note = shotNote(h.hero);
+  const title = h.hero.title?.trim();
+  if (title && note && !note.toLowerCase().includes(title.toLowerCase()) && title !== note) {
+    return `${title} — ${note}`;
+  }
+  return title || note;
+}
+
 /** One card per web service, so every app on a host is visible without opening the host. */
 function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number }) {
   const p = s.page;
@@ -45,7 +86,16 @@ function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number
 export default function WebHosts() {
   const { data, error } = useApi<{ hosts: WebHost[] }>('/web-hosts', undefined, 15000);
   const [q, setQ] = useState('');
+  // Hidden by default: default server pages, errors, blank shells, redirects, no-response
   const [showNoApp, setShowNoApp] = useState(false);
+  const [noAppFilters, setNoAppFilters] = useState<Record<NoAppKind, boolean>>({
+    default: true,
+    error: true,
+    redirect: true,
+    no_response: true,
+    blank: true,
+    other: true,
+  });
 
   const needle = q.trim().toLowerCase();
   const matches = (...values: unknown[]) =>
@@ -57,7 +107,22 @@ export default function WebHosts() {
       .map((s, index) => ({ h, s, index }))
       .filter(({ s }) => matches(h.hostname, h.ip, s.page.title, s.page.server_header, s.ports.join(' '), endpointUrl(s.page))));
   const noApp = (data?.hosts ?? []).filter((h) =>
-    !isApp(h) && matches(h.hostname, h.ip, h.hero.title, h.hero.server_header, h.ports.join(' ')));
+    !isApp(h) && matches(h.hostname, h.ip, h.hero.title, h.hero.server_header, h.ports.join(' '), h.hero.error_reason, shotNote(h.hero)));
+
+  const noAppGrouped = (() => {
+    const groups = Object.fromEntries(NO_APP_FILTERS.map((f) => [f.id, [] as WebHost[]])) as Record<NoAppKind, WebHost[]>;
+    for (const h of noApp) {
+      groups[noAppKind(h)].push(h);
+    }
+    return groups;
+  })();
+
+  const visibleNoAppCount = NO_APP_FILTERS.reduce(
+    (n, f) => n + (noAppFilters[f.id] ? noAppGrouped[f.id].length : 0),
+    0,
+  );
+
+  const toggleFilter = (id: NoAppKind) => setNoAppFilters((prev) => ({ ...prev, [id]: !prev[id] }));
 
   return (
     <>
@@ -90,22 +155,60 @@ export default function WebHosts() {
               actions={<button className="btn sm ghost" onClick={() => setShowNoApp((v) => !v)}>{showNoApp ? 'Hide' : 'Show'}</button>}
             >
               {showNoApp && (
-                <table>
-                  <thead><tr><th>Host</th><th>Ports</th><th>Answered with</th><th /></tr></thead>
-                  <tbody>
-                    {noApp.map((h) => (
-                      <tr key={h.device_uuid} className="clickable" onClick={() => { window.location.href = `/devices/${h.device_uuid}/web`; }}>
-                        <td>
-                          <Link to={`/devices/${h.device_uuid}/web`} onClick={(e) => e.stopPropagation()}>{h.hostname ?? h.ip}</Link>
-                          {h.hostname && <div className="mono small muted">{h.ip}</div>}
-                        </td>
-                        <td>{h.ports.map((p) => <span className="chip" key={p}>{p}</span>)}</td>
-                        <td><HttpBadge status={h.hero.http_status} /> <span className="small muted">{h.hero.title ?? shotNote(h.hero)}</span></td>
-                        <td className="right"><span className="muted small">{relTime(h.captured_at)}</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <>
+                  <div className="row wrap" style={{ gap: 6, padding: '10px 14px', borderBottom: '1px solid var(--border, #333)' }}>
+                    <span className="muted small" style={{ marginRight: 4 }}>Show:</span>
+                    {NO_APP_FILTERS.map((f) => {
+                      const count = noAppGrouped[f.id].length;
+                      if (!count) return null;
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          className={`chip${noAppFilters[f.id] ? ' on' : ''}`}
+                          onClick={() => toggleFilter(f.id)}
+                          aria-pressed={noAppFilters[f.id]}
+                        >
+                          {f.label} ({count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {visibleNoAppCount === 0 ? (
+                    <div className="muted small" style={{ padding: 14 }}>All categories are filtered out.</div>
+                  ) : (
+                    NO_APP_FILTERS.map((f) => {
+                      const rows = noAppGrouped[f.id];
+                      if (!noAppFilters[f.id] || !rows.length) return null;
+                      return (
+                        <div key={f.id}>
+                          <div className="muted small" style={{ padding: '10px 14px 4px', fontWeight: 600 }}>
+                            {f.label} — {rows.length}
+                          </div>
+                          <table>
+                            <thead><tr><th>Host</th><th>Ports</th><th>Answered with</th><th /></tr></thead>
+                            <tbody>
+                              {rows.map((h) => (
+                                <tr key={h.device_uuid} className="clickable" onClick={() => { window.location.href = `/devices/${h.device_uuid}/web`; }}>
+                                  <td>
+                                    <Link to={`/devices/${h.device_uuid}/web`} onClick={(e) => e.stopPropagation()}>{h.hostname ?? h.ip}</Link>
+                                    {h.hostname && <div className="mono small muted">{h.ip}</div>}
+                                  </td>
+                                  <td>{h.ports.map((p) => <span className="chip" key={p}>{p}</span>)}</td>
+                                  <td>
+                                    <HttpBadge status={h.hero.http_status} />{' '}
+                                    <span className="small muted">{noAppLabel(h)}</span>
+                                  </td>
+                                  <td className="right"><span className="muted small">{relTime(h.captured_at)}</span></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      );
+                    })
+                  )}
+                </>
               )}
             </Card>
           )}

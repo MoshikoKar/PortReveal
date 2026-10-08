@@ -141,6 +141,8 @@ tr.dim td { color: var(--muted); }
 .badge.outline { background: transparent; border-color: var(--border-2); color: var(--text-2); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
 .chip { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border-radius: 4px; background: var(--panel-3); color: var(--text-2); margin: 1px 4px 1px 0; border: 1px solid var(--border); }
+button.chip { cursor: pointer; }
+.chip.on { border-color: var(--accent, #5b8def); color: var(--text); background: color-mix(in srgb, var(--accent, #5b8def) 18%, var(--panel-3)); }
 .chip.new { border-color: rgba(248, 113, 113, 0.5); color: var(--high); }
 
 /* ---------- forms ---------- */
