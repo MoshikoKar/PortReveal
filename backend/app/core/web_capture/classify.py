@@ -55,16 +55,24 @@ ERROR_TITLE_RE = re.compile(
 )
 # Undertow / JBoss / IIS often answer 200 with a bare "404 - Not Found" body (title may still
 # say something useful like "HAL Management Console" when the console is not actually there).
+# Also bare "Not Found" from a rendered SPA router with no real app behind it.
 SOFT_404_TEXT_RE = re.compile(
-    r"^404\s*[-–—:]?\s*(?:not\s+found|file or directory not found|page not found|page missing)\.?$",
+    r"^(?:404\s*[-–—:]?\s*)?(?:not\s+found|file or directory not found|page not found|page missing)\.?$"
+    r"|^404\s*$",
     re.I,
 )
 # Out-of-the-box server pages: the web server is installed but no application is published at "/"
 DEFAULT_PAGE_TITLES = (
     (re.compile(r"^\s*IIS(?:\s*Windows(?:\s*Server)?|\s*\d+(?:\.\d+)?)?\s*$|Internet Information Services", re.I), "IIS"),
     (re.compile(r"Apache2? .*Default Page|Apache HTTP Server Test Page|Test Page for the Apache", re.I), "Apache"),
+    (re.compile(
+        r"Test Page for the HTTP Server on Red Hat|Red Hat Enterprise Linux(?:\s+\d+(?:\.\d+)*)?\s+Test Page",
+        re.I,
+    ), "Red Hat"),
     (re.compile(r"Welcome to nginx|Test Page for the Nginx", re.I), "nginx"),
-    (re.compile(r"^\s*Apache Tomcat(?:/[\d.]+)?\s*$", re.I), "Tomcat"),
+    # Stock Tomcat / TomEE welcome titles: "Apache Tomcat/9.0.52", "Apache Tomcat (TomEE)/9.0.35 (8.0.2)"
+    (re.compile(r"^\s*Apache Tomcat(?:\s*\([^)]+\))?(?:/[\d.]+)?(?:\s*\([^)]+\))?\s*$", re.I), "Tomcat"),
+    (re.compile(r"^\s*Apache Tomcat\b", re.I), "Tomcat"),
     (re.compile(r"Welcome to (?:JBoss|WildFly)|JBoss EAP|Red Hat JBoss Enterprise Application Platform", re.I), "JBoss"),
     (re.compile(r"Web Server.s Default Page|Default Web Site Page", re.I), "web server"),
 )
@@ -73,6 +81,18 @@ JBOSS_WELCOME_BODY_RE = re.compile(
     r"Your Red Hat JBoss Enterprise Application Platform is running"
     r"|Welcome to JBoss EAP\b"
     r"|To replace this page simply deploy your own war",
+    re.I,
+)
+TOMCAT_WELCOME_BODY_RE = re.compile(
+    r"successfully installed Tomcat"
+    r"|If you.re seeing this, you.ve successfully installed Tomcat"
+    r"|tomcat\.css\b",
+    re.I,
+)
+RHEL_TEST_BODY_RE = re.compile(
+    r"Test Page for the HTTP Server on Red Hat"
+    r"|Red Hat Enterprise Linux Test Page"
+    r"|This page is used to test the proper operation of the (?:HTTP|Apache) server",
     re.I,
 )
 # Raw HTML that can still produce something on screen even with no visible text
@@ -170,6 +190,7 @@ def _visible_text(html: str | None, body_text: str | None = None) -> str:
         text = re.sub(r"(?is)<title[^>]*>.*?</title>", " ", html)
         text = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", text)
         text = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", text)
+        text = re.sub(r"(?is)<noscript[^>]*>.*?</noscript>", " ", text)
         text = re.sub(r"(?is)<!--.*?-->", " ", text)
         text = re.sub(r"(?s)<[^>]+>", " ", text)
         parts.append(text)
@@ -189,6 +210,9 @@ def error_page_reason(
         return f"error page (HTTP {http_status})"
     if title and ERROR_TITLE_RE.search(title):
         return "error page (title)"
+    # Title alone can be a soft 404 (stored pages have no body; SPA shells often set document.title)
+    if title and len(title) < 120 and SOFT_404_TEXT_RE.match(title.strip()):
+        return "error page (soft 404)"
     visible = _visible_text(html, body_text)
     if visible and len(visible) < 120 and SOFT_404_TEXT_RE.match(visible):
         return "error page (soft 404)"
@@ -196,12 +220,26 @@ def error_page_reason(
 
 
 def default_page_reason(title: str | None, html: str | None = None, body_text: str | None = None) -> str | None:
-    """Detect a web server's out-of-the-box page (no application published there)."""
+    """Detect a web server's out-of-the-box page (no application published there).
+
+    ``title`` alone is enough for rematch on already-captured rows (HTML is not stored).
+    """
     for rx, server in DEFAULT_PAGE_TITLES:
         if title and rx.search(title):
             return f"default server page ({server})"
     blob = f"{html or ''}\n{body_text or ''}"[:8000]
     if blob and JBOSS_WELCOME_BODY_RE.search(blob):
+        return "default server page (JBoss)"
+    if blob and TOMCAT_WELCOME_BODY_RE.search(blob):
+        return "default server page (Tomcat)"
+    if blob and RHEL_TEST_BODY_RE.search(blob):
+        return "default server page (Red Hat)"
+    # Distinctive body phrases sometimes land in the stored title on older captures
+    if title and TOMCAT_WELCOME_BODY_RE.search(title):
+        return "default server page (Tomcat)"
+    if title and RHEL_TEST_BODY_RE.search(title):
+        return "default server page (Red Hat)"
+    if title and JBOSS_WELCOME_BODY_RE.search(title):
         return "default server page (JBoss)"
     if not title and html and IT_WORKS_RE.search(html[:2000]):
         return "default server page (Apache)"
@@ -232,6 +270,9 @@ def unusable_page_reason(
     Covers an unresolved redirect (status stays 3xx because the destination could not be loaded),
     an error response (including soft 404 bodies), no response at all, a web server's
     out-of-the-box default page (IIS / nginx / JBoss welcome, etc.) and an empty page.
+
+    Safe to call on already-stored pages with only ``http_status`` + ``title`` (no HTML): title
+    rules rematch on every API read so filters apply without re-running Web Capture.
     """
     if http_status is not None and 300 <= http_status < 400:
         return "redirect"

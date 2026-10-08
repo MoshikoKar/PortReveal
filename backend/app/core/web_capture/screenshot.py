@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import Callable
 from urllib.parse import urljoin
 
-from .classify import BLANK_PAGE_REASON
+from .classify import BLANK_PAGE_REASON, unusable_page_reason
 
 log = logging.getLogger(__name__)
 
@@ -21,15 +21,18 @@ NETWORK_IDLE_MS = 4000
 META_REFRESH_RE = re.compile(r"^\s*\d*(?:\.\d+)?\s*[;,]?\s*(?:url\s*=\s*)?['\"]?([^'\"]*)", re.I)
 
 # Does the page show anything? Text (incl. shadow DOM), sized media/controls/frames, or a CSS
-# background image. Also returns any <meta http-equiv=refresh> so it can be followed at once.
+# background image. Also returns any <meta http-equiv=refresh> so it can be followed at once,
+# plus title/body text for soft-error / default-page checks after JS has run (SPA "Not Found").
 _MEASURE_JS = """
 () => {
   const MEDIA = 'img,svg,canvas,video,object,embed,iframe,frame,input,select,textarea,button';
   const sized = (el, min) => { const r = el.getBoundingClientRect(); return r.width >= min && r.height >= min; };
   const meta = document.querySelector('meta[http-equiv="refresh" i]');
   const refresh = meta ? meta.getAttribute('content') : null;
+  const title = (document.title || '').trim().slice(0, 500);
+  const text = ((document.body && document.body.innerText) || '').replace(/\\s+/g, ' ').trim().slice(0, 2000);
   const body = document.body;
-  if (body && (body.innerText || '').trim()) return { visible: true, refresh };
+  if (body && (body.innerText || '').trim()) return { visible: true, refresh, title, text };
   let visible = false;
   const walk = (root) => {
     for (const el of root.querySelectorAll('*')) {
@@ -46,7 +49,7 @@ _MEASURE_JS = """
     const els = [document.documentElement, ...document.querySelectorAll('*')].slice(0, 500);
     visible = els.some((el) => (getComputedStyle(el).backgroundImage || '').includes('url(') && sized(el, 64));
   }
-  return { visible, refresh };
+  return { visible, refresh, title, text };
 }
 """
 
@@ -56,6 +59,8 @@ class ScreenshotResult:
     status: str  # captured | skipped | failed
     data: bytes | None = None
     error: str | None = None
+    title: str | None = None
+    body_text: str | None = None
 
 
 def playwright_available() -> bool:
@@ -88,8 +93,8 @@ def meta_refresh_target(content: str | None, base_url: str) -> str | None:
     return urljoin(base_url, target) if target else None
 
 
-def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bool] | None) -> bool:
-    """Wait until the page shows content and stopped navigating; return whether it shows anything.
+def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bool] | None) -> dict:
+    """Wait until the page shows content and stopped navigating; return the last measure state.
 
     Handles slow single-page apps and "loading…" stubs that redirect after a second or two:
     each main-frame navigation restarts the quiet window, a meta refresh is followed at once,
@@ -97,10 +102,10 @@ def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bo
     """
     end = time.monotonic() + max(0, budget_ms) / 1000
     followed: set[str] = set()
-    visible = False
+    last: dict = {"visible": False, "refresh": None, "title": None, "text": None}
     while True:
         if cancel_check and cancel_check():
-            return visible
+            return last
         left = int((end - time.monotonic()) * 1000)
         try:
             page.wait_for_load_state("networkidle", timeout=max(1, min(left, NETWORK_IDLE_MS)))
@@ -115,8 +120,9 @@ def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bo
         out_of_time = time.monotonic() >= end
         if navs[0] != before or state is None:
             if out_of_time:
-                return visible
+                return last
             continue  # a late redirect started: wait for the page it lands on
+        last = state
         visible = bool(state.get("visible"))
         target = meta_refresh_target(state.get("refresh"), page.url)
         if target and target not in followed and target.rstrip("/") != page.url.rstrip("/") and not out_of_time:
@@ -127,7 +133,7 @@ def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bo
                 pass
             continue
         if visible or out_of_time:
-            return visible
+            return last
         page.wait_for_timeout(300)  # still blank: give a late render / redirect more time
 
 
@@ -144,6 +150,8 @@ def take_screenshot(
 
     After the first load the page gets up to ``settle_ms`` to finish rendering and to follow
     late (JS / meta refresh) redirects. A page that still shows nothing is skipped as blank.
+    Soft-error / default server pages that only become obvious after JS (e.g. SPA "Not Found")
+    are skipped with the classification reason instead of becoming a usable screenshot.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -202,7 +210,7 @@ def take_screenshot(
                     page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 except Exception:
                     pass
-                visible = _settle(page, navs, settle_ms, cancel_check)
+                state = _settle(page, navs, settle_ms, cancel_check)
                 if cancel_check and cancel_check():
                     return ScreenshotResult(status="skipped", error="cancelled")
                 current = page.url or ""
@@ -215,10 +223,23 @@ def take_screenshot(
                         return ScreenshotResult(status="failed", error="redirect outside target")
                 except Exception:
                     pass
-                if not visible:
-                    return ScreenshotResult(status="skipped", error=BLANK_PAGE_REASON)
+                title = (state.get("title") or None) or None
+                body_text = (state.get("text") or None) or None
+                if not state.get("visible"):
+                    return ScreenshotResult(
+                        status="skipped", error=BLANK_PAGE_REASON, title=title, body_text=body_text
+                    )
+                # Probe-time HTML can look like a real SPA shell; after JS the page may only be
+                # "Not Found" or a stock Tomcat/IIS welcome — treat those as unusable.
+                reason = unusable_page_reason(200, title, body_text=body_text)
+                if reason:
+                    return ScreenshotResult(
+                        status="skipped", error=reason, title=title, body_text=body_text
+                    )
                 png = page.screenshot(type="png", full_page=False)
-                return ScreenshotResult(status="captured", data=_to_webp(png))
+                return ScreenshotResult(
+                    status="captured", data=_to_webp(png), title=title, body_text=body_text
+                )
             finally:
                 browser.close()
     except Exception as exc:

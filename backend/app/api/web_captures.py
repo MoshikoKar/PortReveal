@@ -93,16 +93,34 @@ def _has_shot(p: WebPage) -> bool:
     return bool(p.screenshot_relpath and p.screenshot_status == SCREENSHOT_CAPTURED)
 
 
+def _classification_capture_error(err: str | None) -> str | None:
+    """Return ``err`` when it is a page-classification reason persisted at capture time."""
+    if not err:
+        return None
+    if err == BLANK_PAGE_REASON:
+        return err
+    for prefix in ("default server page", "error page", "redirect", "no HTTP response"):
+        if err == prefix or err.startswith(prefix + " ") or err.startswith(prefix + "("):
+            return err
+    return None
+
+
 def _error_reason(p: WebPage) -> str | None:
-    """A short reason this page is not a usable application view, or None if it is real content."""
+    """A short reason this page is not a usable application view, or None if it is real content.
+
+    Rematches current classify rules from stored fields on every read, so new default/error
+    title patterns apply to existing captures without re-running Web Capture.
+    """
     if p.external_redirect:
         return "redirects outside target"
     # RTSP streams have no HTTP status; they are usable when we have a URL (live and/or still).
     if _is_rtsp_page(p):
         return None
-    # Empty body at probe time, or nothing rendered in the browser
-    if p.capture_error == BLANK_PAGE_REASON:
-        return BLANK_PAGE_REASON
+    # Prefer a classification reason stored at capture time (body/JS evidence is not on the row)
+    classified = _classification_capture_error(p.capture_error)
+    if classified:
+        return classified
+    # Live rematch from title/status (HTML is not retained after capture)
     return unusable_page_reason(p.http_status, p.title)
 
 
