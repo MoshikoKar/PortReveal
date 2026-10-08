@@ -26,7 +26,7 @@ from ..settings_store import (
 from .manager import create_scan, manager, network_has_active_scan
 from .notify import send_daily_digest
 from .presence import evaluate_absence, presence_scan_active
-from .retention import run_retention
+from .retention import cleanup_files, live_capture_uuids, purge_expired
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +144,9 @@ def tick(now: datetime | None = None) -> None:
     today = now.date().isoformat()
     queued: list[int] = []
     send_digest = False
+    retention_files: tuple[int, int] | None = None
+    ret_counts: dict[str, int] = {}
+    stale_captures: list[str] = []
     with session_scope() as db:
         state = dict(get_value(db, STATE_KEY, {}) or {})
         cfg = get_section(db, ScheduleSettings)
@@ -189,7 +192,8 @@ def tick(now: datetime | None = None) -> None:
         rt = now.replace(hour=RETENTION_TIME[0], minute=RETENTION_TIME[1], second=0, microsecond=0)
         if now >= rt and state.get("last_retention_date") != today:
             ret = get_section(db, RetentionSettings)
-            run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days)
+            ret_counts, stale_captures = purge_expired(db, ret.days)
+            retention_files = (ret.days, get_section(db, ScanSettings).raw_retention_days)
             state["last_retention_date"] = today
             changed = True
 
@@ -205,6 +209,13 @@ def tick(now: datetime | None = None) -> None:
 
         if changed:
             set_value(db, STATE_KEY, state)
+    if retention_files is not None:
+        # Deletes are committed above; capture-dir/raw-XML cleanup runs without holding the tick's session.
+        ret_days, raw_days = retention_files
+        with session_scope() as db:
+            keep = live_capture_uuids(db)
+        ret_counts.update(cleanup_files(stale_captures, keep, raw_days))
+        log.info("Retention cleanup (%s days): %s", ret_days, ret_counts)
     if send_digest:
         result = send_daily_digest()
         log.info("daily notification digest: %s", result)

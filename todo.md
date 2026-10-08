@@ -5,9 +5,9 @@
 ## 📊 Summary
 
 - **Total findings**: 50
-- **Open**: 37
-- **Completed** (archived — see index below): 13
-- **Severity distribution:** 🔴 Critical: 1 (0 open), 🟠 High: 17 (16 open), 🟡 Medium: 21 (21 open), 🟢 Low: 11 (0 open)
+- **Open**: 15
+- **Completed**: 35 (14 archived — see index below; 21 Medium marked completed inline)
+- **Severity distribution:** 🔴 Critical: 1 (0 open), 🟠 High: 17 (15 open), 🟡 Medium: 21 (0 open), 🟢 Low: 11 (0 open)
 - **Audits synced:** `docs/audit-ux-flow-2026-10-08.md`, `docs/audit-ui-2026-10-08.md`, `docs/audit-performance-2026-10-08.md`
 
 ---
@@ -19,19 +19,6 @@
 ---
 
 ## 🟠 High
-
-### [UX-H2] First-run setup – step lost on refresh
-
-Status: Open
-
-Source: `docs/audit-ux-flow-2026-10-08.md` · `frontend/src/pages/Setup.tsx`
-
-#### Subtasks
-
-- [ ] Persist wizard `step` in URL query or `sessionStorage` in `frontend/src/pages/Setup.tsx`.
-- [ ] Restore step on mount when setup is incomplete (`!setup_completed`).
-
----
 
 ### [UX-H3] First-run setup – Next/Skip discards unsaved form edits
 
@@ -240,268 +227,268 @@ Source: `docs/audit-performance-2026-10-08.md` · `frontend/src/App.tsx`, `front
 
 ### [UX-M1] Stop scan / Cancel web capture without confirmation
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ux-flow-2026-10-08.md` · `frontend/src/pages/Scans.tsx`
 
 #### Subtasks
 
-- [ ] Confirm before `stopScan` posts cancel.
-- [ ] Confirm before `wcCancel` posts cancel.
+- [x] Confirm before `stopScan` posts cancel.
+- [x] Confirm before `wcCancel` posts cancel.
 
 ---
 
 ### [UX-M2] Users – Disable / role change without confirmation
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ux-flow-2026-10-08.md` · `frontend/src/pages/settings/Admin.tsx`
 
 #### Subtasks
 
-- [ ] Confirm before Disable/Enable user patch in `UsersSettings`.
-- [ ] Confirm before role change patch (especially admin → viewer).
+- [x] Confirm before Disable/Enable user patch in `UsersSettings`.
+- [x] Confirm before role change patch (especially admin → viewer).
 
 ---
 
 ### [UX-M3] Setup – Next allowed with zero networks
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ux-flow-2026-10-08.md` · `frontend/src/pages/Setup.tsx`
 
 #### Subtasks
 
-- [ ] Block Network-step Next until ≥1 network exists, or relabel as Skip and warn that baseline/schedule need a network.
+- [x] Block Network-step Next until ≥1 network exists, or relabel as Skip and warn that baseline/schedule need a network.
 
 ---
 
 ### [UX-M4] Setup / settings forms – double-submit risk
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ux-flow-2026-10-08.md` · Setup and settings save actions
 
 #### Subtasks
 
-- [ ] Add busy/disabled submit on `AdminStep` create in `Setup.tsx`.
-- [ ] Add busy/disabled Save on network modal in `Networks.tsx`.
-- [ ] Add busy/disabled Save on exclusion modal in `Exclusions.tsx`.
-- [ ] Add busy/disabled Save on settings forms that still lack it in `Forms.tsx`.
+- [x] Add busy/disabled submit on `AdminStep` create in `Setup.tsx`.
+- [x] Add busy/disabled Save on network modal in `Networks.tsx`.
+- [x] Add busy/disabled Save on exclusion modal in `Exclusions.tsx`.
+- [x] Add busy/disabled Save on settings forms that still lack it in `Forms.tsx`.
 
 ---
 
 ### [UX-M5] Ports page missing from sidebar nav
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ux-flow-2026-10-08.md` · `frontend/src/components/Layout.tsx`
 
 #### Subtasks
 
-- [ ] Add Ports nav link to sidebar in `Layout.tsx` (or add a clear back affordance on `Ports.tsx` if nesting under Dashboard is preferred).
+- [x] Add Ports nav link to sidebar in `Layout.tsx` (or add a clear back affordance on `Ports.tsx` if nesting under Dashboard is preferred).
 
 ---
 
 ### [UX-M6] Scan / web-capture detail open failures are silent
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ux-flow-2026-10-08.md` · `frontend/src/pages/Scans.tsx`
 
 #### Subtasks
 
-- [ ] try/catch `openDetail` and set the shared `err` ErrorBox channel.
-- [ ] try/catch `openWcDetail` and set the shared `err` ErrorBox channel.
+- [x] try/catch `openDetail` and set the shared `err` ErrorBox channel.
+- [x] try/catch `openWcDetail` and set the shared `err` ErrorBox channel.
 
 ---
 
 ### [UX-M7] Edit modals discard dirty drafts without warning
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ux-flow-2026-10-08.md` · `frontend/src/components/ui.tsx`, settings modals
 
 #### Subtasks
 
-- [ ] Support dirty/discard confirm (or disable backdrop dismiss while dirty) on `Modal` or its settings consumers.
-- [ ] Wire dirty-check for network/exclusion/user draft modals on Cancel and backdrop close.
+- [x] Support dirty/discard confirm (or disable backdrop dismiss while dirty) on `Modal` or its settings consumers.
+- [x] Wire dirty-check for network/exclusion/user draft modals on Cancel and backdrop close.
 
 ---
 
 ### [UI-M1] Spacing not tokenized; many inline gaps
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/styles.css`
 
 #### Subtasks
 
-- [ ] Add `--space-*` tokens (4/8/12/16/24) to `:root` in `styles.css`.
-- [ ] Map core layout utilities (`.row`, `.stack`, `.content`, `.grid`) to space tokens where practical.
+- [x] Add `--space-*` tokens (4/8/12/16/24) to `:root` in `styles.css`.
+- [x] Map core layout utilities (`.row`, `.stack`, `.content`, `.grid`) to space tokens where practical.
 
 ---
 
 ### [UI-M2] Body line-height below 1.5
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/styles.css`
 
 #### Subtasks
 
-- [ ] Raise `body` (and long-form `p`) line-height to ≥1.5; keep denser line-height only for table cells if needed.
+- [x] Raise `body` (and long-form `p`) line-height to ≥1.5; keep denser line-height only for table cells if needed.
 
 ---
 
 ### [UI-M3] Heavy uppercase on UI chrome labels
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/styles.css`
 
 #### Subtasks
 
-- [ ] Switch `h3`, `.kpi .label`, and `th` toward sentence case (keep brand eyebrow uppercase only if intentional).
+- [x] Switch `h3`, `.kpi .label`, and `th` toward sentence case (keep brand eyebrow uppercase only if intentional).
 
 ---
 
 ### [UI-M4] Motion without prefers-reduced-motion
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/styles.css`
 
 #### Subtasks
 
-- [ ] Add `@media (prefers-reduced-motion: reduce)` to disable/shorten spinner, pulse, host-card, and shot-image motion.
+- [x] Add `@media (prefers-reduced-motion: reduce)` to disable/shorten spinner, pulse, host-card, and shot-image motion.
 
 ---
 
 ### [UI-M5] Small hit targets on icon buttons and checkboxes
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/styles.css`
 
 #### Subtasks
 
-- [ ] Increase `.btn.icon` hit area toward ≥40px (padding/min-size) in `styles.css`.
-- [ ] Increase checkbox hit area / label padding for easier targeting.
+- [x] Increase `.btn.icon` hit area toward ≥40px (padding/min-size) in `styles.css`.
+- [x] Increase checkbox hit area / label padding for easier targeting.
 
 ---
 
 ### [UI-M6] Topbar status badge cluster competes with hierarchy
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/components/Layout.tsx`
 
 #### Subtasks
 
-- [ ] Move secondary diagnostics (DEV/DB/Scanner/nmap/read-only) into a compact System control; keep scan progress + critical banners inline.
+- [x] Move secondary diagnostics (DEV/DB/Scanner/nmap/read-only) into a compact System control; keep scan progress + critical banners inline.
 
 ---
 
 ### [UI-M7] Radius levels undocumented / inconsistent naming
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/styles.css`
 
 #### Subtasks
 
-- [ ] Define `--radius-sm/md/lg/pill` (or equivalent) in `:root` and map card/control/modal/chip/badge radii to them.
+- [x] Define `--radius-sm/md/lg/pill` (or equivalent) in `:root` and map card/control/modal/chip/badge radii to them.
 
 ---
 
 ### [UI-M8] Changes filters overuse filled primary buttons
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-ui-2026-10-08.md` · `frontend/src/pages/Changes.tsx`
 
 #### Subtasks
 
-- [ ] Restyle range/type filter chips to outline/selected (not filled primary); reserve `.btn.primary` for page CTAs.
+- [x] Restyle range/type filter chips to outline/selected (not filled primary); reserve `.btn.primary` for page CTAs.
 
 ---
 
 ### [Perf-M1] All routes eagerly imported; no React.lazy / Vite chunks
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-performance-2026-10-08.md` · `frontend/src/App.tsx`, `frontend/vite.config.ts`
 
 #### Subtasks
 
-- [ ] Convert page imports in `App.tsx` to `React.lazy` + `Suspense`.
-- [ ] Optionally add Vite `manualChunks` for vendor vs app in `vite.config.ts`.
+- [x] Convert page imports in `App.tsx` to `React.lazy` + `Suspense`.
+- [x] Optionally add Vite `manualChunks` for vendor vs app in `vite.config.ts`.
 
 ---
 
 ### [Perf-M2] Scheduler retention holds one long DB session across FS cleanup
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-performance-2026-10-08.md` · `backend/app/core/scheduler.py`, `backend/app/core/retention.py`
 
 #### Subtasks
 
-- [ ] Commit/finish DB deletes in `run_retention` before filesystem cleanup.
-- [ ] Run capture-dir / raw cleanup outside the scheduler `session_scope` (or in a separate short scope).
+- [x] Commit/finish DB deletes in `run_retention` before filesystem cleanup.
+- [x] Run capture-dir / raw cleanup outside the scheduler `session_scope` (or in a separate short scope).
 
 ---
 
 ### [Perf-M3] Missing indexes on retention filters (`last_seen`, `expires_at`)
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-performance-2026-10-08.md` · `backend/app/models.py`, `backend/app/core/retention.py`
 
 #### Subtasks
 
-- [ ] Add index on `Device.last_seen` in `backend/app/models.py`.
-- [ ] Add index on `UserSession.expires_at` in `backend/app/models.py`.
-- [ ] Add Alembic migration for the new indexes.
+- [x] Add index on `Device.last_seen` in `backend/app/models.py`.
+- [x] Add index on `UserSession.expires_at` in `backend/app/models.py`.
+- [x] Add Alembic migration for the new indexes.
 
 ---
 
 ### [Perf-M4] Web-capture concurrency settings unused (sequential probes)
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-performance-2026-10-08.md` · `backend/app/settings_store.py`, `backend/app/core/web_capture/runner.py`
 
 #### Subtasks
 
-- [ ] Wire `http_concurrency` / `screenshot_concurrency` into bounded parallel work in `web_capture/runner.py`, or remove the unused settings fields.
+- [x] Wire `http_concurrency` / `screenshot_concurrency` into bounded parallel work in `web_capture/runner.py`, or remove the unused settings fields.
 
 ---
 
 ### [Perf-M5] Dashboard/exposed-ports builds unbounded port aggregation
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-performance-2026-10-08.md` · `backend/app/api/dashboard.py`
 
 #### Subtasks
 
-- [ ] Limit `exposed_ports` aggregation to top-N in SQL (or early cut) for dashboard.
-- [ ] Paginate or cap `GET /api/exposed-ports` instead of returning the full ranked set.
+- [x] Limit `exposed_ports` aggregation to top-N in SQL (or early cut) for dashboard.
+- [x] Paginate or cap `GET /api/exposed-ports` instead of returning the full ranked set.
 
 ---
 
 ### [Perf-M6] `/api/devices/uuids` full-loads matching devices then caps at 4096
 
-Status: Open
+Status: Completed
 
 Source: `docs/audit-performance-2026-10-08.md` · `backend/app/api/devices.py` (`list_device_uuids`)
 
 #### Subtasks
 
-- [ ] Select only `uuid` (and sort keys) with SQL filter/sort shared with the list path.
-- [ ] Apply the 4096 cap in SQL (`LIMIT`) before materializing the full match set.
+- [x] Select only `uuid` (and sort keys) with SQL filter/sort shared with the list path.
+- [x] Apply the 4096 cap in SQL (`LIMIT`) before materializing the full match set.
 
 ---
 
@@ -517,9 +504,9 @@ Completed findings live in `todo-archive/`. This file keeps an index only — no
 
 | Archive file | Period | Entries | Link |
 |--------------|--------|---------|------|
-| completed-summary.md | summary | 13 | [open](todo-archive/completed-summary.md) |
+| completed-summary.md | summary | 14 | [open](todo-archive/completed-summary.md) |
 
-**Total completed:** 13
+**Total completed:** 14
 
 ---
 

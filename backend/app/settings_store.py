@@ -213,7 +213,11 @@ class WebCaptureSettings(BaseModel):
     # After a page loads, how long to wait for late JS / meta-refresh redirects and slow rendering
     # before the screenshot; a page still blank after this is skipped.
     page_settle_seconds: float = Field(8.0, ge=0.0, le=60.0)
+    # HTTP(S) endpoints probed in parallel (look-ahead while the job thread saves pages/screenshots).
     http_concurrency: int = Field(3, ge=1, le=8)
+    # Not used yet: screenshots stay sequential on the job thread. Each one drives its own
+    # sync Playwright/Chromium instance, and the per-job screenshot budget and landing-URL reuse
+    # cache depend on processing pages in order. Kept so saved settings/exports stay valid.
     screenshot_concurrency: int = Field(1, ge=1, le=2)
     force_mock: bool = False  # tests / DEV without network
 

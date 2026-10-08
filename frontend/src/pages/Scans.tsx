@@ -79,6 +79,7 @@ export default function Scans() {
 
   const stopScan = async (id: number, e?: MouseEvent) => {
     e?.stopPropagation();
+    if (!confirm(`Stop scan #${id}? Its results so far are discarded and no inventory changes are applied.`)) return;
     setErr(null);
     try {
       await post(`/scans/${id}/cancel`);
@@ -115,12 +116,20 @@ export default function Scans() {
 
   const isActiveStatus = (status: Scan['status']) => status === 'queued' || status === 'running';
 
-  const openDetail = async (id: number) => setDetail(await get<Scan>(`/scans/${id}`));
+  const openDetail = async (id: number) => {
+    setErr(null);
+    try {
+      setDetail(await get<Scan>(`/scans/${id}`));
+    } catch (e: any) {
+      setErr(`Could not open scan #${id}: ${e.message}`);
+    }
+  };
   const onWcStarted = () => { wcHistory.reload(); wcActive.reload(); };
   const running = active.data?.running ?? [];
   const queued = active.data?.queued ?? [];
 
   const wcCancel = async (id: number) => {
+    if (!confirm(`Cancel Web Capture job #${id}? Pages captured so far are kept.`)) return;
     setErr(null);
     try {
       await post(`/web-captures/${id}/cancel`);
@@ -141,7 +150,14 @@ export default function Scans() {
       setErr(e.message);
     }
   };
-  const openWcDetail = async (id: number) => setWcDetail(await get<WebCapture>(`/web-captures/${id}`));
+  const openWcDetail = async (id: number) => {
+    setErr(null);
+    try {
+      setWcDetail(await get<WebCapture>(`/web-captures/${id}`));
+    } catch (e: any) {
+      setErr(`Could not open Web Capture job #${id}: ${e.message}`);
+    }
+  };
 
   return (
     <>

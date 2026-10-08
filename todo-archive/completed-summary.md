@@ -2,7 +2,7 @@
 
 > One line per finding. Full detail: `todo-archive/.backup/`
 
-**Entries:** 13  
+**Entries:** 14  
 **Prettified:** 2026-10-08  
 **Format:** `severity` `id` — outcome (≤72 chars)
 
@@ -10,9 +10,10 @@
 
 - 🔴 `Perf-C1` — SQL COUNT/LIMIT device list; ports loaded per page only
 
-### 🟠 High (1)
+### 🟠 High (2)
 
 - 🟠 `UX-H1` — Session expiry shows message; restores prior route on login
+- 🟠 `UX-H2` — Setup wizard step persisted and restored via ?step=
 
 ### 🟡 Medium (0)
 

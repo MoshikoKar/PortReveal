@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { del, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal } from '../../components/ui';
+import { Card, Empty, ErrorBox, Loading, Modal, confirmDiscard } from '../../components/ui';
 import { useApp } from '../../context';
 import type { Exclusion } from '../../types';
 import { useApi } from '../../util';
@@ -11,10 +11,18 @@ export function ExclusionsSettings() {
   const { isAdmin } = useApp();
   const { data, error, loading, reload } = useApi<Exclusion[]>('/exclusions');
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [initial, setInitial] = useState<Draft | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+
+  const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
+  const closeDraft = () => confirmDiscard(dirty) && setDraft(null);
 
   const save = async (d: Draft) => {
+    if (saving) return;
     setSaveError(null);
+    setSaving(true);
     try {
       const body = { value: d.value, description: d.description || null, enabled: d.enabled };
       if (d.id) await put(`/exclusions/${d.id}`, body);
@@ -23,6 +31,8 @@ export function ExclusionsSettings() {
       reload();
     } catch (e: any) {
       setSaveError(e.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -30,7 +40,7 @@ export function ExclusionsSettings() {
     <Card
       title="Exclusions"
       flush
-      actions={isAdmin && <button className="btn primary sm" onClick={() => setDraft({ value: '', description: '', enabled: true })}>Add exclusion</button>}
+      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ value: '', description: '', enabled: true })}>Add exclusion</button>}
     >
       <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
         Excluded addresses are removed from every scan before nmap runs and are never probed.
@@ -53,7 +63,7 @@ export function ExclusionsSettings() {
                   </td>
                   {isAdmin && (
                     <td className="right nowrap">
-                      <button className="btn ghost sm" onClick={() => setDraft({ id: x.id, value: x.value, description: x.description ?? '', enabled: x.enabled })}>Edit</button>
+                      <button className="btn ghost sm" onClick={() => openDraft({ id: x.id, value: x.value, description: x.description ?? '', enabled: x.enabled })}>Edit</button>
                       <button className="btn ghost sm" onClick={async () => { if (confirm('Delete this exclusion?')) { await del(`/exclusions/${x.id}`); reload(); } }}>Delete</button>
                     </td>
                   )}
@@ -67,7 +77,11 @@ export function ExclusionsSettings() {
         <Modal
           title={draft.id ? 'Edit exclusion' : 'Add exclusion'}
           onClose={() => setDraft(null)}
-          footer={<><button className="btn ghost" onClick={() => setDraft(null)}>Cancel</button><button className="btn primary" onClick={() => save(draft)}>Save</button></>}
+          dirty={dirty}
+          footer={<>
+            <button className="btn ghost" onClick={closeDraft}>Cancel</button>
+            <button className="btn primary" onClick={() => save(draft)} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          </>}
         >
           <label className="field">Addresses
             <textarea rows={4} value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })} placeholder={'10.20.1.5\n10.20.1.10, 10.20.1.11\n10.20.2.10-10.20.2.50\n10.20.9.0/24'} />

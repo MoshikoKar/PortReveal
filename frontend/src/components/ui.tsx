@@ -120,15 +120,23 @@ export function Pager({ page, pageSize, total, onPage }: {
   );
 }
 
-export function Modal({ title, onClose, children, footer }: {
-  title: string; onClose: () => void; children: ReactNode; footer?: ReactNode;
+/** True when closing may proceed: nothing unsaved, or the user agreed to discard it. */
+export function confirmDiscard(dirty: boolean | undefined): boolean {
+  return !dirty || confirm('Discard unsaved changes?');
+}
+
+/** `dirty`: the form has unsaved edits, so backdrop/✕ close asks before discarding them.
+ *  Consumers' own Cancel buttons should check `confirmDiscard(dirty)` the same way. */
+export function Modal({ title, onClose, children, footer, dirty }: {
+  title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; dirty?: boolean;
 }) {
+  const requestClose = () => confirmDiscard(dirty) && onClose();
   return (
-    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && requestClose()}>
       <div className="modal" role="dialog" aria-label={title}>
         <div className="card-head">
           <h2>{title}</h2>
-          <button className="btn ghost sm" onClick={onClose} aria-label="Close">✕</button>
+          <button className="btn ghost sm" onClick={requestClose} aria-label="Close">✕</button>
         </div>
         <div className="card-body stack">{children}</div>
         {footer && <div className="card-head" style={{ borderTop: '1px solid var(--border)', borderBottom: 0, justifyContent: 'flex-end' }}>{footer}</div>}

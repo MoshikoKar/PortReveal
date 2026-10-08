@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { Link, NavLink } from 'react-router-dom';
 import { useApp } from '../context';
+import type { SystemStatus } from '../types';
 import { SCAN_TYPE_LABELS } from '../util';
 import { Progress } from './ui';
 
@@ -10,6 +11,7 @@ const Icon = ({ d }: { d: string }) => (
 const ICONS = {
   dashboard: 'M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z',
   devices: 'M4 4h16v10H4zM8 20h8M12 14v6',
+  ports: 'M5 4h14v11H5zM9 15v5M15 15v5M8 8h2M14 8h2M8 11h8',
   changes: 'M3 12h4l3 8 4-16 3 8h4',
   web: 'M3 5h18v14H3zM3 9h18M6.5 7h.01M9 7h.01',
   scans: 'M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12l7-7',
@@ -23,6 +25,49 @@ export function Logo() {
       <circle cx="16" cy="16" r="6" fill="none" stroke="var(--accent)" strokeWidth="2" opacity=".55" />
       <circle cx="24" cy="9" r="3" fill="var(--medium)" />
     </svg>
+  );
+}
+
+/** Secondary diagnostics folded behind one control; the dot shows the worst state at a glance. */
+function SystemMenu({ system, readOnly }: { system: SystemStatus; readOnly: boolean }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const { scanner, database, app } = system;
+  const level = !database.ok || scanner.mode === 'unavailable' ? 'high' : scanner.mode === 'mock' || app.dev_mode ? 'medium' : 'ok';
+
+  useEffect(() => {
+    const close = (e: Event) => {
+      const el = ref.current;
+      if (!el?.open) return;
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !el.contains(e.target as Node)) el.open = false;
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, []);
+
+  return (
+    <details className="sysmenu" ref={ref}>
+      <summary className="btn sm ghost">
+        <span className="dot" style={{ color: `var(--${level})` }} />System{readOnly && <span className="muted"> · read-only</span>}
+      </summary>
+      <div className="sysmenu-panel">
+        <dl className="dl compact">
+          {app.dev_mode && <><dt>Mode</dt><dd><span className="badge medium">DEV</span></dd></>}
+          <dt>Database</dt>
+          <dd>{database.type} · {database.ok ? 'OK' : 'error'}{database.location && <div className="mono small muted">{database.location}</div>}</dd>
+          <dt>Scanner</dt>
+          <dd>
+            <span className={`badge ${scanner.mode === 'nmap' ? 'ok' : scanner.mode === 'mock' ? 'medium' : 'high'}`}><span className="dot" />{scanner.mode}</span>
+            <div className="small muted">{scanner.message}</div>
+          </dd>
+          {app.dev_mode && <><dt>nmap</dt><dd>{scanner.nmap_detected ? scanner.nmap_version : <span style={{ color: 'var(--high)' }}>not detected</span>}</dd></>}
+          <dt>Access</dt><dd>{readOnly ? 'Read-only (viewer)' : 'Administrator'}</dd>
+        </dl>
+      </div>
+    </details>
   );
 }
 
@@ -43,6 +88,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <nav className="nav">
           <NavLink to="/" end><Icon d={ICONS.dashboard} />Dashboard</NavLink>
           <NavLink to="/devices"><Icon d={ICONS.devices} />Devices</NavLink>
+          <NavLink to="/ports"><Icon d={ICONS.ports} />Ports</NavLink>
           <NavLink to="/changes"><Icon d={ICONS.changes} />Changes</NavLink>
           <NavLink to="/web"><Icon d={ICONS.web} />Web</NavLink>
           <NavLink to="/scans"><Icon d={ICONS.scans} />Scans</NavLink>
@@ -78,26 +124,7 @@ export function Layout({ children }: { children: ReactNode }) {
           ) : (
             <span className="title muted small">{system?.scans.queued ? `${system.scans.queued} scan(s) queued` : 'No scan running'}</span>
           )}
-          {system?.app.dev_mode && <span className="badge medium" title="Development mode">DEV</span>}
-          {system && (
-            <span className="badge outline" title={system.database.location ?? undefined}>
-              DB: {system.database.type}
-            </span>
-          )}
-          {scanner && (
-            <span
-              className={`badge ${scanner.mode === 'nmap' ? 'ok' : scanner.mode === 'mock' ? 'medium' : 'high'}`}
-              title={scanner.message}
-            >
-              <span className="dot" />Scanner: {scanner.mode}
-            </span>
-          )}
-          {scanner && system?.app.dev_mode && (
-            <span className={`badge ${scanner.nmap_detected ? 'outline' : 'high'}`}>
-              nmap {scanner.nmap_detected ? scanner.nmap_version : 'not detected'}
-            </span>
-          )}
-          {!isAdmin && <span className="badge outline">read-only</span>}
+          {system && <SystemMenu system={system} readOnly={!isAdmin} />}
         </header>
         <main className="content">{children}</main>
       </div>

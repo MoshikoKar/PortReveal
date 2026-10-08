@@ -1,21 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { get, post } from './api';
 import { Layout } from './components/Layout';
 import { Card, Loading } from './components/ui';
 import { AppContext } from './context';
-import Changes from './pages/Changes';
-import Dashboard from './pages/Dashboard';
-import DeviceDetail from './pages/DeviceDetail';
-import Devices from './pages/Devices';
+// Login and Setup render before sign-in, so they stay in the entry bundle; app pages load on first visit.
 import Login from './pages/Login';
-import Ports from './pages/Ports';
-import Scans from './pages/Scans';
-import Settings from './pages/Settings';
 import Setup from './pages/Setup';
-import WebHosts from './pages/WebHosts';
-import WebPreview from './pages/WebPreview';
 import type { SetupStatus, SystemStatus, User } from './types';
+
+const Changes = lazy(() => import('./pages/Changes'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const DeviceDetail = lazy(() => import('./pages/DeviceDetail'));
+const Devices = lazy(() => import('./pages/Devices'));
+const Ports = lazy(() => import('./pages/Ports'));
+const Scans = lazy(() => import('./pages/Scans'));
+const Settings = lazy(() => import('./pages/Settings'));
+const WebHosts = lazy(() => import('./pages/WebHosts'));
+const WebPreview = lazy(() => import('./pages/WebPreview'));
 
 export default function App() {
   const location = useLocation();
@@ -133,19 +135,21 @@ export default function App() {
   return (
     <AppContext.Provider value={ctx}>
       <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/devices" element={<Devices />} />
-          <Route path="/devices/:uuid" element={<DeviceDetail />} />
-          <Route path="/devices/:uuid/web" element={<WebPreview />} />
-          <Route path="/web" element={<WebHosts />} />
-          <Route path="/changes" element={<Changes />} />
-          <Route path="/ports" element={<Ports />} />
-          <Route path="/scans" element={<Scans />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/settings/:tab" element={<Settings />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/devices" element={<Devices />} />
+            <Route path="/devices/:uuid" element={<DeviceDetail />} />
+            <Route path="/devices/:uuid/web" element={<WebPreview />} />
+            <Route path="/web" element={<WebHosts />} />
+            <Route path="/changes" element={<Changes />} />
+            <Route path="/ports" element={<Ports />} />
+            <Route path="/scans" element={<Scans />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/settings/:tab" element={<Settings />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </Layout>
     </AppContext.Provider>
   );

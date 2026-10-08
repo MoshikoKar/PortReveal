@@ -1,5 +1,6 @@
 // First-run wizard: admin -> network -> exclusions -> schedule -> SMTP -> LDAP -> recipients -> baseline.
 import { useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { Logo } from '../components/Layout';
 import { ErrorBox } from '../components/ui';
@@ -9,20 +10,45 @@ import { LdapForm, NotificationsForm, ScheduleForm } from './settings/Forms';
 import { NetworksSettings } from './settings/Networks';
 
 const STEPS = ['Administrator', 'Network scope', 'Exclusions', 'Schedule', 'SMTP', 'LDAP (optional)', 'Recipients', 'Baseline scan'];
+const STEP_PARAM = 'step';
+const LAST_STEP = STEPS.length - 1;
+
+/** Keep a step index inside the wizard bounds. */
+function clampRange(raw: number): number {
+  if (!Number.isInteger(raw) || raw < 0) return 0;
+  if (raw > LAST_STEP) return LAST_STEP;
+  return raw;
+}
+
+/** Restore wizard step from the URL when setup is incomplete; respect admin gate. */
+function stepFromSearch(sp: URLSearchParams, startAtAdmin: boolean): number {
+  const parsed = Number.parseInt(sp.get(STEP_PARAM) ?? '', 10);
+  if (!Number.isFinite(parsed)) return startAtAdmin ? 0 : 1;
+  const n = clampRange(parsed);
+  if (startAtAdmin) return 0;
+  if (n === 0) return 1;
+  return n;
+}
 
 function AdminStep({ onUser }: { onUser: (u: User) => void }) {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     if (password !== confirm) return setError('Passwords do not match');
+    setError(null);
+    setBusy(true);
     try {
       const r = await post<{ user: User }>('/setup/admin', { username, password });
       onUser(r.user);
     } catch (err: any) {
       setError(err.message);
+    } finally {
+      setBusy(false);
     }
   };
   return (
@@ -32,7 +58,7 @@ function AdminStep({ onUser }: { onUser: (u: User) => void }) {
       <label className="field">Password<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" /><span className="hint">At least 8 characters</span></label>
       <label className="field">Confirm password<input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" /></label>
       <ErrorBox error={error} />
-      <div><button className="btn primary" type="submit">Create administrator</button></div>
+      <div><button className="btn primary" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create administrator'}</button></div>
     </form>
   );
 }
@@ -70,8 +96,18 @@ function BaselineStep({ onFinish }: { onFinish: () => void }) {
 export default function Setup({ status, startAtAdmin, onUser, onDone }: {
   status: SetupStatus; startAtAdmin: boolean; onUser: (u: User) => void; onDone: () => void;
 }) {
-  const [step, setStep] = useState(startAtAdmin ? 0 : 1);
-  const next = () => setStep((s) => Math.min(STEPS.length - 1, s + 1));
+  const [sp, setSp] = useSearchParams();
+  const step = stepFromSearch(sp, startAtAdmin);
+  const [netCount, setNetCount] = useState<number | null>(null);
+  const needsNetwork = step === 1 && !netCount; // still loading (null) or none yet
+
+  const goTo = (n: number) => {
+    const nextStep = clampRange(n);
+    const next = new URLSearchParams(sp);
+    next.set(STEP_PARAM, String(nextStep));
+    setSp(next, { replace: true });
+  };
+  const next = () => goTo(step + 1);
   const finish = async () => {
     await post('/setup/complete');
     onDone();
@@ -89,7 +125,7 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
         <div className="card-body stack" style={{ padding: 20 }}>
           <h2>{STEPS[step]}</h2>
           {step === 0 && <AdminStep onUser={(u) => { onUser(u); next(); }} />}
-          {step === 1 && <NetworksSettings compact />}
+          {step === 1 && <NetworksSettings compact onCount={setNetCount} />}
           {step === 2 && <ExclusionsSettings />}
           {step === 3 && <ScheduleForm onSaved={next} />}
           {step === 4 && <NotificationsForm part="smtp" onSaved={next} />}
@@ -98,9 +134,12 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
           {step === 7 && <BaselineStep onFinish={finish} />}
           {step > 0 && (
             <div className="spread" style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-              <button className="btn ghost" onClick={() => setStep(step - 1)} disabled={step <= 1}>Back</button>
+              <button className="btn ghost" onClick={() => goTo(step - 1)} disabled={step <= 1}>Back</button>
               <div className="row">
-                {step < STEPS.length - 1 && <button className="btn" onClick={next}>{[2, 4, 5, 6].includes(step) ? 'Skip / next' : 'Next'}</button>}
+                {step === 1 && netCount === 0 && <span className="muted small">Add at least one network to continue – the schedule and baseline scan need one.</span>}
+                {step < LAST_STEP && (
+                  <button className="btn" onClick={next} disabled={needsNetwork}>{[2, 4, 5, 6].includes(step) ? 'Skip / next' : 'Next'}</button>
+                )}
               </div>
             </div>
           )}

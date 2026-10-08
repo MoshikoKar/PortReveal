@@ -158,13 +158,15 @@ def list_device_uuids(
 ):
     """All device UUIDs matching the same filters as the list endpoint (for bulk select)."""
     conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service)
-    total = db.scalar(select(func.count(Device.id)).where(*conds)) or 0
-    if total > MAX_UUIDS:
-        raise HTTPException(422, f"Too many matching devices ({total}); maximum selectable is {MAX_UUIDS}")
+    # LIMIT cap+1 in SQL: never materializes more than the cap; one extra row detects overflow,
+    # and the COUNT only runs then (for the error message).
     uuids = list(db.scalars(
-        select(Device.uuid).where(*conds).order_by(*_device_order_by(db, sort, order))
+        select(Device.uuid).where(*conds).order_by(*_device_order_by(db, sort, order)).limit(MAX_UUIDS + 1)
     ).all())
-    return {"uuids": uuids, "total": total}
+    if len(uuids) > MAX_UUIDS:
+        total = db.scalar(select(func.count(Device.id)).where(*conds)) or 0
+        raise HTTPException(422, f"Too many matching devices ({total}); maximum selectable is {MAX_UUIDS}")
+    return {"uuids": uuids, "total": len(uuids)}
 
 
 def _get(db: Session, uuid: str) -> Device:

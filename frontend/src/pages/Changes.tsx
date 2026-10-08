@@ -66,15 +66,15 @@ export default function Changes() {
             </select>
             <div className="row" style={{ gap: 4 }}>
               {Object.keys(RANGES).map((r) => (
-                <button key={r} className={`btn sm ${range === r ? 'primary' : ''}`} onClick={() => set({ range: r })}>{r === 'all' ? 'All time' : `Last ${r}`}</button>
+                <button key={r} className={`btn sm toggle ${range === r ? 'on' : ''}`} aria-pressed={range === r} onClick={() => set({ range: r })}>{r === 'all' ? 'All time' : `Last ${r}`}</button>
               ))}
             </div>
           </div>
           <div className="row wrap" style={{ gap: 6 }}>
             {(Object.keys(EVENT_LABELS) as EventType[]).map((t) => (
-              <button key={t} className={`btn sm ${types.includes(t) ? 'primary' : 'ghost'}`} onClick={() => toggleType(t)}>{EVENT_LABELS[t]}</button>
+              <button key={t} className={`btn sm toggle ${types.includes(t) ? 'on' : ''}`} aria-pressed={types.includes(t)} onClick={() => toggleType(t)}>{EVENT_LABELS[t]}</button>
             ))}
-            {types.length > 0 && <button className="btn sm" onClick={() => set({ type: undefined })}>Clear</button>}
+            {types.length > 0 && <button className="btn sm ghost" onClick={() => set({ type: undefined })}>Clear</button>}
           </div>
         </div>
       }>

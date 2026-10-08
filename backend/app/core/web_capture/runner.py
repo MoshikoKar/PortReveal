@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,7 +36,7 @@ from ..web_storage import delete_capture_files, write_screenshot
 from .classify import BLANK_PAGE_REASON, unusable_page_reason
 from .inventory import find_web_endpoints
 from .mock import mock_probe_endpoint, mock_rtsp_endpoint, placeholder_image
-from .probe import probe_endpoint
+from .probe import EndpointProbe, probe_endpoint
 from .rtsp import ffmpeg_available, placeholder_rtsp_webp, probe_rtsp
 from .screenshot import playwright_available, take_screenshot
 from .wordlist import discovery_paths
@@ -89,6 +91,84 @@ def _use_mock(cfg: WebCaptureSettings) -> bool:
     return st.effective_mode == "mock" or get_settings().app_env == "test"
 
 
+# (probe or None, last error, skipped because the job deadline passed before the probe started)
+ProbeOutcome = tuple[EndpointProbe | None, str | None, bool]
+
+
+def _probe_http_endpoint(ep: dict, cfg: WebCaptureSettings, *, mock: bool, app_paths: list[str],
+                         deadline: float, stop: Callable[[], bool]) -> ProbeOutcome:
+    """Try each host candidate of one HTTP(S) endpoint. Runs on a worker thread: no DB access."""
+    if time.monotonic() > deadline:
+        return None, None, True
+    allowed_ips = {ep["ip"]}
+    allowed_hosts = set(ep["hosts"]) | {ep["ip"]}
+    probe = None
+    last_err = None
+    for host in ep["hosts"]:
+        if stop():
+            raise CaptureCancelled()
+        try:
+            if mock:
+                probe = mock_probe_endpoint(ep["scheme"], host, ep["port"], ep["ip"])
+            else:
+                probe = probe_endpoint(
+                    ep["scheme"],
+                    host,
+                    ep["port"],
+                    allowed_hosts=allowed_hosts,
+                    allowed_ips=allowed_ips,
+                    timeout=cfg.http_timeout_seconds,
+                    max_bytes=cfg.max_response_bytes,
+                    max_candidates=cfg.max_candidate_probes,
+                    max_pages=cfg.max_pages_per_endpoint,
+                    max_discovery=cfg.max_discovery_paths,
+                    app_paths=app_paths,
+                    verify_tls=False,
+                    cancel_check=stop,
+                )
+            if probe.pages and any(p.http_status for p in probe.pages):
+                break
+        except CaptureCancelled:
+            raise
+        except Exception as exc:
+            last_err = str(exc)
+            log.debug("probe %s:%s via %s failed: %s", ep["ip"], ep["port"], host, exc)
+            probe = None
+    return probe, last_err, False
+
+
+class _ProbePrefetcher:
+    """Probe upcoming HTTP(S) endpoints on a bounded pool (cfg.http_concurrency) while the job
+    thread persists results and takes screenshots. Workers never touch the DB; results are
+    consumed strictly in endpoint order, so pages/notes keep the sequential ordering."""
+
+    def __init__(self, endpoints: list[dict], workers: int, probe: Callable[[dict, Callable[[], bool]], ProbeOutcome],
+                 cancelled: Callable[[], bool]):
+        self._queue = [(i, ep) for i, ep in enumerate(endpoints) if ep["scheme"] not in ("rtsp", "rtsps")]
+        self._pos = 0
+        self._workers = max(1, workers)
+        self._futures: dict[int, Future] = {}
+        self._probe = probe
+        self._halt = threading.Event()
+        self._stop = lambda: self._halt.is_set() or cancelled()
+        self._pool = ThreadPoolExecutor(max_workers=self._workers, thread_name_prefix="web-probe")
+
+    def result(self, idx: int) -> ProbeOutcome:
+        # Keep at most `workers` probes queued or running: the current endpoint plus look-ahead.
+        while self._pos < len(self._queue) and (
+            self._queue[self._pos][0] <= idx or len(self._futures) < self._workers
+        ):
+            i, ep = self._queue[self._pos]
+            self._pos += 1
+            self._futures[i] = self._pool.submit(self._probe, ep, self._stop)
+        return self._futures.pop(idx).result()
+
+    def close(self) -> None:
+        """Abort look-ahead probes (they poll the stop flag) and wait for the workers to exit."""
+        self._halt.set()
+        self._pool.shutdown(wait=True, cancel_futures=True)
+
+
 def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
     """Run a queued web capture synchronously. Returns final status."""
     started = time.monotonic()
@@ -97,6 +177,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
     pages_done = 0
     had_failures = False
     browser_missing = False
+    prefetch: _ProbePrefetcher | None = None
 
     with session_scope() as db:
         job = db.get(WebCapture, capture_id)
@@ -192,6 +273,13 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
         # so e.g. http:80 redirecting to the https:443 page reuses that image instead of reloading it
         shot_cache: dict[tuple[str, str], tuple[str, str | None, str | None]] = {}
         total = len(endpoint_data)
+        prefetch = _ProbePrefetcher(
+            endpoint_data,
+            cfg.http_concurrency,
+            lambda ep, stop: _probe_http_endpoint(ep, cfg, mock=mock, app_paths=discovery_app_paths,
+                                                  deadline=deadline, stop=stop),
+            cancelled=lambda: ctx.cancelled,
+        )
         for idx, ep in enumerate(endpoint_data):
             if time.monotonic() > deadline:
                 notes.append("Job time limit reached; remaining endpoints skipped.")
@@ -225,37 +313,12 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                 )
                 continue
 
-            probe = None
-            last_err = None
-            for host in ep["hosts"]:
-                ctx.check()
-                try:
-                    if mock:
-                        probe = mock_probe_endpoint(ep["scheme"], host, ep["port"], ep["ip"])
-                    else:
-                        probe = probe_endpoint(
-                            ep["scheme"],
-                            host,
-                            ep["port"],
-                            allowed_hosts=allowed_hosts,
-                            allowed_ips=allowed_ips,
-                            timeout=cfg.http_timeout_seconds,
-                            max_bytes=cfg.max_response_bytes,
-                            max_candidates=cfg.max_candidate_probes,
-                            max_pages=cfg.max_pages_per_endpoint,
-                            max_discovery=cfg.max_discovery_paths,
-                            app_paths=discovery_app_paths,
-                            verify_tls=False,
-                            cancel_check=lambda: ctx.cancelled,
-                        )
-                    if probe.pages and any(p.http_status for p in probe.pages):
-                        break
-                except CaptureCancelled:
-                    raise
-                except Exception as exc:
-                    last_err = str(exc)
-                    log.debug("probe %s:%s via %s failed: %s", ep["ip"], ep["port"], host, exc)
-                    probe = None
+            probe, last_err, expired = prefetch.result(idx)
+            ctx.check()
+            if expired:
+                notes.append("Job time limit reached; remaining endpoints skipped.")
+                had_failures = True
+                break
             if probe is None:
                 had_failures = True
                 notes.append(f"{ep['ip']}:{ep['port']}: probe failed ({last_err or 'no response'}).")
@@ -413,6 +476,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                             page.capture_error = result.error or "screenshot failed"
                             had_failures = True
 
+        prefetch.close()
         ctx.check()
         status = WEB_CAPTURE_PARTIAL if (had_failures or browser_missing) else WEB_CAPTURE_COMPLETED
         if pages_done == 0 and had_failures:
@@ -455,6 +519,9 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             notes="\n".join(notes) or None,
         )
         return WEB_CAPTURE_FAILED
+    finally:
+        if prefetch is not None:
+            prefetch.close()
 
 
 def _ips(aset: AddressSet) -> set[str]:

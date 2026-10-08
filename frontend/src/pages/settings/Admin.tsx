@@ -1,7 +1,7 @@
 // Users, audit log and system health.
 import { useState } from 'react';
 import { del, patch, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal, Pager, ScanStatusBadge } from '../../components/ui';
+import { Card, Empty, ErrorBox, Loading, Modal, Pager, ScanStatusBadge, confirmDiscard } from '../../components/ui';
 import { useApp } from '../../context';
 import type { AuditEntry, Paged, User } from '../../types';
 import { fmtTime, relTime, useApi } from '../../util';
@@ -12,6 +12,23 @@ export function UsersSettings() {
   const [draft, setDraft] = useState<{ username: string; password: string; role: 'admin' | 'viewer' } | null>(null);
   const [pw, setPw] = useState<{ user: User; password: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const draftDirty = !!draft && (draft.username !== '' || draft.password !== '' || draft.role !== 'viewer');
+  const closeDraft = () => confirmDiscard(draftDirty) && setDraft(null);
+  const closePw = () => confirmDiscard(!!pw?.password) && setPw(null);
+
+  const changeRole = (u: User, role: 'admin' | 'viewer') => {
+    const msg = role === 'viewer'
+      ? `Change ${u.username} from Administrator to Viewer? They lose access to configuration and scans.`
+      : `Make ${u.username} an Administrator? They gain full access to configuration, users and scans.`;
+    if (confirm(msg)) act(() => patch(`/users/${u.id}`, { role }));
+  };
+  const toggleActive = (u: User) => {
+    const msg = u.is_active
+      ? `Disable ${u.username}? They are signed out and can no longer log in.`
+      : `Enable ${u.username}? They can log in again.`;
+    if (confirm(msg)) act(() => patch(`/users/${u.id}`, { is_active: !u.is_active }));
+  };
 
   const act = async (fn: () => Promise<unknown>) => {
     setErr(null);
@@ -42,7 +59,7 @@ export function UsersSettings() {
                   <td><strong>{u.username}</strong>{u.display_name && <div className="muted small">{u.display_name}</div>}</td>
                   <td>{u.source}</td>
                   <td>
-                    <select value={u.role} disabled={u.id === me.id} onChange={(e) => act(() => patch(`/users/${u.id}`, { role: e.target.value }))}>
+                    <select value={u.role} disabled={u.id === me.id} onChange={(e) => changeRole(u, e.target.value as 'admin' | 'viewer')}>
                       <option value="admin">Administrator</option><option value="viewer">Viewer</option>
                     </select>
                   </td>
@@ -52,7 +69,7 @@ export function UsersSettings() {
                     {u.source === 'local' && <button className="btn ghost sm" onClick={() => setPw({ user: u, password: '' })}>Set password</button>}
                     {u.id !== me.id && (
                       <>
-                        <button className="btn ghost sm" onClick={() => act(() => patch(`/users/${u.id}`, { is_active: !u.is_active }))}>{u.is_active ? 'Disable' : 'Enable'}</button>
+                        <button className="btn ghost sm" onClick={() => toggleActive(u)}>{u.is_active ? 'Disable' : 'Enable'}</button>
                         <button className="btn ghost sm" onClick={() => confirm(`Delete user ${u.username}?`) && act(() => del(`/users/${u.id}`))}>Delete</button>
                       </>
                     )}
@@ -64,8 +81,8 @@ export function UsersSettings() {
         </div>
       )}
       {draft && (
-        <Modal title="Add local user" onClose={() => setDraft(null)}
-          footer={<><button className="btn ghost" onClick={() => setDraft(null)}>Cancel</button>
+        <Modal title="Add local user" onClose={() => setDraft(null)} dirty={draftDirty}
+          footer={<><button className="btn ghost" onClick={closeDraft}>Cancel</button>
             <button className="btn primary" onClick={async () => { if (await act(() => post('/users', draft))) setDraft(null); }}>Create</button></>}>
           <label className="field">Username<input type="text" value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} /></label>
           <label className="field">Password<input type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} autoComplete="new-password" /><span className="hint">Minimum 8 characters</span></label>
@@ -78,8 +95,8 @@ export function UsersSettings() {
         </Modal>
       )}
       {pw && (
-        <Modal title={`Set password for ${pw.user.username}`} onClose={() => setPw(null)}
-          footer={<><button className="btn ghost" onClick={() => setPw(null)}>Cancel</button>
+        <Modal title={`Set password for ${pw.user.username}`} onClose={() => setPw(null)} dirty={!!pw.password}
+          footer={<><button className="btn ghost" onClick={closePw}>Cancel</button>
             <button className="btn primary" onClick={async () => { if (await act(() => patch(`/users/${pw.user.id}`, { password: pw.password }))) setPw(null); }}>Save</button></>}>
           <label className="field">New password<input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} autoComplete="new-password" /></label>
           <ErrorBox error={err} />
