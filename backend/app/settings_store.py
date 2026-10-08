@@ -86,7 +86,15 @@ class NotificationSettings(BaseModel):
             EV_SERVICE_CHANGED,
         ]
     )
-    max_individual: int = Field(10, ge=1, le=100)  # above this, one digest email is sent
+    digest_time: str = "08:00"  # local time HH:MM — one categorized HTML summary per day
+
+    @field_validator("digest_time")
+    @classmethod
+    def _digest_time(cls, v: str) -> str:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", v.strip())
+        if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+            raise ValueError("digest_time must be HH:MM (24h)")
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
 
     @field_validator("event_types")
     @classmethod

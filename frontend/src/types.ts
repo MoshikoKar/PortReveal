@@ -357,7 +357,7 @@ export interface NotificationSettings {
   sender: string;
   recipients: string[];
   event_types: EventType[];
-  max_individual: number;
+  digest_time: string;
   available_event_types: EventType[];
 }
 

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..auth.deps import client_ip, require_admin
 from ..auth.ldap_auth import ldap_authenticate, ldap_test
 from ..core.audit import audit
-from ..core.notify import SUBJECT_PREFIX, send_email
+from ..core.notify import format_sample_digest, send_email
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_run
 from ..db import get_db
@@ -77,7 +77,7 @@ class NotificationIn(BaseModel):
     sender: str = Field("network-monitor@localhost", max_length=255)
     recipients: list[str] = Field(default_factory=list, max_length=100)
     event_types: list[str] = Field(default_factory=list)
-    max_individual: int = Field(10, ge=1, le=100)
+    digest_time: str = Field("08:00", max_length=5)
 
 
 def notifications_out(cfg: NotificationSettings) -> dict:
@@ -123,8 +123,8 @@ def test_notifications(body: TestEmailIn, request: Request, db: Session = Depend
     if body.recipient:
         cfg = cfg.model_copy(update={"recipients": [body.recipient.strip()]})
     try:
-        send_email(cfg, f"{SUBJECT_PREFIX} Test email",
-                   f"This is a test email from Network Finder.\nSent by: {user.username}\n")
+        subject, plain, html_body = format_sample_digest()
+        send_email(cfg, subject, plain + f"\nSent by: {user.username}\n", html_body)
     except Exception as exc:
         audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": False, "error": str(exc)}, _ip(request))
         db.commit()

@@ -4,7 +4,7 @@ Lightweight internal web application for **continuous network discovery, service
 It answers one question: *what is on the network, what does each device expose, and what changed since the last scan?*
 
 Nmap does the scanning. This application orchestrates it, stores normalized results, compares scans, shows a
-SOC-style dashboard and sends concise email alerts on state changes.
+SOC-style dashboard and sends a daily categorized HTML email summary of state changes.
 
 It is **not** a vulnerability scanner, EDR, SIEM, CMDB or performance monitor. No exploits, brute force, authentication
 attempts or intrusive NSE scripts are ever run.
@@ -215,7 +215,7 @@ schema revision (normal after `git pull` / migrate).
 ```
 backend/app/
   scanner/          NmapScanner + MockScanner (same interface), nmap XML parser, scanner status
-  core/runner.py    orchestration: targets -> discovery chunks -> service-scan batches -> compare -> notify -> snapshot
+  core/runner.py    orchestration: targets -> discovery chunks -> service-scan batches -> compare -> snapshot
   core/compare.py   the single change-detection engine
   core/identity.py  device identity matching
   core/manager.py   persistent scan queue (one scan at a time)
@@ -266,10 +266,9 @@ without contradicting MAC or hostname → unique non-generic hostname (detects I
 kept for the retention period (default **365 days**). Raw nmap XML is not stored, except optionally for N days
 for troubleshooting.
 
-**Email.** Uses an internal SMTP relay (port 25, no auth by default; STARTTLS/SSL and auth are optional). One short
-email per change, e.g. `[Network Monitor] New port detected` / `Device: server01` / `IP: 10.20.15.22` /
-`Port: TCP/8080` / `Service: HTTP` / `Detected: 2026-10-05 14:04`. Above a threshold (default 10 changes per scan)
-a single short digest is sent instead.
+**Email.** Uses an internal SMTP relay (port 25, no auth by default; STARTTLS/SSL and auth are optional). Once per
+day at a configured local time (default **08:00**), sends one categorized HTML summary of pending changes
+(devices, ports, services) with tables for each event type. Quiet days with no pending changes skip the email.
 
 **Security.** Argon2 password hashing; server-side sessions (HttpOnly, SameSite=Lax, optional Secure cookie, idle +
 absolute expiry); CSRF token required on every state-changing request; login rate limiting; two roles (admin / viewer);

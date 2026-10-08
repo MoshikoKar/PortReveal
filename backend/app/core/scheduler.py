@@ -13,8 +13,17 @@ from sqlalchemy import func, select
 
 from ..db import session_scope, utcnow
 from ..models import SCAN_DISCOVERY, SCAN_STANDARD, Network, Scan
-from ..settings_store import RetentionSettings, ScanSettings, ScheduleSettings, get_section, get_value, set_value
+from ..settings_store import (
+    NotificationSettings,
+    RetentionSettings,
+    ScanSettings,
+    ScheduleSettings,
+    get_section,
+    get_value,
+    set_value,
+)
 from .manager import create_scan, manager, network_has_active_scan
+from .notify import send_daily_digest
 from .retention import run_retention
 
 log = logging.getLogger(__name__)
@@ -97,6 +106,7 @@ def tick(now: datetime | None = None) -> None:
     now = now or datetime.now().astimezone()
     today = now.date().isoformat()
     queued: list[int] = []
+    send_digest = False
     with session_scope() as db:
         state = dict(get_value(db, STATE_KEY, {}) or {})
         cfg = get_section(db, ScheduleSettings)
@@ -124,8 +134,27 @@ def tick(now: datetime | None = None) -> None:
             state["last_retention_date"] = today
             changed = True
 
+        notify_cfg = get_section(db, NotificationSettings)
+        if notify_cfg.enabled and state.get("last_notification_date") != today:
+            hh, mm = (int(x) for x in notify_cfg.digest_time.split(":"))
+            due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if now >= due:
+                # Claim the day before SMTP so overlapping ticks cannot double-send.
+                state["last_notification_date"] = today
+                changed = True
+                send_digest = True
+
         if changed:
             set_value(db, STATE_KEY, state)
+    if send_digest:
+        result = send_daily_digest()
+        log.info("daily notification digest: %s", result)
+        if result == "failed":
+            with session_scope() as db:
+                state = dict(get_value(db, STATE_KEY, {}) or {})
+                if state.get("last_notification_date") == today:
+                    state["last_notification_date"] = None
+                    set_value(db, STATE_KEY, state)
     if queued:
         manager.wake()
 

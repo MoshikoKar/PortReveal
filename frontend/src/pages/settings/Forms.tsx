@@ -189,7 +189,7 @@ export function NotificationsForm({ part = 'all', onSaved }: { part?: 'all' | 's
   const body = () => ({
     enabled: s.enabled, smtp_host: s.smtp_host, smtp_port: s.smtp_port, security: s.security, username: s.username,
     ...(password !== null ? { password } : {}), sender: s.sender,
-    recipients: recipients.split(/[\s,;]+/).filter(Boolean), event_types: s.event_types, max_individual: s.max_individual,
+    recipients: recipients.split(/[\s,;]+/).filter(Boolean), event_types: s.event_types, digest_time: s.digest_time,
   });
   const save = async () => {
     if (await f.save(body())) {
@@ -216,7 +216,7 @@ export function NotificationsForm({ part = 'all', onSaved }: { part?: 'all' | 's
       <div className="stack">
         {showSmtp && (
           <>
-            <div className="muted small">Uses an internal SMTP relay (default port 25, no authentication). One concise email per change; many changes in one scan are combined into a single short digest.</div>
+            <div className="muted small">Uses an internal SMTP relay (default port 25, no authentication). Sends one categorized HTML summary email per day at the configured local time.</div>
             <div className="form-grid">
               <label className="field">SMTP host / IP<input type="text" value={s.smtp_host} onChange={(e) => set({ smtp_host: e.target.value })} placeholder="smtp-relay.corp.local" /></label>
               <Num label="Port" value={s.smtp_port} min={1} max={65535} onChange={(v) => set({ smtp_port: v })} />
@@ -254,7 +254,10 @@ export function NotificationsForm({ part = 'all', onSaved }: { part?: 'all' | 's
             )}
             {part === 'all' && (
               <div className="form-grid">
-                <Num label="Digest above N changes per scan" value={s.max_individual} min={1} max={100} onChange={(v) => set({ max_individual: v })} hint="More changes than this in one scan are sent as a single short digest" />
+                <label className="field">Daily summary time (HH:MM)
+                  <input type="time" value={s.digest_time} onChange={(e) => set({ digest_time: e.target.value })} />
+                  <span className="hint">Server-local time. Pending changes since the last send are grouped into one HTML email.</span>
+                </label>
               </div>
             )}
           </>

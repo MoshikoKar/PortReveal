@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 
-from app.core.notify import format_digest, format_event, notify_events
+from app.core.notify import format_daily_digest, send_daily_digest
 from app.core.retention import run_retention
 from app.core.scheduler import enqueue_baseline_retries, enqueue_scheduled_scans, next_run, tick
 from app.core.snapshots import load_snapshot
@@ -65,22 +65,24 @@ def test_retention_cleanup(db):
     assert {d.current_ip for d in db.scalars(select(Device))} == {"10.0.0.1", "10.0.0.3"}
 
 
-def test_email_format_is_concise(db):
+def test_email_format_is_categorized_html(db):
     net = make_network(db, cidr="10.20.15.0/24")
     scan(ScriptedScanner([host("10.20.15.22", [port(22, "ssh")], hostname="server01")]), network_id=net.id)
     s = scan(ScriptedScanner([host("10.20.15.22", [port(22, "ssh"), port(8080, "http")], hostname="server01")]),
              network_id=net.id)
     ev = events(db, s.id)[0]
-    subject, body = format_event(ev)
-    assert subject == "[Network Monitor] New port detected"
-    assert "Device: server01" in body and "IP: 10.20.15.22" in body and "Port: TCP/8080" in body
-    assert "Service: http" in body and "Detected: " in body
-    assert len(body.splitlines()) <= 7
-    subject, body = format_digest([ev] * 60)
-    assert "60 network changes" in subject and "... and 10 more" in body
+    subject, plain, html_body = format_daily_digest([ev], {net.id: net.name})
+    assert "Daily summary" in subject and "1 change" in subject
+    assert "Ports" in plain and "server01" in plain and "10.20.15.22" in plain
+    assert "TCP/8080" in plain and "http" in plain
+    assert "<table" in html_body and "New port detected" in html_body
+    assert "Ports" in html_body and "server01" in html_body
+    subject60, plain60, html60 = format_daily_digest([ev] * 60, {net.id: net.name})
+    assert "60 changes" in subject60 and "Ports (60)" in plain60
+    assert "<table" in html60
 
 
-def test_notifications_sent_once_per_event(db, monkeypatch):
+def test_notifications_sent_once_as_daily_digest(db, monkeypatch):
     sent = []
 
     class FakeSMTP:
@@ -91,25 +93,36 @@ def test_notifications_sent_once_per_event(db, monkeypatch):
             pass
 
         def send_message(self, msg):
-            sent.append(("send", msg["Subject"], msg["To"]))
+            html_part = None
+            for part in msg.iter_parts():
+                if part.get_content_type() == "text/html":
+                    html_part = part.get_content()
+            sent.append(("send", msg["Subject"], msg["To"], bool(html_part)))
 
         def quit(self):
             pass
 
     monkeypatch.setattr("app.core.notify.smtplib.SMTP", FakeSMTP)
     put_section(db, NotificationSettings(enabled=True, smtp_host="relay.local", recipients=["a@x.local", "b@x.local"],
-                                         password_enc=encrypt_secret("")))
+                                         password_enc=encrypt_secret(""), digest_time="08:00"))
     db.commit()
     net = make_network(db)
     scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh")])]), network_id=net.id)
-    assert not [s for s in sent if s[0] == "send"]  # baseline: nothing
+    assert not [s for s in sent if s[0] == "send"]  # baseline: nothing; scans never email immediately
     s = scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh"), port(9000, "http")])]), network_id=net.id)
+    assert events(db, s.id)[0].notified_at is None
+    assert not [x for x in sent if x[0] == "send"]
+
+    assert send_daily_digest() == "sent"
     sends = [x for x in sent if x[0] == "send"]
-    assert sends == [("send", "[Network Monitor] New port detected", "a@x.local, b@x.local")]
+    assert len(sends) == 1
+    assert "Daily summary" in sends[0][1] and sends[0][2] == "a@x.local, b@x.local" and sends[0][3] is True
+    db.expire_all()
     assert events(db, s.id)[0].notified_at is not None
-    assert notify_events([e.id for e in events(db, s.id)]) == 0  # never re-sent
+    assert send_daily_digest() == "empty"  # never re-sent
     scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh"), port(9000, "http")])]), network_id=net.id)
-    assert len([x for x in sent if x[0] == "send"]) == 1  # unchanged state, no new email
+    assert send_daily_digest() == "empty"  # unchanged state, no pending events
+    assert len([x for x in sent if x[0] == "send"]) == 1
 
 
 def test_schedule_next_run_and_tick(db):

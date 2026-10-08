@@ -155,7 +155,7 @@ def test_secrets_are_write_only(client):
     h = csrf(client)
     body = {"enabled": False, "smtp_host": "relay", "smtp_port": 25, "security": "none", "username": "u",
             "password": "s3cret", "sender": "nm@corp", "recipients": ["it@corp"], "event_types": ["port_opened"],
-            "max_individual": 10}
+            "digest_time": "08:00"}
     r = client.put("/api/settings/notifications", json=body, headers=h)
     assert r.status_code == 200 and "s3cret" not in r.text and r.json()["password_set"] is True
     body.pop("password")
