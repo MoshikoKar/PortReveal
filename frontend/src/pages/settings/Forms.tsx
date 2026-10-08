@@ -1,0 +1,345 @@
+// Schedule, scan profile, notifications, LDAP and retention forms.
+import { useEffect, useState, type ReactNode } from 'react';
+import { post, put } from '../../api';
+import { Card, ErrorBox, Loading } from '../../components/ui';
+import type { EventType, LdapSettings, NotificationSettings, ScanSettings, ScheduleSettings, WebCaptureSettings } from '../../types';
+import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
+
+function useForm<T>(path: string) {
+  const res = useApi<T>(path);
+  const [form, setForm] = useState<T | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (res.data) setForm(res.data);
+  }, [res.data]);
+  const save = async (body: unknown, okText = 'Saved.') => {
+    setMsg(null);
+    try {
+      const out = await put<T>(path, body);
+      res.setData(out);
+      setMsg({ ok: true, text: okText });
+      return true;
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message });
+      return false;
+    }
+  };
+  return { ...res, form, setForm, msg, setMsg, save };
+}
+
+function Msg({ msg }: { msg: { ok: boolean; text: string } | null }) {
+  if (!msg) return null;
+  return <div className={`alert ${msg.ok ? 'ok' : 'error'}`}>{msg.text}</div>;
+}
+
+function Num({ label, value, onChange, hint, min, max }: {
+  label: string; value: number; onChange: (v: number) => void; hint?: ReactNode; min?: number; max?: number;
+}) {
+  return (
+    <label className="field">{label}
+      <input type="number" value={value} min={min} max={max} onChange={(e) => onChange(Number(e.target.value))} />
+      {hint && <span className="hint">{hint}</span>}
+    </label>
+  );
+}
+
+// ---------------------------------------------------------------- schedule
+export function ScheduleForm({ onSaved }: { onSaved?: () => void }) {
+  const f = useForm<ScheduleSettings>('/settings/schedule');
+  if (!f.form) return <Card title="Scan schedule"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  return (
+    <Card title="Scan schedule">
+      <div className="stack">
+        <div className="muted small">
+          A standard scan of every enabled network runs once per day at this server-local time. Changes apply immediately
+          (no restart).
+        </div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => f.setForm({ ...s, enabled: e.target.checked })} />Scheduled scanning enabled</label>
+        <div className="row wrap">
+          <label className="field">Time (HH:MM)<input type="time" value={s.time} onChange={(e) => f.setForm({ ...s, time: e.target.value })} /></label>
+          <div className="field"><span>Days</span>
+            <div className="row wrap" style={{ gap: 8 }}>
+              {DAYS.map((d, i) => (
+                <label className="check small" key={d}>
+                  <input type="checkbox" checked={s.days.includes(i)} onChange={(e) => f.setForm({ ...s, days: e.target.checked ? [...s.days, i].sort() : s.days.filter((x) => x !== i) })} />{d}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="muted small">Next run: {f.data?.next_run ? `${fmtTime(f.data.next_run)} (${relTime(f.data.next_run)})` : 'not scheduled'}</div>
+        <Msg msg={f.msg} />
+        <div><button className="btn primary" onClick={async () => { if (await f.save({ enabled: s.enabled, time: s.time, days: s.days })) onSaved?.(); }}>Save schedule</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- scan profile
+export function ScanProfileForm() {
+  const f = useForm<ScanSettings>('/settings/scan');
+  if (!f.form) return <Card title="Scan profiles"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<ScanSettings>) => f.setForm({ ...s, ...patch });
+  return (
+    <Card title="Scan profiles">
+      <div className="stack">
+        <div className="grid three">
+          <div className="alert"><strong>Discovery</strong><div className="muted small">nmap -sn with ARP, ICMP echo/timestamp and TCP SYN/ACK probes. Hosts that ignore ping are still found via TCP.</div></div>
+          <div className="alert"><strong>Standard (daily)</strong><div className="muted small">Discovery, then the top {s.top_ports} TCP ports with safe service/version detection (-sV) on live hosts only.</div></div>
+          <div className="alert"><strong>Full port scan</strong><div className="muted small">All 65,535 TCP ports with -sV. Manual only, for selected hosts, ranges or networks.</div></div>
+        </div>
+        <div className="muted small">No exploitation, brute force, authentication attempts or intrusive NSE scripts are ever used. Raw nmap arguments are not configurable.</div>
+        <div className="form-grid">
+          <Num label="Common TCP ports (standard scan)" value={s.top_ports} min={100} max={10000} onChange={(v) => set({ top_ports: v })} hint="nmap --top-ports, 100–10000" />
+          <label className="field">Timing
+            <select value={s.timing} onChange={(e) => set({ timing: e.target.value as ScanSettings['timing'] })}>
+              <option value="polite">Polite (T2) – slowest, gentlest</option>
+              <option value="normal">Normal (T3) – default</option>
+              <option value="fast">Fast (T4) – reliable LANs</option>
+            </select>
+          </label>
+          <Num label="Parallel nmap processes" value={s.parallelism} min={1} max={16} onChange={(v) => set({ parallelism: v })} hint="Upper bound on concurrent nmap processes" />
+          <Num label="Discovery chunk size" value={s.discovery_chunk_size} min={16} max={16384} onChange={(v) => set({ discovery_chunk_size: v })} hint="Addresses per discovery process (/16 = 64 chunks of 1024)" />
+          <Num label="Hosts per service-scan batch" value={s.port_batch_size} min={1} max={256} onChange={(v) => set({ port_batch_size: v })} />
+          <Num label="Host timeout – standard (min)" value={s.host_timeout_minutes} min={1} max={240} onChange={(v) => set({ host_timeout_minutes: v })} hint="One slow host can never block the scan" />
+          <Num label="Host timeout – full (min)" value={s.full_host_timeout_minutes} min={5} max={720} onChange={(v) => set({ full_host_timeout_minutes: v })} />
+          <Num label="Missed scans before 'not detected'" value={s.disappear_after_missed} min={1} max={30} onChange={(v) => set({ disappear_after_missed: v })} hint="Consecutive complete scans; avoids false 'disappeared' alerts" />
+          <Num label="Mass-change guard (%)" value={s.mass_change_guard_percent} min={10} max={100} onChange={(v) => set({ mass_change_guard_percent: v })} hint="Skip removals when more than this share would vanish at once" />
+          <Num label="Keep raw XML (days)" value={s.raw_retention_days} min={1} max={90} onChange={(v) => set({ raw_retention_days: v })} />
+        </div>
+        <div className="row wrap">
+          <label className="check"><input type="checkbox" checked={s.os_detection} onChange={(e) => set({ os_detection: e.target.checked })} />Basic OS detection (-O, requires privileged nmap)</label>
+          <label className="check"><input type="checkbox" checked={s.keep_raw_xml} onChange={(e) => set({ keep_raw_xml: e.target.checked })} />Keep raw nmap XML temporarily for troubleshooting</label>
+        </div>
+        <Msg msg={f.msg} />
+        <div><button className="btn primary" onClick={() => f.save(s)}>Save scan settings</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- web capture
+export function WebCaptureForm() {
+  const f = useForm<WebCaptureSettings>('/settings/web-capture');
+  if (!f.form) return <Card title="Web capture"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<WebCaptureSettings>) => f.setForm({ ...s, ...patch });
+  return (
+    <Card title="Web capture">
+      <div className="stack">
+        <div className="muted small">
+          On-demand inventory enrichment for known HTTP(S) services. Manual, admin-only, explicit targets.
+          Not a vulnerability scanner. HTTP screenshots need Chromium (<code>playwright install chromium</code>). RTSP stills and live viewing need <code>ffmpeg</code> on PATH.
+        </div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable new Web Capture jobs</label>
+        <div className="form-grid">
+          <Num label="Max addresses per job" value={s.max_addresses} min={1} max={4096} onChange={(v) => set({ max_addresses: v })} />
+          <Num label="Max web endpoints per job" value={s.max_endpoints} min={1} max={1024} onChange={(v) => set({ max_endpoints: v })} />
+          <Num label="Max pages per endpoint" value={s.max_pages_per_endpoint} min={1} max={10} onChange={(v) => set({ max_pages_per_endpoint: v })} />
+          <Num label="App-discovery paths" value={s.max_discovery_paths} min={0} max={200} onChange={(v) => set({ max_discovery_paths: v })} hint="When '/' is an error or a server's default page, try this many common app paths (0 = off)" />
+          <Num label="Max screenshots per job" value={s.max_screenshots_per_job} min={0} max={512} onChange={(v) => set({ max_screenshots_per_job: v })} />
+          <Num label="Max HTTP response (bytes)" value={s.max_response_bytes} min={8000} max={5000000} onChange={(v) => set({ max_response_bytes: v })} />
+          <Num label="Max job time (min)" value={s.max_job_minutes} min={1} max={240} onChange={(v) => set({ max_job_minutes: v })} />
+          <Num label="HTTP timeout (sec)" value={s.http_timeout_seconds} min={1} max={60} onChange={(v) => set({ http_timeout_seconds: v })} />
+          <Num label="Browser timeout (sec)" value={s.browser_timeout_seconds} min={3} max={120} onChange={(v) => set({ browser_timeout_seconds: v })} />
+          <Num label="Page settle time (sec)" value={s.page_settle_seconds} min={0} max={60} onChange={(v) => set({ page_settle_seconds: v })} hint="Max wait after load for delayed redirects and slow rendering before the screenshot; still-blank pages are skipped" />
+        </div>
+        <label className="field">Discovery wordlist file
+          <input type="text" value={s.discovery_wordlist} placeholder="built-in list"
+            onChange={(e) => set({ discovery_wordlist: e.target.value })} />
+          <span className="hint">Optional path to a newline-delimited list of paths (absolute, or relative to the data dir). Leave blank for the built-in list.</span>
+        </label>
+        <Msg msg={f.msg} />
+        <div><button className="btn primary" onClick={() => f.save(s)}>Save Web Capture settings</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- notifications
+export function NotificationsForm({ part = 'all', onSaved }: { part?: 'all' | 'smtp' | 'recipients'; onSaved?: () => void }) {
+  const f = useForm<NotificationSettings>('/settings/notifications');
+  const [password, setPassword] = useState<string | null>(null);
+  const [recipientsText, setRecipientsText] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testTo, setTestTo] = useState('');
+  if (!f.form) return <Card title="Email notifications"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<NotificationSettings>) => f.setForm({ ...s, ...patch });
+  const recipients = recipientsText ?? s.recipients.join('\n');
+
+  const body = () => ({
+    enabled: s.enabled, smtp_host: s.smtp_host, smtp_port: s.smtp_port, security: s.security, username: s.username,
+    ...(password !== null ? { password } : {}), sender: s.sender,
+    recipients: recipients.split(/[\s,;]+/).filter(Boolean), event_types: s.event_types, max_individual: s.max_individual,
+  });
+  const save = async () => {
+    if (await f.save(body())) {
+      setPassword(null);
+      setRecipientsText(null);
+      onSaved?.();
+    }
+  };
+  const test = async () => {
+    setTestMsg(null);
+    if (!(await f.save(body(), 'Saved.'))) return;
+    try {
+      const r = await post<{ ok: boolean; message: string }>('/settings/notifications/test', { recipient: testTo || null });
+      setTestMsg({ ok: r.ok, text: r.message });
+    } catch (e: any) {
+      setTestMsg({ ok: false, text: e.message });
+    }
+  };
+
+  const showSmtp = part !== 'recipients';
+  const showRecipients = part !== 'smtp';
+  return (
+    <Card title={part === 'recipients' ? 'Email recipients' : part === 'smtp' ? 'SMTP relay' : 'Email notifications'}>
+      <div className="stack">
+        {showSmtp && (
+          <>
+            <div className="muted small">Uses an internal SMTP relay (default port 25, no authentication). One concise email per change; many changes in one scan are combined into a single short digest.</div>
+            <div className="form-grid">
+              <label className="field">SMTP host / IP<input type="text" value={s.smtp_host} onChange={(e) => set({ smtp_host: e.target.value })} placeholder="smtp-relay.corp.local" /></label>
+              <Num label="Port" value={s.smtp_port} min={1} max={65535} onChange={(v) => set({ smtp_port: v })} />
+              <label className="field">Security
+                <select value={s.security} onChange={(e) => set({ security: e.target.value as NotificationSettings['security'] })}>
+                  <option value="none">None (internal relay)</option><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option>
+                </select>
+              </label>
+              <label className="field">Sender<input type="text" value={s.sender} onChange={(e) => set({ sender: e.target.value })} /></label>
+              <label className="field">Username (optional)<input type="text" value={s.username} onChange={(e) => set({ username: e.target.value })} autoComplete="off" /></label>
+              <label className="field">Password (optional)
+                <input type="password" value={password ?? ''} placeholder={s.password_set ? '•••••• (unchanged)' : ''} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+              </label>
+            </div>
+          </>
+        )}
+        {showRecipients && (
+          <>
+            <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Send email notifications</label>
+            <label className="field">Recipients
+              <textarea rows={3} value={recipients} onChange={(e) => setRecipientsText(e.target.value)} placeholder={'it-team@corp.local\nsoc@corp.local'} />
+              <span className="hint">One address per line (or comma separated).</span>
+            </label>
+            {part === 'all' && (
+              <div className="field"><span>Notify on</span>
+                <div className="row wrap" style={{ gap: 14 }}>
+                  {s.available_event_types.map((t: EventType) => (
+                    <label key={t} className="check small">
+                      <input type="checkbox" checked={s.event_types.includes(t)} onChange={(e) => set({ event_types: e.target.checked ? [...s.event_types, t] : s.event_types.filter((x) => x !== t) })} />
+                      {EVENT_LABELS[t]}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {part === 'all' && (
+              <div className="form-grid">
+                <Num label="Digest above N changes per scan" value={s.max_individual} min={1} max={100} onChange={(v) => set({ max_individual: v })} hint="More changes than this in one scan are sent as a single short digest" />
+              </div>
+            )}
+          </>
+        )}
+        <Msg msg={f.msg} />
+        {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
+        <div className="row">
+          <button className="btn primary" onClick={save}>Save</button>
+          {showSmtp && (
+            <>
+              <input type="email" placeholder="test recipient (default: all recipients)" value={testTo} onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 260 }} />
+              <button className="btn" onClick={test} disabled={!s.smtp_host}>Save & send test email</button>
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- LDAP
+export function LdapForm({ onSaved }: { onSaved?: () => void }) {
+  const f = useForm<LdapSettings>('/settings/ldap');
+  const [password, setPassword] = useState<string | null>(null);
+  const [testUser, setTestUser] = useState('');
+  const [testPass, setTestPass] = useState('');
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!f.form) return <Card title="LDAP / Active Directory"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<LdapSettings>) => f.setForm({ ...s, ...patch });
+  const body = () => {
+    const { bind_password_set: _ignored, ...rest } = s;
+    void _ignored;
+    return { ...rest, ...(password !== null ? { bind_password: password } : {}) };
+  };
+  const test = async () => {
+    setTestMsg(null);
+    try {
+      const r = await post<{ ok: boolean; message: string }>('/settings/ldap/test', { ...body(), test_username: testUser || null, test_password: testPass || null });
+      setTestMsg({ ok: r.ok, text: r.message });
+    } catch (e: any) {
+      setTestMsg({ ok: false, text: e.message });
+    }
+  };
+  return (
+    <Card title="LDAP / Active Directory">
+      <div className="stack">
+        <div className="muted small">Optional. Local accounts always keep working as fallback administrator access. Role mapping: members of the admin group become administrators; others (or members of the viewer group, if set) become read-only viewers.</div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable LDAP login</label>
+        <div className="form-grid">
+          <label className="field">Server URI<input type="text" value={s.server_uri} onChange={(e) => set({ server_uri: e.target.value })} placeholder="ldaps://dc01.corp.local" /></label>
+          <label className="field">Bind DN (service account)<input type="text" value={s.bind_dn} onChange={(e) => set({ bind_dn: e.target.value })} placeholder="CN=svc-netfinder,OU=Service,DC=corp,DC=local" /></label>
+          <label className="field">Bind password<input type="password" value={password ?? ''} placeholder={s.bind_password_set ? '•••••• (unchanged)' : ''} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" /></label>
+          <label className="field">User base DN<input type="text" value={s.user_base_dn} onChange={(e) => set({ user_base_dn: e.target.value })} placeholder="OU=Users,DC=corp,DC=local" /></label>
+          <label className="field">User filter<input type="text" value={s.user_filter} onChange={(e) => set({ user_filter: e.target.value })} /><span className="hint">Must contain {'{username}'}</span></label>
+          <label className="field">Admin group DN<input type="text" value={s.admin_group_dn} onChange={(e) => set({ admin_group_dn: e.target.value })} placeholder="CN=NetFinder-Admins,OU=Groups,DC=corp,DC=local" /></label>
+          <label className="field">Viewer group DN (optional)<input type="text" value={s.viewer_group_dn} onChange={(e) => set({ viewer_group_dn: e.target.value })} /></label>
+          <Num label="Timeout (seconds)" value={s.timeout_seconds} min={1} max={60} onChange={(v) => set({ timeout_seconds: v })} />
+        </div>
+        <div className="row wrap">
+          <label className="check"><input type="checkbox" checked={s.start_tls} onChange={(e) => set({ start_tls: e.target.checked })} />Use STARTTLS</label>
+          <label className="check"><input type="checkbox" checked={s.verify_tls} onChange={(e) => set({ verify_tls: e.target.checked })} />Verify TLS certificate</label>
+        </div>
+        <div className="row wrap">
+          <input type="text" placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} />
+          <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} autoComplete="new-password" />
+          <button className="btn" onClick={test} disabled={!s.server_uri}>Test connection</button>
+        </div>
+        {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
+        <Msg msg={f.msg} />
+        <div><button className="btn primary" onClick={async () => { if (await f.save(body())) { setPassword(null); onSaved?.(); } }}>Save LDAP settings</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- retention
+export function RetentionForm() {
+  const f = useForm<{ days: number }>('/settings/retention');
+  const [runMsg, setRunMsg] = useState<string | null>(null);
+  if (!f.form) return <Card title="Retention"><ErrorBox error={f.error} /><Loading /></Card>;
+  return (
+    <Card title="Retention">
+      <div className="stack">
+        <div className="muted small">
+          History (events, scans, daily snapshots, audit log) older than this is deleted by a daily cleanup at 03:15. Devices not seen for the
+          whole period are forgotten. Raw nmap XML is never kept long-term.
+        </div>
+        <div className="row wrap">
+          <Num label="Keep history (days)" value={f.form.days} min={7} max={3650} onChange={(v) => f.setForm({ days: v })} />
+        </div>
+        <Msg msg={f.msg} />
+        {runMsg && <div className="alert ok">{runMsg}</div>}
+        <div className="row">
+          <button className="btn primary" onClick={() => f.save(f.form)}>Save</button>
+          <button className="btn" onClick={async () => {
+            const r = await post<{ deleted: Record<string, number> }>('/settings/retention/run');
+            setRunMsg(`Cleanup done: ${Object.entries(r.deleted).map(([k, v]) => `${v} ${k}`).join(', ')}`);
+          }}>Run cleanup now</button>
+        </div>
+      </div>
+    </Card>
+  );
+}

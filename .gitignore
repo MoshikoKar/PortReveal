@@ -1,0 +1,16 @@
+node_modules/
+frontend/dist/
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+data/
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.log
+.DS_Store
+graphify-out/
+.netlify

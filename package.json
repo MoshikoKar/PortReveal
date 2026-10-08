@@ -1,0 +1,28 @@
+{
+  "name": "network-finder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Continuous network discovery, service inventory and change detection built around Nmap",
+  "workspaces": [
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:backend": "node scripts/dev.mjs backend",
+    "dev:frontend": "node scripts/dev.mjs frontend",
+    "test": "node scripts/py.mjs -m pytest -q",
+    "lint": "node scripts/py.mjs -m ruff check . && tsc -p frontend && eslint -c frontend/eslint.config.js frontend/src",
+    "build": "tsc -p frontend && vite build frontend",
+    "db:migrate": "node scripts/py.mjs -m app.cli migrate",
+    "db:reset": "node scripts/py.mjs -m app.cli reset-db",
+    "mock:reset": "node scripts/py.mjs -m app.cli mock-reset",
+    "cli": "node scripts/py.mjs -m app.cli"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.4"
+  }
+}
