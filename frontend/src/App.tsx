@@ -72,12 +72,18 @@ export default function App() {
     get<SystemStatus>('/system/status').then(setSystem).catch(() => undefined);
   }, []);
 
+  // 5s while a scan is running/queued (topbar progress), 30s when idle. Starting a scan from the UI
+  // calls refreshSystem() right away, so the fast rate kicks in immediately; scheduled scans within 30s.
+  const scanBusy = !!system?.scans.current || !!system?.scans.queued;
   useEffect(() => {
     if (!user) return;
     refreshSystem();
-    const t = window.setInterval(() => document.visibilityState === 'visible' && refreshSystem(), 5000);
-    return () => window.clearInterval(t);
   }, [user, refreshSystem]);
+  useEffect(() => {
+    if (!user) return;
+    const t = window.setInterval(() => document.visibilityState === 'visible' && refreshSystem(), scanBusy ? 5000 : 30000);
+    return () => window.clearInterval(t);
+  }, [user, refreshSystem, scanBusy]);
 
   const logout = useCallback(async () => {
     try {

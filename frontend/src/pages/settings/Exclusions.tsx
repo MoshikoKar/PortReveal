@@ -14,6 +14,7 @@ export function ExclusionsSettings() {
   const [initial, setInitial] = useState<Draft | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
@@ -36,6 +37,18 @@ export function ExclusionsSettings() {
     }
   };
 
+  const remove = async (x: Exclusion) => {
+    if (!confirm('Delete this exclusion?')) return;
+    setActionError(null);
+    try {
+      await del(`/exclusions/${x.id}`);
+    } catch (e: any) {
+      setActionError(`Could not delete the exclusion: ${e.message}`);
+      return;
+    }
+    reload();
+  };
+
   return (
     <Card
       title="Exclusions"
@@ -45,7 +58,7 @@ export function ExclusionsSettings() {
       <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
         Excluded addresses are removed from every scan before nmap runs and are never probed.
       </div>
-      <ErrorBox error={error} />
+      <ErrorBox error={error || actionError} />
       {loading && !data ? <Loading /> : !data?.length ? <Empty>No exclusions.</Empty> : (
         <div className="table-wrap">
           <table>
@@ -64,7 +77,7 @@ export function ExclusionsSettings() {
                   {isAdmin && (
                     <td className="right nowrap">
                       <button className="btn ghost sm" onClick={() => openDraft({ id: x.id, value: x.value, description: x.description ?? '', enabled: x.enabled })}>Edit</button>
-                      <button className="btn ghost sm" onClick={async () => { if (confirm('Delete this exclusion?')) { await del(`/exclusions/${x.id}`); reload(); } }}>Delete</button>
+                      <button className="btn danger sm" onClick={() => remove(x)}>Delete</button>
                     </td>
                   )}
                 </tr>

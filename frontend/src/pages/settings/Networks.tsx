@@ -18,6 +18,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
   const [initial, setInitial] = useState<Draft | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
@@ -42,13 +43,25 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
 
   const remove = async (n: Network) => {
     if (!confirm(`Delete network "${n.name}"? Devices are kept; its snapshots are deleted.`)) return;
-    await del(`/networks/${n.id}`);
+    setActionError(null);
+    try {
+      await del(`/networks/${n.id}`);
+    } catch (e: any) {
+      setActionError(`Could not delete "${n.name}": ${e.message}`);
+      return;
+    }
     reload();
   };
 
   const resetBaseline = async (n: Network) => {
     if (!confirm(`Reset the baseline of "${n.name}"? The next complete standard scan becomes the new baseline (no alerts).`)) return;
-    await post(`/networks/${n.id}/reset-baseline`);
+    setActionError(null);
+    try {
+      await post(`/networks/${n.id}/reset-baseline`);
+    } catch (e: any) {
+      setActionError(`Could not reset the baseline of "${n.name}": ${e.message}`);
+      return;
+    }
     reload();
   };
 
@@ -64,7 +77,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
           scan of a network is its baseline and never alerts.
         </div>
       )}
-      <ErrorBox error={error} />
+      <ErrorBox error={error || actionError} />
       {loading && !data ? <Loading /> : !data?.length ? <Empty>No networks yet.</Empty> : (
         <div className="table-wrap">
           <table>
@@ -80,8 +93,8 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
                   {isAdmin && (
                     <td className="right nowrap">
                       <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled })}>Edit</button>
-                      {n.baseline_at && <button className="btn ghost sm" onClick={() => resetBaseline(n)}>Reset baseline</button>}
-                      <button className="btn ghost sm" onClick={() => remove(n)}>Delete</button>
+                      {n.baseline_at && <button className="btn danger sm" onClick={() => resetBaseline(n)}>Reset baseline</button>}
+                      <button className="btn danger sm" onClick={() => remove(n)}>Delete</button>
                     </td>
                   )}
                 </tr>

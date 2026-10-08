@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { del, get, post } from '../api';
 import { EventFeed } from '../components/EventFeed';
@@ -66,12 +66,20 @@ export default function Scans() {
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState<Scan | null>(null);
   const [snapPage, setSnapPage] = useState(1);
-  const active = useApi<{ running: Scan[]; queued: Scan[] }>('/scans/active', undefined, 2500);
-  const history = useApi<Paged<Scan>>('/scans', { page, page_size: 25 }, 5000);
+  // Poll fast only while something is running or queued (here or per the app-wide status poll, which
+  // also catches scheduled scans); idle pages refresh slowly. Web-capture endpoints load only on their tab.
+  const [scansBusy, setScansBusy] = useState(false);
+  const scanPoll = scansBusy || !!system?.scans.current || !!system?.scans.queued;
+  const active = useApi<{ running: Scan[]; queued: Scan[] }>('/scans/active', undefined, scanPoll ? 2500 : 15000);
+  const history = useApi<Paged<Scan>>('/scans', { page, page_size: 25 }, scanPoll ? 5000 : 30000);
   const snaps = useApi<Paged<SnapshotInfo>>('/snapshots', { page: snapPage, page_size: 10 }, 30000);
   const mock = useApi<MockState>(system?.scanner.mock_active ? '/dev/mock' : null, undefined, 5000);
-  const wcHistory = useApi<Paged<WebCapture>>('/web-captures', { page: wcPage, page_size: 20 }, tab === 'web-captures' ? 5000 : 0);
-  const wcActive = useApi<{ running: WebCapture[]; queued: WebCapture[] }>('/web-captures/active', undefined, tab === 'web-captures' ? 4000 : 0);
+  const onWcTab = tab === 'web-captures';
+  const wcHistory = useApi<Paged<WebCapture>>(onWcTab ? '/web-captures' : null, { page: wcPage, page_size: 20 }, 5000);
+  const wcActive = useApi<{ running: WebCapture[]; queued: WebCapture[] }>(onWcTab ? '/web-captures/active' : null, undefined, 4000);
+  useEffect(() => {
+    if (active.data) setScansBusy(active.data.running.length + active.data.queued.length > 0);
+  }, [active.data]);
   const [err, setErr] = useState<string | null>(null);
 
   const [rerunBusy, setRerunBusy] = useState<number | null>(null);

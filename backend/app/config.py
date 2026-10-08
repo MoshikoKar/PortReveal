@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # Disable the background worker/scheduler (tests drive scans directly)
     background_jobs: bool = True
 
+    # Inventory import guards (refused before the existing inventory is touched)
+    import_max_upload_mb: int = 512  # compressed ZIP accepted by POST /api/data/import
+    import_max_uncompressed_mb: int = 8192  # sum of the package's JSONL entries (zip-bomb guard)
+    import_max_rows: int = 20_000_000  # all tables together
+
     @property
     def is_dev(self) -> bool:
         return self.app_env != "production"

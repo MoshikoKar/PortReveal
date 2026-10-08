@@ -147,3 +147,72 @@ def test_api_export_import(client, db):
     body = ok.json()
     assert body["imported"]["networks"] >= 1
     assert body["imported"]["devices"] == 2
+
+
+def test_import_row_limit_refuses_before_wipe(db, tmp_path, monkeypatch):
+    from app.config import reset_settings_cache
+
+    _seed_inventory(db)
+    path = tmp_path / "inv.zip"
+    export_inventory(db, path)
+    devices_before = db.scalar(select(func.count(Device.id)))
+    monkeypatch.setenv("IMPORT_MAX_ROWS", "3")
+    reset_settings_cache()
+    with pytest.raises(DataTransferError, match="row limit"):
+        import_inventory(db, path, confirm=True)
+    db.rollback()
+    assert db.scalar(select(func.count(Device.id))) == devices_before
+
+
+def test_import_invalid_json_refuses_before_wipe(db, tmp_path):
+    import zipfile
+
+    _seed_inventory(db)
+    good = tmp_path / "inv.zip"
+    export_inventory(db, good)
+    bad = tmp_path / "bad.zip"
+    with zipfile.ZipFile(good) as src, zipfile.ZipFile(bad, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info)
+            if info.filename.endswith("snapshots.jsonl"):  # last table: earlier ones parse fine
+                data += b"{not json\n"
+            dst.writestr(info, data)
+    devices_before = db.scalar(select(func.count(Device.id)))
+    with pytest.raises(DataTransferError, match="invalid JSON"):
+        import_inventory(db, bad, confirm=True)
+    db.rollback()
+    assert db.scalar(select(func.count(Device.id))) == devices_before
+
+
+def test_export_manifest_counts_match_streamed_rows(db, tmp_path):
+    import json
+    import zipfile
+
+    _seed_inventory(db)
+    path = tmp_path / "inv.zip"
+    export_inventory(db, path)
+    with zipfile.ZipFile(path) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        for name, count in manifest["tables"].items():
+            lines = [ln for ln in zf.read(f"tables/{name}.jsonl").splitlines() if ln.strip()]
+            assert len(lines) == count
+    assert manifest["tables"]["devices"] == db.scalar(select(func.count(Device.id)))
+
+
+def test_api_import_upload_size_limit(client, db, monkeypatch):
+    from app.config import reset_settings_cache
+
+    setup_admin(client)
+    _seed_inventory(db)
+    er = client.get("/api/data/export")
+    assert er.status_code == 200
+    monkeypatch.setenv("IMPORT_MAX_UPLOAD_MB", "0")
+    reset_settings_cache()
+    r = client.post(
+        "/api/data/import",
+        data={"confirm": "true"},
+        files={"file": ("inv.zip", io.BytesIO(er.content), "application/zip")},
+        headers=csrf(client),
+    )
+    assert r.status_code == 413
+    assert "upload limit" in r.json()["detail"]

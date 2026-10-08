@@ -32,7 +32,16 @@ function useForm<T>(path: string) {
       setSaving(false);
     }
   };
-  return { ...res, form, setForm, msg, setMsg, save, saving };
+  // Unsaved edits: the working copy differs from what the server last returned.
+  const dirty = !!form && !!res.data && JSON.stringify(form) !== JSON.stringify(res.data);
+  return { ...res, form, setForm, msg, setMsg, save, saving, dirty };
+}
+
+/** Tell a parent (the setup wizard) whenever the form's unsaved-edits state flips. */
+function useReportDirty(dirty: boolean, onDirtyChange?: (dirty: boolean) => void) {
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 }
 
 function Msg({ msg }: { msg: { ok: boolean; text: string } | null }) {
@@ -52,8 +61,9 @@ function Num({ label, value, onChange, hint, min, max }: {
 }
 
 // ---------------------------------------------------------------- schedule
-export function ScheduleForm({ onSaved }: { onSaved?: () => void }) {
+export function ScheduleForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
   const f = useForm<ScheduleSettings>('/settings/schedule');
+  useReportDirty(f.dirty, onDirtyChange);
   if (!f.form) return <Card title="Scan schedule"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   return (
@@ -222,12 +232,16 @@ export function WebCaptureForm() {
 }
 
 // ---------------------------------------------------------------- notifications
-export function NotificationsForm({ part = 'all', onSaved }: { part?: 'all' | 'smtp' | 'recipients'; onSaved?: () => void }) {
+export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
+  part?: 'all' | 'smtp' | 'recipients'; onSaved?: () => void; onDirtyChange?: (dirty: boolean) => void;
+}) {
   const f = useForm<NotificationSettings>('/settings/notifications');
   const [password, setPassword] = useState<string | null>(null);
   const [recipientsText, setRecipientsText] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testTo, setTestTo] = useState('');
+  const recipientsDirty = recipientsText !== null && recipientsText !== (f.form?.recipients ?? []).join('\n');
+  useReportDirty(f.dirty || password !== null || recipientsDirty, onDirtyChange);
   if (!f.form) return <Card title="Email notifications"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   const set = (patch: Partial<NotificationSettings>) => f.setForm({ ...s, ...patch });
@@ -326,9 +340,10 @@ export function NotificationsForm({ part = 'all', onSaved }: { part?: 'all' | 's
 }
 
 // ---------------------------------------------------------------- LDAP
-export function LdapForm({ onSaved }: { onSaved?: () => void }) {
+export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onDirtyChange?: (dirty: boolean) => void }) {
   const f = useForm<LdapSettings>('/settings/ldap');
   const [password, setPassword] = useState<string | null>(null);
+  useReportDirty(f.dirty || password !== null, onDirtyChange);
   const [testUser, setTestUser] = useState('');
   const [testPass, setTestPass] = useState('');
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -384,8 +399,28 @@ export function LdapForm({ onSaved }: { onSaved?: () => void }) {
 // ---------------------------------------------------------------- retention
 export function RetentionForm() {
   const f = useForm<{ days: number }>('/settings/retention');
-  const [runMsg, setRunMsg] = useState<string | null>(null);
+  const [runMsg, setRunMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [running, setRunning] = useState(false);
   if (!f.form) return <Card title="Retention"><ErrorBox error={f.error} /><Loading /></Card>;
+  const savedDays = f.data?.days ?? f.form.days;
+  const runCleanup = async () => {
+    if (running) return;
+    const unsaved = f.form && f.form.days !== savedDays ? ` (the unsaved value of ${f.form.days} days is not used)` : '';
+    if (!confirm(
+      `Run the retention cleanup now?\n\nThis permanently deletes events, scans, daily snapshots and audit log entries older than ${savedDays} days, `
+      + `and forgets devices not seen in that period${unsaved}. This cannot be undone.`,
+    )) return;
+    setRunMsg(null);
+    setRunning(true);
+    try {
+      const r = await post<{ deleted: Record<string, number> }>('/settings/retention/run');
+      setRunMsg({ ok: true, text: `Cleanup done: ${Object.entries(r.deleted).map(([k, v]) => `${v} ${k}`).join(', ')}` });
+    } catch (e: any) {
+      setRunMsg({ ok: false, text: `Cleanup failed: ${e.message}` });
+    } finally {
+      setRunning(false);
+    }
+  };
   return (
     <Card title="Retention">
       <div className="stack">
@@ -397,13 +432,10 @@ export function RetentionForm() {
           <Num label="Keep history (days)" value={f.form.days} min={7} max={3650} onChange={(v) => f.setForm({ days: v })} />
         </div>
         <Msg msg={f.msg} />
-        {runMsg && <div className="alert ok">{runMsg}</div>}
+        <Msg msg={runMsg} />
         <div className="row">
           <button className="btn primary" disabled={f.saving} onClick={() => f.save(f.form)}>Save</button>
-          <button className="btn" onClick={async () => {
-            const r = await post<{ deleted: Record<string, number> }>('/settings/retention/run');
-            setRunMsg(`Cleanup done: ${Object.entries(r.deleted).map(([k, v]) => `${v} ${k}`).join(', ')}`);
-          }}>Run cleanup now</button>
+          <button className="btn danger" onClick={runCleanup} disabled={running}>{running ? 'Cleaning up…' : 'Run cleanup now'}</button>
         </div>
       </div>
     </Card>

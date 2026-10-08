@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import type { ChangeEvent, DeviceStatus, ScanStatus } from '../types';
 import { EVENT_LABELS } from '../util';
 
@@ -125,17 +125,65 @@ export function confirmDiscard(dirty: boolean | undefined): boolean {
   return !dirty || confirm('Discard unsaved changes?');
 }
 
-/** `dirty`: the form has unsaved edits, so backdrop/✕ close asks before discarding them.
- *  Consumers' own Cancel buttons should check `confirmDiscard(dirty)` the same way. */
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusables(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0);
+}
+
+/** `dirty`: the form has unsaved edits, so backdrop/✕/Escape close asks before discarding them.
+ *  Consumers' own Cancel buttons should check `confirmDiscard(dirty)` the same way.
+ *  Keyboard: focus moves into the dialog on open, Tab cycles inside it, Escape closes, and focus
+ *  returns to the element that opened it. */
 export function Modal({ title, onClose, children, footer, dirty }: {
   title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; dirty?: boolean;
 }) {
   const requestClose = () => confirmDiscard(dirty) && onClose();
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const el = ref.current;
+    if (el && !el.contains(document.activeElement)) {
+      // First form field if there is one, otherwise the dialog itself (not the ✕ button).
+      const field = el.querySelector<HTMLElement>('.card-body input:not([disabled]), .card-body select:not([disabled]), .card-body textarea:not([disabled])');
+      (field ?? el).focus();
+    }
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      requestClose();
+      return;
+    }
+    if (e.key !== 'Tab' || !ref.current) return;
+    const items = focusables(ref.current);
+    if (!items.length) {
+      e.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === ref.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && requestClose()}>
-      <div className="modal" role="dialog" aria-label={title}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={ref} onKeyDown={onKeyDown}>
         <div className="card-head">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="btn ghost sm" onClick={requestClose} aria-label="Close">✕</button>
         </div>
         <div className="card-body stack">{children}</div>

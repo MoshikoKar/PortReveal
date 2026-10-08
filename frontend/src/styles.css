@@ -123,7 +123,30 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .grid.halves { grid-template-columns: 1fr 1fr; }
 .grid.three { grid-template-columns: repeat(3, 1fr); }
 @media (max-width: 1200px) { .grid.two, .grid.three { grid-template-columns: 1fr; } }
-@media (max-width: 900px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } .grid.halves { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .grid.halves { grid-template-columns: 1fr; } }
+
+/* Narrow viewports: the sidebar collapses into a sticky top bar (brand, current page, menu toggle);
+   the toggle drops the nav and account footer down beneath it. */
+/* Scoped under .brand so these beat the later generic `.btn { display: inline-flex }`. */
+.brand .nav-toggle, .brand .nav-current { display: none; }
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { position: sticky; top: 0; z-index: 10; height: auto; max-height: 100vh; overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  .brand { padding: 10px 16px; border-bottom: 0; }
+  .brand-sub { display: none; }
+  .brand .nav-current {
+    display: inline-flex; align-items: center; gap: 6px; margin-left: auto; padding: 4px 10px;
+    border-radius: var(--radius-md); background: var(--panel-3); color: var(--text); font-weight: 500;
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .nav-current svg { width: 14px; height: 14px; }
+  .brand .nav-toggle { display: inline-flex; }
+  .sidebar:not(.open) .nav, .sidebar:not(.open) .sidebar-foot { display: none; }
+  .sidebar.open .brand { border-bottom: 1px solid var(--border); }
+  .sidebar-foot { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+  /* The collapsed sidebar is the sticky bar now; two stacked sticky bars would overlap. */
+  .topbar { position: static; }
+}
 
 .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; position: relative; overflow: hidden; }
 .kpi::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--kpi-color, var(--border-2)); }
@@ -172,7 +195,10 @@ input[type='text'], input[type='password'], input[type='number'], input[type='ti
   background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 7px 10px; color: var(--text); min-width: 0;
 }
 textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
-input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(45, 212, 191, 0.15); }
+/* Bordered fields: the accent border + solid inner ring replaces the outline. Checkboxes keep the shared outline below. */
+input:not([type='checkbox']):not([type='radio']):focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px rgba(45, 212, 191, 0.22);
+}
 input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
 th > input[type='checkbox'], td > input[type='checkbox'] { width: 18px; height: 18px; margin: 0; }
 label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-2); }
@@ -211,6 +237,19 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 /* Invisible 4px halo: 32px visual size, 40px hit area. */
 .btn.icon::after { content: ''; position: absolute; inset: -4px; }
 .btn.icon svg { width: 15px; height: 15px; display: block; }
+
+/* Row actions sit side by side in table cells; bordered (danger) buttons need a gap. */
+td > .btn + .btn { margin-left: var(--space-1); }
+
+/* ---------- keyboard focus ----------
+   One shared ring for keyboard focus (mouse clicks don't show it). --accent is ≥8:1 against every panel background. */
+.btn:focus-visible, .tabs a:focus-visible, .tabs button:focus-visible, .nav a:focus-visible,
+:where(a, button, summary, input[type='checkbox'], input[type='radio'], [tabindex]):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.tabs a:focus-visible, .tabs button:focus-visible { outline-offset: -2px; border-radius: var(--radius-sm); }
+/* The dialog container takes focus only so Tab starts inside it; it needs no ring of its own. */
+.modal:focus { outline: none; }
 
 @keyframes nf-spin {
   to { transform: rotate(360deg); }
@@ -255,7 +294,8 @@ table.skeleton tbody tr:hover { background: none; }
 .login { width: min(400px, 100%); }
 .wizard { width: min(820px, 100%); }
 .steps { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border); }
-.steps span { font-size: 12px; padding: 3px 10px; border-radius: var(--radius-pill); background: var(--panel-3); color: var(--muted); }
+/* Contrast on --panel-3: idle --text-2 7.8:1, done --ok 8.3:1, current ink on --accent 9.2:1 (all ≥ AA 4.5:1). */
+.steps span { font-size: 12px; padding: 3px 10px; border-radius: var(--radius-pill); background: var(--panel-3); color: var(--text-2); }
 .steps span.done { color: var(--ok); }
 .steps span.current { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 

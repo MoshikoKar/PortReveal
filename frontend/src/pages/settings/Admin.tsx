@@ -70,7 +70,7 @@ export function UsersSettings() {
                     {u.id !== me.id && (
                       <>
                         <button className="btn ghost sm" onClick={() => toggleActive(u)}>{u.is_active ? 'Disable' : 'Enable'}</button>
-                        <button className="btn ghost sm" onClick={() => confirm(`Delete user ${u.username}?`) && act(() => del(`/users/${u.id}`))}>Delete</button>
+                        <button className="btn danger sm" onClick={() => confirm(`Delete user ${u.username}?`) && act(() => del(`/users/${u.id}`))}>Delete</button>
                       </>
                     )}
                   </td>

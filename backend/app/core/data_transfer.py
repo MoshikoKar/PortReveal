@@ -4,6 +4,11 @@ Moves scan inventory + history between environments (SQLite <-> PostgreSQL) with
 re-running nmap. Users, sessions, app settings, audit log, and web captures are not
 included; existing web-capture rows on the target are cleared on import so device FKs
 do not block the wipe.
+
+Both directions stream: export pages each table by id and writes JSONL straight into the
+ZIP entry; import validates the package in one streaming pass (nothing kept in memory),
+then wipes and re-inserts in fixed-size Core batches. The wipe + insert stays a single
+transaction on purpose, so a failed import never leaves a half-replaced inventory.
 """
 from __future__ import annotations
 
@@ -12,14 +17,16 @@ import io
 import json
 import logging
 import zipfile
+from collections.abc import Iterable
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import BinaryIO, Iterable
+from typing import BinaryIO
 
-from sqlalchemy import Date, DateTime, LargeBinary, delete, func, select, text
+from sqlalchemy import Date, DateTime, LargeBinary, delete, func, insert, select, text
 from sqlalchemy.orm import Session
 
 from .. import __version__
+from ..config import get_settings
 from ..db import UTCDateTime
 from ..models import (
     SCAN_ACTIVE_STATES,
@@ -58,6 +65,9 @@ INVENTORY_TABLES: tuple[tuple[str, type], ...] = (
 )
 
 INVENTORY_BY_NAME = {name: model for name, model in INVENTORY_TABLES}
+
+# Rows per export page / import insert batch.
+BATCH_ROWS = 2000
 
 
 class DataTransferError(Exception):
@@ -106,13 +116,6 @@ def _decode_value(value, column):
     return value
 
 
-def _row_to_dict(obj) -> dict:
-    out = {}
-    for col in obj.__table__.columns:
-        out[col.name] = _encode_value(getattr(obj, col.name))
-    return out
-
-
 def _dict_to_kwargs(model, data: dict) -> dict:
     kwargs = {}
     for col in model.__table__.columns:
@@ -128,23 +131,25 @@ def default_export_path(directory: Path | None = None) -> Path:
     return (directory or Path.cwd()) / name
 
 
+def _iter_table(db: Session, model) -> Iterable[dict]:
+    """Yield a table's rows as JSON-ready dicts, paging by id (no full-table materialization)."""
+    table = model.__table__
+    last_id = None
+    while True:
+        stmt = select(table).order_by(table.c.id).limit(BATCH_ROWS)
+        if last_id is not None:
+            stmt = stmt.where(table.c.id > last_id)
+        batch = db.execute(stmt).mappings().all()
+        if not batch:
+            return
+        for row in batch:
+            yield {col.name: _encode_value(row[col.name]) for col in table.columns}
+        last_id = batch[-1]["id"]
+
+
 def export_inventory(db: Session, dest: Path | BinaryIO | None = None) -> Path | None:
     """Write inventory ZIP to dest. Returns Path when dest is a path (or None and BytesIO used)."""
     revision = _alembic_revision(db)
-    counts: dict[str, int] = {}
-    table_payloads: dict[str, list[dict]] = {}
-    for name, model in INVENTORY_TABLES:
-        rows = db.scalars(select(model).order_by(model.id)).all()
-        table_payloads[name] = [_row_to_dict(r) for r in rows]
-        counts[name] = len(rows)
-
-    manifest = {
-        "format_version": FORMAT_VERSION,
-        "app_version": __version__,
-        "schema_revision": revision,
-        "exported_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "tables": counts,
-    }
 
     path_out: Path | None = None
     if dest is None:
@@ -159,12 +164,26 @@ def export_inventory(db: Session, dest: Path | BinaryIO | None = None) -> Path |
         buffer = dest
         close_buffer = False
 
+    counts: dict[str, int] = {}
     try:
         with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for name, model in INVENTORY_TABLES:
+                n = 0
+                # force_zip64: the entry size is unknown up front and may exceed 2 GiB.
+                with zf.open(f"{TABLES_DIR}/{name}.jsonl", "w", force_zip64=True) as entry:
+                    for row in _iter_table(db, model):
+                        entry.write(json.dumps(row, separators=(",", ":")).encode("utf-8") + b"\n")
+                        n += 1
+                counts[name] = n
+            # Written last so the counts are exactly what was streamed; readers look entries up by name.
+            manifest = {
+                "format_version": FORMAT_VERSION,
+                "app_version": __version__,
+                "schema_revision": revision,
+                "exported_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "tables": counts,
+            }
             zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2) + "\n")
-            for name, rows in table_payloads.items():
-                lines = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows)
-                zf.writestr(f"{TABLES_DIR}/{name}.jsonl", lines)
     finally:
         if close_buffer:
             buffer.close()
@@ -180,8 +199,10 @@ def _read_zip(src: Path | BinaryIO) -> zipfile.ZipFile:
         return zipfile.ZipFile(src, "r")
     if isinstance(src, (bytes, bytearray)):
         return zipfile.ZipFile(io.BytesIO(src), "r")
-    data = src.read()
-    return zipfile.ZipFile(io.BytesIO(data), "r")
+    seekable = getattr(src, "seekable", None)  # SpooledTemporaryFile has it only from Python 3.11
+    if seekable is not None and seekable():
+        return zipfile.ZipFile(src, "r")  # e.g. an upload's spooled temp file: read in place, no copy
+    return zipfile.ZipFile(io.BytesIO(src.read()), "r")
 
 
 def _load_manifest(zf: zipfile.ZipFile) -> dict:
@@ -200,24 +221,63 @@ def _load_manifest(zf: zipfile.ZipFile) -> dict:
     return manifest
 
 
-def _load_table_rows(zf: zipfile.ZipFile, name: str) -> list[dict]:
+def _iter_table_rows(zf: zipfile.ZipFile, name: str) -> Iterable[dict]:
+    """Yield the decoded rows of one table entry, streaming line by line."""
     path = f"{TABLES_DIR}/{name}.jsonl"
     try:
-        raw = zf.read(path)
+        entry = zf.open(path)
     except KeyError as exc:
         raise DataTransferError(f"invalid package: missing {path}") from exc
-    if not raw.strip():
-        return []
-    rows = []
-    for i, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError as exc:
-            raise DataTransferError(f"invalid JSON in {path} line {i}") from exc
-    return rows
+    with entry:
+        for i, raw_line in enumerate(entry, start=1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise DataTransferError(f"invalid JSON in {path} line {i}") from exc
+            if not isinstance(row, dict):
+                raise DataTransferError(f"invalid row in {path} line {i}: expected a JSON object")
+            yield row
+
+
+def _check_limits(zf: zipfile.ZipFile, manifest: dict) -> None:
+    """Refuse packages over the configured size/row limits before anything is parsed or wiped."""
+    cfg = get_settings()
+    max_bytes = cfg.import_max_uncompressed_mb * 1024 * 1024
+    total = sum(info.file_size for info in zf.infolist())
+    if total > max_bytes:
+        raise DataTransferError(
+            f"package too large: {total / 1024 / 1024:.0f} MB uncompressed exceeds the "
+            f"{cfg.import_max_uncompressed_mb} MB limit (IMPORT_MAX_UNCOMPRESSED_MB)"
+        )
+    declared = manifest.get("tables")
+    rows = sum(v for v in declared.values() if isinstance(v, int)) if isinstance(declared, dict) else 0
+    if rows > cfg.import_max_rows:
+        raise DataTransferError(
+            f"package too large: {rows} rows exceeds the {cfg.import_max_rows} row limit (IMPORT_MAX_ROWS)"
+        )
+
+
+def _validate_tables(zf: zipfile.ZipFile) -> None:
+    """Parse every table once without keeping rows, so bad JSON is caught before the wipe."""
+    max_rows = get_settings().import_max_rows
+    total = 0
+    for name, _model in INVENTORY_TABLES:
+        for _row in _iter_table_rows(zf, name):
+            total += 1
+            if total > max_rows:  # the manifest's counts are a claim; enforce the real ones too
+                raise DataTransferError(f"package too large: more than {max_rows} rows (IMPORT_MAX_ROWS)")
+
+
+def _insert_batch(db: Session, model, batch: list[dict]) -> None:
+    # executemany needs one key set per statement; exported rows all share one, so this is one group.
+    groups: dict[frozenset, list[dict]] = {}
+    for kwargs in batch:
+        groups.setdefault(frozenset(kwargs), []).append(kwargs)
+    for rows in groups.values():
+        db.execute(insert(model.__table__), rows)
 
 
 def _assert_idle(db: Session) -> None:
@@ -293,23 +353,28 @@ def import_inventory(db: Session, src: Path | BinaryIO, *, confirm: bool) -> dic
                 f"schema mismatch: package is {package_revision!r}, database is {local_revision!r}"
             )
 
-        payloads: dict[str, list[dict]] = {}
-        for name, _model in INVENTORY_TABLES:
-            payloads[name] = _load_table_rows(zf, name)
+        _check_limits(zf, manifest)
+        _validate_tables(zf)
 
-    wiped = _wipe_inventory(db)
-    # Drop identity-map entries so re-inserting the same primary keys is safe.
-    db.expunge_all()
-    imported: dict[str, int] = {}
-    for name, model in INVENTORY_TABLES:
-        rows = payloads[name]
-        for data in rows:
-            kwargs = _dict_to_kwargs(model, data)
-            db.add(model(**kwargs))
+        wiped = _wipe_inventory(db)
+        # Drop identity-map entries so re-inserting the same primary keys is safe.
+        db.expunge_all()
+        imported: dict[str, int] = {}
+        for name, model in INVENTORY_TABLES:
+            n = 0
+            batch: list[dict] = []
+            for data in _iter_table_rows(zf, name):
+                batch.append(_dict_to_kwargs(model, data))
+                if len(batch) >= BATCH_ROWS:
+                    _insert_batch(db, model, batch)
+                    n += len(batch)
+                    batch = []
+            if batch:
+                _insert_batch(db, model, batch)
+                n += len(batch)
+            imported[name] = n
+        _reset_sequences(db, [name for name, _ in INVENTORY_TABLES])
         db.flush()
-        imported[name] = len(rows)
-    _reset_sequences(db, [name for name, _ in INVENTORY_TABLES])
-    db.flush()
 
     result = {
         "schema_revision": local_revision,

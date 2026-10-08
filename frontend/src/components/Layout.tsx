@@ -1,5 +1,5 @@
-import { useEffect, useRef, type ReactNode } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useApp } from '../context';
 import type { SystemStatus } from '../types';
 import { SCAN_TYPE_LABELS } from '../util';
@@ -15,8 +15,20 @@ const ICONS = {
   changes: 'M3 12h4l3 8 4-16 3 8h4',
   web: 'M3 5h18v14H3zM3 9h18M6.5 7h.01M9 7h.01',
   scans: 'M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12l7-7',
+  menu: 'M4 6h16M4 12h16M4 18h16',
+  close: 'M6 6l12 12M18 6L6 18',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
 };
+
+const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean }[] = [
+  { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
+  { to: '/devices', label: 'Devices', icon: 'devices' },
+  { to: '/ports', label: 'Ports', icon: 'ports' },
+  { to: '/changes', label: 'Changes', icon: 'changes' },
+  { to: '/web', label: 'Web', icon: 'web' },
+  { to: '/scans', label: 'Scans', icon: 'scans' },
+  { to: '/settings', label: 'Settings', icon: 'settings' },
+];
 
 export function Logo() {
   return (
@@ -75,24 +87,34 @@ export function Layout({ children }: { children: ReactNode }) {
   const { user, isAdmin, system, logout } = useApp();
   const scanner = system?.scanner;
   const current = system?.scans.current;
+  // Narrow viewports (<900px) collapse the sidebar into a top bar; the toggle opens the nav.
+  const [navOpen, setNavOpen] = useState(false);
+  const { pathname } = useLocation();
+  const activeNav = NAV.find((n) => (n.end ? pathname === n.to : pathname === n.to || pathname.startsWith(`${n.to}/`)));
+  useEffect(() => setNavOpen(false), [pathname]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setNavOpen(false);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [navOpen]);
   return (
     <div className="app">
-      <aside className="sidebar">
+      <aside className={`sidebar ${navOpen ? 'open' : ''}`}>
         <div className="brand">
           <Logo />
           <div>
             <div className="brand-name">NETWORK FINDER</div>
             <div className="brand-sub">Discovery · Change detection</div>
           </div>
+          {activeNav && <span className="nav-current"><Icon d={ICONS[activeNav.icon]} />{activeNav.label}</span>}
+          <button className="btn ghost icon nav-toggle" onClick={() => setNavOpen((o) => !o)}
+            aria-expanded={navOpen} aria-controls="main-nav" aria-label={navOpen ? 'Close menu' : 'Open menu'} title={navOpen ? 'Close menu' : 'Open menu'}>
+            <Icon d={navOpen ? ICONS.close : ICONS.menu} />
+          </button>
         </div>
-        <nav className="nav">
-          <NavLink to="/" end><Icon d={ICONS.dashboard} />Dashboard</NavLink>
-          <NavLink to="/devices"><Icon d={ICONS.devices} />Devices</NavLink>
-          <NavLink to="/ports"><Icon d={ICONS.ports} />Ports</NavLink>
-          <NavLink to="/changes"><Icon d={ICONS.changes} />Changes</NavLink>
-          <NavLink to="/web"><Icon d={ICONS.web} />Web</NavLink>
-          <NavLink to="/scans"><Icon d={ICONS.scans} />Scans</NavLink>
-          <NavLink to="/settings"><Icon d={ICONS.settings} />Settings</NavLink>
+        <nav className="nav" id="main-nav">
+          {NAV.map((n) => <NavLink key={n.to} to={n.to} end={n.end}><Icon d={ICONS[n.icon]} />{n.label}</NavLink>)}
         </nav>
         <div className="sidebar-foot">
           <div>
