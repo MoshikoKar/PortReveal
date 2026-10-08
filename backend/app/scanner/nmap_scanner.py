@@ -43,13 +43,13 @@ DISCOVERY_TIMEOUT_S = 30 * 60
 # chunk times out, leaving every scan of that network partial (no removals, no baseline).
 _DISCOVERY_MIN_RATE = {"polite": 100, "normal": 300, "fast": 600}
 _DISCOVERY_RETRIES = 2
-# Exit codes that mean nmap was stopped from outside, not that the scan itself failed.
 # Read-only fact scripts, run only in the -sV pass (so they follow the version cache). Explicit list:
 # never -sC / categories, nothing intrusive, brute or vuln. Their port rules only match their own
 # services (ssh, smb, rdp, ssl, socks, vnc, rtsp); none match the raw printer ports 9100-9107, which
 # -sV itself also skips (nmap-service-probes "Exclude T:9100-9107").
 SCRIPTS = ",".join(sorted(KEPT_SCRIPTS))
 SCRIPT_TIMEOUT = "20s"
+# Exit codes that mean nmap was stopped from outside, not that the scan itself failed.
 _EXIT_REASONS = {
     0xC000013A: "interrupted (Ctrl+C or the console was closed)",  # Windows STATUS_CONTROL_C_EXIT
     0x40010004: "terminated by another process",  # Windows DBG_TERMINATE_PROCESS

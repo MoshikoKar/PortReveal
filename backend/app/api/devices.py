@@ -15,7 +15,7 @@ from ..core.services import shown_service_sql
 from ..db import get_db
 from ..models import Device, DeviceIP, DevicePort, Event, Network, Scan, ScanHost, User
 from ..scanner.known_ports import PORT_PROFILES
-from .common import Paging, device_summary, event_out, like_pattern, paged, port_out
+from .common import Paging, device_summary, event_out, like_pattern, paged, port_out, raw_scripts
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
@@ -198,7 +198,7 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "ports": [port_out(p, (d.details or {}).get("host_scripts"))
                   for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
         "identity": device_identity(d.details, [p for p in d.ports if p.is_open]),
-        "host_scripts": (d.details or {}).get("host_scripts"),
+        "host_scripts": raw_scripts((d.details or {}).get("host_scripts")),
         "ips": [{"ip": i.ip, "first_seen": i.first_seen, "last_seen": i.last_seen} for i in d.ips],
         "previous_ips": [i.ip for i in d.ips if i.ip != d.current_ip],
     })

@@ -57,12 +57,17 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
     }
 
 
+def raw_scripts(scripts: dict | None) -> dict | None:
+    """Script output text only (the parsed data stays server-side) for the on-click raw view."""
+    return {sid: {"output": s.get("output", "")} for sid, s in scripts.items()} if scripts else None
+
+
 def port_out(p: DevicePort, host_scripts: dict | None = None) -> dict:
     summary, flags = port_summary(p.port, p.service, p.method, p.details, host_scripts) if p.is_open else (None, [])
     return {
         "summary": summary,
         "flags": flags,
-        "details": p.details,
+        "details": {**p.details, "scripts": raw_scripts(p.details.get("scripts"))} if p.details else None,
         "protocol": p.protocol,
         "port": p.port,
         "is_open": p.is_open,
