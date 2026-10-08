@@ -83,7 +83,7 @@ export default function Dashboard() {
 
       <div className="grid two">
         <Card title="Recent changes" flush actions={<Link to="/changes" className="small">All changes →</Link>}>
-          <EventFeed events={data.recent_events.slice(0, 20)} empty="No changes recorded. The first complete scan of each network is a silent baseline." />
+          <EventFeed events={data.recent_events.slice(0, 10)} empty="No changes recorded. The first complete scan of each network is a silent baseline." />
         </Card>
 
         <div className="stack" style={{ gap: 16 }}>
