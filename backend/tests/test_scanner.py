@@ -4,7 +4,7 @@ import pytest
 
 from app.netutils import AddressSet, PortScope, TargetError, validate_network_cidr
 from app.scanner.nmap_parser import parse_nmap_xml
-from app.scanner.nmap_scanner import build_discovery_args, build_port_args
+from app.scanner.nmap_scanner import DISCOVERY_TIMEOUT_S, build_discovery_args, build_port_args, discovery_timeout
 from app.scanner.types import PortProfile, ScanStageError
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -40,11 +40,19 @@ def test_nmap_arguments_are_fixed_and_safe():
     assert disc[0] == "-sn" and "-PE" in disc and any(a.startswith("-PS") for a in disc)
     unpriv = build_discovery_args(privileged=False, timing="normal")
     assert "-PE" not in unpriv and "--unprivileged" in unpriv
+    # a rate floor keeps empty (silent) ranges from crawling past the chunk timeout
+    assert disc[disc.index("--min-rate") + 1] == "300" and "--min-rate" in unpriv
     std = build_port_args(True, PortProfile(full=False, top_ports=3000, host_timeout_minutes=15))
     assert "--top-ports" in std and "3000" in std and "-sV" in std and "-Pn" in std
     assert "-A" not in std and "--script" not in " ".join(std)
     full = build_port_args(False, PortProfile(full=True, host_timeout_minutes=120))
     assert "1-65535" in full and "-sT" in full
+
+
+def test_discovery_timeout_scales_with_chunk_size():
+    assert discovery_timeout(["10.0.4.0/22"], "normal") == DISCOVERY_TIMEOUT_S
+    assert discovery_timeout(["10.0.0.0/18"], "normal") > DISCOVERY_TIMEOUT_S
+    assert discovery_timeout(["10.0.0.0/22"], "polite") <= DISCOVERY_TIMEOUT_S * 2
 
 
 def test_address_set_parsing_and_exclusions():

@@ -129,6 +129,16 @@ class _Applier:
             return "record"
         return "alert" if net.baseline_scan_id is not None else "silent"
 
+    def prefetch_scopes(self, scan_ids: set[int]) -> None:
+        """Load the port scopes of many prior scans in one query (instead of one per scan id)."""
+        missing = [i for i in scan_ids if i not in self._scope_cache]
+        if not missing:
+            return
+        found = dict(self.db.execute(select(Scan.id, Scan.port_scope).where(Scan.id.in_(missing))).tuples().all())
+        for scan_id in missing:
+            text = found.get(scan_id)
+            self._scope_cache[scan_id] = PortScope(text) if text else None
+
     def prior_scope(self, scan_id: int | None) -> PortScope | None:
         if scan_id is None:
             return None
@@ -168,6 +178,8 @@ class _Applier:
         hosts = sorted(outcome.hosts.values(), key=lambda h: ip_sort_key(h.ip))
         mac_counts = Counter(m for h in hosts if (m := normalize_mac(h.mac)))
         matches = match_hosts(hosts, devices)
+        if self.scope is not None:
+            self.prefetch_scopes({d.last_port_scan_id for d in matches.values() if d and d.last_port_scan_id is not None})
 
         seen_devices: dict[str, Device] = {}  # ip -> device
         pending_closures: list[tuple[Device, DevicePort, str]] = []

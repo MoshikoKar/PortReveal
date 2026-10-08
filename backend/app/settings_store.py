@@ -5,9 +5,11 @@ Every section is a pydantic model with defaults, so missing rows/fields are fine
 from __future__ import annotations
 
 import re
+import time
 from typing import Literal, TypeVar
 
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -175,9 +177,27 @@ SECTIONS: dict[str, type[BaseModel]] = {
 
 T = TypeVar("T", bound=BaseModel)
 
+# Short process-local cache for get_section: sections are read on most requests and every scan but
+# change rarely. Writes through set_value invalidate immediately and again on commit; the TTL bounds
+# staleness for writes made by another process sharing the database.
+_CACHE_TTL_SECONDS = 5.0
+_cache: dict[tuple[str, str], tuple[float, BaseModel]] = {}
+_WRITTEN = "nf_settings_written"  # Session.info key: section keys this session wrote (uncommitted)
 
-def get_section(db: Session, model: type[T]) -> T:
-    key = next(k for k, m in SECTIONS.items() if m is model)
+
+def _drop_cached(key: str) -> None:
+    for ck in list(_cache):  # snapshot: scan/scheduler threads may fill the cache concurrently
+        if ck[1] == key:
+            _cache.pop(ck, None)
+
+
+@event.listens_for(Session, "after_commit")
+def _invalidate_committed(session: Session) -> None:
+    for key in session.info.pop(_WRITTEN, ()):
+        _drop_cached(key)
+
+
+def _load_section(db: Session, key: str, model: type[T]) -> T:
     row = db.get(AppSetting, key)
     data = row.value if row and isinstance(row.value, dict) else {}
     try:
@@ -189,6 +209,19 @@ def get_section(db: Session, model: type[T]) -> T:
             return model.model_validate(clean)
         except Exception:
             return model()
+
+
+def get_section(db: Session, model: type[T]) -> T:
+    key = next(k for k, m in SECTIONS.items() if m is model)
+    if key in db.info.get(_WRITTEN, ()):
+        return _load_section(db, key, model)  # this session's own uncommitted write; never cache it
+    ck = (str(db.get_bind().url), key)
+    now = time.monotonic()
+    hit = _cache.get(ck)
+    if hit is None or hit[0] <= now:
+        hit = (now + _CACHE_TTL_SECONDS, _load_section(db, key, model))
+        _cache[ck] = hit
+    return hit[1].model_copy(deep=True)  # callers may edit the result before put_section
 
 
 def put_section(db: Session, value: BaseModel) -> None:
@@ -208,3 +241,6 @@ def set_value(db: Session, key: str, value) -> None:
         db.add(AppSetting(key=key, value=payload))
     else:
         row.value = payload
+    if key in SECTIONS:
+        db.info.setdefault(_WRITTEN, set()).add(key)
+        _drop_cached(key)

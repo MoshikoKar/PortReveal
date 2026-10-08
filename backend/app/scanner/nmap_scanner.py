@@ -6,6 +6,7 @@ a temporary file and passed with -iL.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import shutil
@@ -35,6 +36,11 @@ _TIMING = {"polite": "-T2", "normal": "-T3", "fast": "-T4"}
 _DISCOVERY_BASE_TCP = "21,22,23,25,53,80,110,111,135,139,143,389,443,445,993,995,1723,3306,3389,5900,8080,8443"
 _DISCOVERY_TCP = merge_port_scope(_DISCOVERY_BASE_TCP, AI_LLM_DISCOVERY_TCP_PORTS) or _DISCOVERY_BASE_TCP
 DISCOVERY_TIMEOUT_S = 30 * 60
+# Floor for the discovery probe rate. Without it nmap's congestion window never grows on ranges where
+# nothing answers (empty subnets behind a router/VPN), so an empty /22 crawls for over an hour and the
+# chunk times out, leaving every scan of that network partial (no removals, no baseline).
+_DISCOVERY_MIN_RATE = {"polite": 100, "normal": 300, "fast": 600}
+_DISCOVERY_RETRIES = 2
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
 
 
@@ -69,8 +75,26 @@ def build_discovery_args(privileged: bool, timing: str) -> list[str]:
         args += ["--privileged", "-PE", "-PP", f"-PS{_DISCOVERY_TCP}", "-PA80,443,3389"]
     else:
         args += ["--unprivileged", f"-PS{_DISCOVERY_TCP}"]
-    args += [_TIMING.get(timing, "-T3"), "--max-retries", "2"]
+    args += [_TIMING.get(timing, "-T3"), "--max-retries", str(_DISCOVERY_RETRIES),
+             "--min-rate", str(discovery_min_rate(timing))]
     return args
+
+
+def discovery_min_rate(timing: str) -> int:
+    return _DISCOVERY_MIN_RATE.get(timing, _DISCOVERY_MIN_RATE["normal"])
+
+
+def discovery_timeout(targets: list[str], timing: str) -> float:
+    """Worst case for a chunk where no address answers (every probe sent with all retries), plus margin."""
+    addresses = 0
+    for t in targets:
+        try:
+            addresses += ipaddress.ip_network(t, strict=False).num_addresses
+        except ValueError:
+            addresses += 1  # hostname
+    probes = len(_DISCOVERY_TCP.split(",")) + 5  # TCP SYN list + echo, timestamp and 3 ACK probes
+    worst = addresses * probes * (_DISCOVERY_RETRIES + 1) / discovery_min_rate(timing)
+    return max(DISCOVERY_TIMEOUT_S, worst * 1.5)
 
 
 def build_port_args(privileged: bool, profile: PortProfile) -> list[str]:
@@ -141,7 +165,7 @@ class NmapScanner:
 
     def discover(self, targets: list[str], ctx: ScanContext) -> StageResult:
         args = build_discovery_args(self.privileged, self.timing)
-        run = self._run(args, targets, DISCOVERY_TIMEOUT_S, ctx, "discovery")
+        run = self._run(args, targets, discovery_timeout(targets, self.timing), ctx, "discovery")
         return StageResult(hosts=run.hosts)
 
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:

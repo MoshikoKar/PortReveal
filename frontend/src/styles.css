@@ -10,6 +10,7 @@
   --muted: #74819b;
   --accent: #2dd4bf;
   --accent-dim: #134e4a;
+  --accent-ink: #04201d; /* text on solid --accent fills */
   --high: #f87171;
   --high-bg: rgba(248, 113, 113, 0.12);
   --medium: #fbbf24;
@@ -106,7 +107,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; position: relative; overflow: hidden; }
 .kpi::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--kpi-color, var(--border-2)); }
 .kpi .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.09em; }
-.kpi .value { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 4px; line-height: 1.1; }
+.kpi .value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 4px; line-height: 1.1; }
 .kpi .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .kpi.link { cursor: pointer; }
 .kpi.link:hover { border-color: var(--border-2); }
@@ -158,17 +159,20 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer;
   padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border-2); background: var(--panel-3);
-  color: var(--text); font-weight: 550; white-space: nowrap;
+  color: var(--text); font-weight: 500; white-space: nowrap;
 }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #04201d; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
 .btn.danger { border-color: rgba(248, 113, 113, 0.5); color: var(--high); background: transparent; }
 .btn.warn { border-color: rgba(251, 191, 36, 0.55); color: var(--medium); background: transparent; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
 .btn.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--border-2); }
 .btn.sm { padding: 4px 10px; font-size: 12.5px; }
+/* Icon-only buttons: tooltips are intentionally the browser's native `title` (no custom tooltip
+   primitive). Every icon-only control must carry both `title` (hover hint) and `aria-label`
+   (screen readers / keyboard users, since `title` alone is not reliably announced). */
 .btn.icon {
   padding: 5px;
   line-height: 0;
@@ -188,7 +192,7 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .alert.ok { border-color: rgba(52, 211, 153, 0.45); background: var(--ok-bg); color: #a7f3d0; }
 
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.tabs a, .tabs button { padding: 9px 14px; color: var(--text-2); border: 0; background: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 550; }
+.tabs a, .tabs button { padding: 9px 14px; color: var(--text-2); border: 0; background: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
 .tabs a:hover, .tabs button:hover { color: var(--text); text-decoration: none; }
 .tabs a.active, .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
 
@@ -209,6 +213,8 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .bar-fill { height: 100%; border-radius: 999px; background: var(--bar-color, var(--accent)); }
 
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+table.skeleton tbody tr:hover { background: none; }
+.skeleton-bar { display: block; height: 10px; border-radius: 4px; background: var(--panel-3); animation: pulse 1.6s ease-in-out infinite; }
 .pager { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; color: var(--muted); font-size: 12.5px; }
 
 .modal-back { position: fixed; inset: 0; background: rgba(2, 6, 14, 0.72); display: grid; place-items: center; z-index: 50; padding: 20px; }
@@ -221,7 +227,7 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .steps { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .steps span { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--panel-3); color: var(--muted); }
 .steps span.done { color: var(--ok); }
-.steps span.current { background: var(--accent); color: #04201d; font-weight: 600; }
+.steps span.current { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 
 .spinner { width: 16px; height: 16px; border: 2px solid var(--border-2); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }

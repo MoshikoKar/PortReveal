@@ -285,3 +285,18 @@ def test_mock_scenario_end_to_end(db):
         ["port_opened"],
         [],
     ]
+
+
+def test_exposed_ports_labelled_by_most_common_service(db):
+    from app.api.dashboard import exposed_ports
+
+    net = make_network(db)
+    scan(ScriptedScanner([
+        host("10.0.0.1", [port(3389, "ms-wbt-server"), port(445, "tcpwrapped")]),
+        host("10.0.0.2", [port(3389, "ms-wbt-server"), port(445, "tcpwrapped")]),
+        host("10.0.0.3", [port(3389, "ssh"), port(445, "microsoft-ds")]),
+    ]), network_id=net.id)
+    rows = {r["port"]: r for r in exposed_ports(db)}
+    assert rows[3389]["count"] == 3 and rows[3389]["service"] == "ms-wbt-server"  # not max() -> "ssh"
+    assert rows[445]["service"] == "microsoft-ds"  # a named service beats tcpwrapped
+    assert exposed_ports(db, network_id=net.id + 1) == []

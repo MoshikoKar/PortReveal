@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { EventDetail } from '../components/EventFeed';
-import { Card, Empty, ErrorBox, Loading, Pager, SeverityBadge } from '../components/ui';
+import { Card, Empty, ErrorBox, Pager, SeverityBadge, SkeletonRows } from '../components/ui';
 import type { ChangeEvent, EventType, Paged } from '../types';
 import { EVENT_LABELS, fmtTime, useApi } from '../util';
 
@@ -79,7 +79,7 @@ export default function Changes() {
         </div>
       }>
         <ErrorBox error={error} />
-        {loading && !data ? <Loading /> : !data?.items.length ? <Empty>No changes match these filters.</Empty> : (
+        {loading && !data ? <SkeletonRows cols={5} /> : !data?.items.length ? <Empty>No changes match these filters.</Empty> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Time</th><th>Change</th><th>Device</th><th>Details</th><th>Scan</th></tr></thead>

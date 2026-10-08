@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     app_env: Literal["development", "production", "test"] = "development"
     log_level: str = "INFO"
+    # API requests slower than this are logged as warnings (logger "app.perf"); faster ones at DEBUG
+    slow_request_ms: int = 1000
 
     database_url: str = ""
     # Alternative to DATABASE_URL (used by docker compose; avoids URL-escaping passwords)

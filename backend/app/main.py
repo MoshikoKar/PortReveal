@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from .scanner import scanner_status
 from .seed import seed_dev
 
 log = logging.getLogger("app")
+perf_log = logging.getLogger("app.perf")
 
 
 @asynccontextmanager
@@ -80,6 +82,26 @@ for r in (auth, setup, system, dashboard, devices, events, scans, networks, excl
 @app.exception_handler(TargetError)
 async def target_error_handler(request: Request, exc: TargetError):
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    """Log API latency so slow endpoints (device list, dashboard, ...) show up in the app log.
+
+    Streaming responses are timed to their first byte, which is what the client waits on.
+    """
+    if not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    start = time.perf_counter()
+    response = await call_next(request)
+    ms = (time.perf_counter() - start) * 1000
+    response.headers.setdefault("Server-Timing", f"app;dur={ms:.1f}")
+    slow = ms >= get_settings().slow_request_ms
+    if slow or perf_log.isEnabledFor(logging.DEBUG):
+        target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        perf_log.log(logging.WARNING if slow else logging.DEBUG, "%s %s -> %s in %.0f ms%s",
+                     request.method, target, response.status_code, ms, " (slow)" if slow else "")
+    return response
 
 
 @app.middleware("http")

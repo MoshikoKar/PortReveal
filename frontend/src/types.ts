@@ -278,6 +278,7 @@ export interface Network {
   created_at: string;
   device_count: number | null;
   active_count: number | null;
+  scan_active?: boolean;
 }
 
 export interface Exclusion {
@@ -307,9 +308,18 @@ export interface Dashboard {
   recent_events: ChangeEvent[];
   top_services: { service: string; count: number }[];
   top_ports: { protocol: string; port: number; count: number; service: string | null }[];
+  exposed_ports_total: number;
   trend: { date: string; hosts_active: number; open_ports: number }[];
   networks: Network[];
   scans: ScanSummary;
+}
+
+export interface ExposedPort {
+  protocol: string;
+  port: number;
+  count: number;
+  service: string;
+  services: { service: string; count: number }[];
 }
 
 export interface ScheduleSettings {

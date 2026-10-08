@@ -4,7 +4,15 @@ import { Logo } from '../components/Layout';
 import { ErrorBox } from '../components/ui';
 import type { SetupStatus, User } from '../types';
 
-export default function Login({ status, onLogin }: { status: SetupStatus; onLogin: (u: User) => void }) {
+export default function Login({
+  status,
+  onLogin,
+  sessionExpired = false,
+}: {
+  status: SetupStatus;
+  onLogin: (u: User) => void;
+  sessionExpired?: boolean;
+}) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +43,9 @@ export default function Login({ status, onLogin }: { status: SetupStatus; onLogi
               <div className="brand-sub">Network discovery & change detection</div>
             </div>
           </div>
+          {sessionExpired && (
+            <div className="alert warn">Your session expired or you were signed out. Please sign in again to continue.</div>
+          )}
           {status.dev_mode && (
             <div className="alert warn small">
               Development mode{status.scanner_mode === 'mock' ? ' · mock scanner (simulated data)' : ''}. Default dev login is set

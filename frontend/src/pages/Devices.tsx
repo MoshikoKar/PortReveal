@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, Loading, Pager, PortChips } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, Pager, PortChips, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -195,7 +195,7 @@ export default function Devices() {
             </button>
           </div>
         )}
-        {loading && !data ? <Loading /> : !items.length ? <Empty>No devices match.</Empty> : (
+        {loading && !data ? <SkeletonRows cols={isAdmin ? 9 : 8} /> : !items.length ? <Empty>No devices match.</Empty> : (
           <div className="table-wrap">
             <table>
               <thead>

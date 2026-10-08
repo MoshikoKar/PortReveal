@@ -5,7 +5,7 @@ import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { HttpBadge, KIND_LABELS, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
-import { Card, Empty, ErrorBox, Loading, MockBadge, Modal, Pager, Progress, ScanStatusBadge } from '../components/ui';
+import { Card, Empty, ErrorBox, Loading, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import type { Paged, Scan, SnapshotInfo, WebCapture } from '../types';
 import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, useApi } from '../util';
@@ -151,7 +151,14 @@ export default function Scans() {
           <p>Network scans and on-demand Web Capture jobs (inventory enrichment for known HTTP services).</p>
         </div>
         {isAdmin && tab === 'scans' && (
-          <button className="btn primary" onClick={() => setDialog(true)} disabled={system?.scanner.mode === 'unavailable'}>Scan now</button>
+          <button
+            className="btn primary"
+            onClick={() => setDialog(true)}
+            disabled={system?.scanner.mode === 'unavailable'}
+            title={system?.scanner.mode === 'unavailable' ? `Scanner unavailable: ${system.scanner.message}` : undefined}
+          >
+            Scan now
+          </button>
         )}
         {isAdmin && tab === 'web-captures' && (
           <button className="btn primary" onClick={() => setWcDialog(true)}>Web capture</button>
@@ -298,7 +305,7 @@ export default function Scans() {
 
       <Card title="Scan history" flush>
         <ErrorBox error={history.error} />
-        {!history.data ? <Loading /> : !history.data.items.length ? <Empty>No scans yet.</Empty> : (
+        {!history.data ? <SkeletonRows cols={isAdmin ? 10 : 9} /> : !history.data.items.length ? <Empty>No scans yet.</Empty> : (
           <>
             <div className="table-wrap">
               <table>

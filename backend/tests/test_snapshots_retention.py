@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from app.core.notify import format_digest, format_event, notify_events
 from app.core.retention import run_retention
-from app.core.scheduler import enqueue_scheduled_scans, next_run, tick
+from app.core.scheduler import enqueue_baseline_retries, enqueue_scheduled_scans, next_run, tick
 from app.core.snapshots import load_snapshot
 from app.models import AuditLog, Device, Event, Scan, Snapshot
 from app.security import encrypt_secret
@@ -129,3 +129,28 @@ def test_schedule_next_run_and_tick(db):
     tick(now.replace(hour=2, minute=5))  # same day: no duplicate
     assert db.scalar(select(func.count(Scan.id))) == 1
     assert enqueue_scheduled_scans(db) == []  # already queued for that network
+
+
+def test_network_without_baseline_is_rescanned_until_baseline_exists(db):
+    net = make_network(db)
+    now = datetime.now(timezone.utc)
+    net.created_at = now - timedelta(minutes=10)
+    db.commit()
+    assert enqueue_baseline_retries(db, now) == []  # brand-new network: give the admin time to scan it
+
+    net.created_at = now - timedelta(days=2)
+    db.commit()
+    first = enqueue_baseline_retries(db, now)
+    assert len(first) == 1
+    assert enqueue_baseline_retries(db, now) == []  # already queued: never stack a second one
+
+    s = db.get(Scan, first[0])
+    s.status = "partial"
+    db.commit()
+    assert enqueue_baseline_retries(db, now + timedelta(hours=1)) == []  # too soon after the last attempt
+    assert len(enqueue_baseline_retries(db, now + timedelta(hours=13))) == 1
+
+    db.query(Scan).update({Scan.status: "completed"})
+    net.baseline_scan_id, net.baseline_at = s.id, now
+    db.commit()
+    assert enqueue_baseline_retries(db, now + timedelta(days=5)) == []  # baseline done: no more retries
