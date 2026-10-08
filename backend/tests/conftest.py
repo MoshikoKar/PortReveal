@@ -46,6 +46,14 @@ def db_env(tmp_path, template_db, monkeypatch):
 
     scanner_status(refresh=True)
     init_engine(url)
+    # Keep existing scan tests free of side-effect capture jobs; opt in per test when needed.
+    from app.db import session_scope
+    from app.settings_store import WebCaptureSettings, get_section, put_section
+
+    with session_scope() as s:
+        wc = get_section(s, WebCaptureSettings)
+        wc.auto_after_scan = False
+        put_section(s, wc)
     yield url
     reset_settings_cache()
 

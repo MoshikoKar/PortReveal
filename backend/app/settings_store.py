@@ -29,6 +29,9 @@ class ScheduleSettings(BaseModel):
     enabled: bool = True
     time: str = "02:00"  # local time HH:MM
     days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4, 5, 6])  # 0=Monday
+    # Queue a fast discovery-only scan per network immediately before the daily standard scan
+    # so new hosts are registered before the longer service scan runs.
+    discovery_before_standard: bool = True
 
     @field_validator("time")
     @classmethod
@@ -144,6 +147,11 @@ class WebCaptureSettings(BaseModel):
     """On-demand web interface capture (inventory enrichment)."""
 
     enabled: bool = True
+    # After a completed/partial standard or full scan, queue a capture for web/RTSP services found.
+    auto_after_scan: bool = True
+    # When true: only new/changed web hosts (and never-captured endpoints). When false: every
+    # scanned host that has a known web/RTSP endpoint.
+    auto_only_new_or_changed: bool = True
     max_addresses: int = Field(256, ge=1, le=4096)
     max_endpoints: int = Field(128, ge=1, le=1024)
     max_pages_per_endpoint: int = Field(3, ge=1, le=10)

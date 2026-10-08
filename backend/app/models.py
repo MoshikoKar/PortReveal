@@ -316,7 +316,7 @@ SCREENSHOT_STATUSES = (
 
 
 class WebCapture(Base):
-    """On-demand web interface capture job (manual, explicit targets only)."""
+    """Web interface capture job (manual targets, or auto-queued after a scan)."""
 
     __tablename__ = "web_captures"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

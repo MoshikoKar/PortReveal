@@ -99,7 +99,10 @@ Full-port mock scans additionally reveal a few high ports (e.g. 49664/msrpc).
 
 ### Web Capture (optional)
 
-On-demand inventory enrichment for known HTTP(S) and RTSP services on selected devices/IPs. Not part of nmap scans.
+Inventory enrichment for known HTTP(S) and RTSP services on selected devices/IPs. Not part of nmap scans.
+By default, a capture job is queued automatically after a standard/full scan for new/changed or never-captured
+web hosts (toggle under **Settings → Web capture**). Manual jobs remain available from Device details, Devices
+multi-select, or **Scans → Web captures**.
 Requires Chromium for HTTP screenshots and **ffmpeg** for RTSP still frames / live MJPEG viewing:
 
 ```bash
@@ -115,7 +118,7 @@ cd backend
 
 Any inventory port whose service is identified as **rtsp** (any port number, not only 554) is captured as a stream page. Open the host’s web preview and click **Watch live** to view the feed in the browser (server-side RTSP→MJPEG proxy).
 
-Toggle and limits: **Settings → Web capture**. Start jobs from Device details, Devices multi-select, or **Scans → Web captures**.
+Toggle, auto-after-scan, and limits: **Settings → Web capture**.
 
 ---
 
@@ -227,9 +230,13 @@ docker/Dockerfile, docker-compose.yml
 
 | Profile | nmap | When |
 |---|---|---|
-| Discovery | `-sn -PE -PP -PS<22 common ports> -PA80,443,3389` (+ ARP on local segments) | part of every scan, or alone |
+| Discovery | `-sn -PE -PP -PS<22 common ports> -PA80,443,3389` (+ ARP on local segments) | alone, or queued before the daily standard scan (default) |
 | Standard | discovery, then `-Pn -sV --top-ports N` (default 3000) on live hosts only | daily schedule / manual |
 | Full port | discovery, then `-Pn -sV -p 1-65535` on live hosts | manual only, for hosts/ranges/networks |
+
+**Daily schedule.** At the configured time, each enabled network gets an optional discovery-only pass (default on)
+followed by a standard scan, so new hosts are registered before the longer service scan. Toggle under
+*Settings → Schedule*.
 
 **/16 networks.** Exclusions are subtracted *before* nmap runs. The remaining addresses are split into discovery
 chunks (default 1,024 addresses = 64 chunks for a /16) that run with bounded parallelism (default 4 nmap processes),

@@ -52,10 +52,15 @@ export function ScheduleForm({ onSaved }: { onSaved?: () => void }) {
     <Card title="Scan schedule">
       <div className="stack">
         <div className="muted small">
-          A standard scan of every enabled network runs once per day at this server-local time. Changes apply immediately
-          (no restart).
+          Every enabled network is scanned once per day at this server-local time. By default a fast discovery pass
+          runs first so new hosts are registered before the standard service scan. Changes apply immediately (no restart).
         </div>
         <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => f.setForm({ ...s, enabled: e.target.checked })} />Scheduled scanning enabled</label>
+        <label className="check">
+          <input type="checkbox" checked={s.discovery_before_standard}
+            onChange={(e) => f.setForm({ ...s, discovery_before_standard: e.target.checked })} />
+          Run discovery before the standard scan
+        </label>
         <div className="row wrap">
           <label className="field">Time (HH:MM)<input type="time" value={s.time} onChange={(e) => f.setForm({ ...s, time: e.target.value })} /></label>
           <div className="field"><span>Days</span>
@@ -70,7 +75,7 @@ export function ScheduleForm({ onSaved }: { onSaved?: () => void }) {
         </div>
         <div className="muted small">Next run: {f.data?.next_run ? `${fmtTime(f.data.next_run)} (${relTime(f.data.next_run)})` : 'not scheduled'}</div>
         <Msg msg={f.msg} />
-        <div><button className="btn primary" onClick={async () => { if (await f.save({ enabled: s.enabled, time: s.time, days: s.days })) onSaved?.(); }}>Save schedule</button></div>
+        <div><button className="btn primary" onClick={async () => { if (await f.save({ enabled: s.enabled, time: s.time, days: s.days, discovery_before_standard: s.discovery_before_standard })) onSaved?.(); }}>Save schedule</button></div>
       </div>
     </Card>
   );
@@ -130,10 +135,21 @@ export function WebCaptureForm() {
     <Card title="Web capture">
       <div className="stack">
         <div className="muted small">
-          On-demand inventory enrichment for known HTTP(S) services. Manual, admin-only, explicit targets.
-          Not a vulnerability scanner. HTTP screenshots need Chromium (<code>playwright install chromium</code>). RTSP stills and live viewing need <code>ffmpeg</code> on PATH.
+          Inventory enrichment for known HTTP(S) and RTSP services. Jobs can be started manually or queued
+          automatically after a standard/full scan finds web app services. Not a vulnerability scanner.
+          HTTP screenshots need Chromium (<code>playwright install chromium</code>). RTSP stills and live viewing need <code>ffmpeg</code> on PATH.
         </div>
         <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable new Web Capture jobs</label>
+        <label className="check">
+          <input type="checkbox" checked={s.auto_after_scan} disabled={!s.enabled}
+            onChange={(e) => set({ auto_after_scan: e.target.checked })} />
+          Auto-capture after standard/full scans
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={s.auto_only_new_or_changed} disabled={!s.enabled || !s.auto_after_scan}
+            onChange={(e) => set({ auto_only_new_or_changed: e.target.checked })} />
+          Only new/changed or never-captured web hosts (recommended)
+        </label>
         <div className="form-grid">
           <Num label="Max addresses per job" value={s.max_addresses} min={1} max={4096} onChange={(v) => set({ max_addresses: v })} />
           <Num label="Max web endpoints per job" value={s.max_endpoints} min={1} max={1024} onChange={(v) => set({ max_endpoints: v })} />

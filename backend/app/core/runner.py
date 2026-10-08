@@ -46,6 +46,8 @@ from ..settings_store import ScanSettings, get_section, get_value, set_value
 from .compare import ScanOutcome, apply_outcome
 from .notify import notify_events
 from .snapshots import create_snapshot
+from .web_capture.auto import maybe_enqueue_auto_web_capture
+from .web_capture.manager import web_capture_manager
 
 log = logging.getLogger(__name__)
 
@@ -243,6 +245,7 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
 
         # ---- Compare, store, snapshot -----------------------------------------
         _update(scan_id, stage="comparing")
+        auto_capture_id: int | None = None
         with session_scope() as db:
             scan = db.get(Scan, scan_id)
             res = apply_outcome(db, scan, outcome, cfg)
@@ -271,12 +274,18 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
                 if scanner.mode == "mock" and scan_type in (SCAN_STANDARD, SCAN_DISCOVERY):
                     key = mock_step_key(network_id)
                     set_value(db, key, min(int(get_value(db, key, 0)) + 1, LAST_STEP))
+            if has_ports and status in (SCAN_COMPLETED, SCAN_PARTIAL):
+                auto_capture_id = maybe_enqueue_auto_web_capture(
+                    db, scan, baseline_created=res.baseline_created,
+                )
         log.info(
             "scan %s %s in %.1fs: %d live hosts, %d events%s",
             scan_id, status, time.monotonic() - started, len(live), len(event_ids),
             " (baseline created)" if res.baseline_created else "",
         )
         notify_events(event_ids)
+        if auto_capture_id is not None:
+            web_capture_manager.wake()
         return status
 
     except ScanCancelled:
