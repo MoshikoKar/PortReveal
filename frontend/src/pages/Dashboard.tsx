@@ -97,7 +97,7 @@ export default function Dashboard() {
                   </div>
                   <Progress value={current.progress} />
                   <div className="muted small">
-                    {current.stage} · {Math.round(current.progress * 100)}% · {current.hosts_discovered} hosts found · {current.hosts_scanned} scanned · {duration(current.started_at, null)}
+                    {current.stage} · {Math.round(current.progress * 100)}% · {current.hosts_discovered} hosts found · {current.hosts_scanned} scanned{current.open_ports_found > 0 && ` · ${current.open_ports_found} open ports so far`} · {duration(current.started_at, null)}
                   </div>
                 </div>
               ) : (

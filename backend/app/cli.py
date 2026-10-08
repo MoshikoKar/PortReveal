@@ -87,10 +87,11 @@ def cmd_scan(args) -> int:
             if net is None:
                 print(f"network not found: {args.network}")
                 return 1
-            scan = create_scan(db, args.type, network=net, requested_by="cli")
+            scan = create_scan(db, args.type, network=net, requested_by="cli",
+                               ignore_version_cache=args.ignore_version_cache)
         elif args.targets:
             scan = create_scan(db, args.type, targets=AddressSet.from_specs(args.targets, allow_hostname=True),
-                               requested_by="cli")
+                               requested_by="cli", ignore_version_cache=args.ignore_version_cache)
         else:
             print("give --network or --targets")
             return 1
@@ -194,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--type", choices=["discovery", "standard", "full"], default="standard")
     sc.add_argument("--network")
     sc.add_argument("--targets")
+    sc.add_argument("--ignore-version-cache", action="store_true", help="run -sV on every open port")
     sc.set_defaults(fn=cmd_scan)
     sub.add_parser("mock-reset").set_defaults(fn=cmd_mock_reset)
     sub.add_parser("retention").set_defaults(fn=cmd_retention)

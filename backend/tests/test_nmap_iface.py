@@ -23,6 +23,7 @@ def test_parse_nmap_iflist_ipv4_only():
     assert set(by_dev) == {"unk0", "eth0", "unk1", "eth1", "lo0", "eth5"}
     assert by_dev["eth0"].is_ethernet and by_dev["eth0"].up
     assert str(by_dev["eth0"].network) == "192.168.69.0/24"
+    assert str(by_dev["eth0"].address) == "192.168.69.102"
     assert by_dev["unk0"].type == "other" and not by_dev["unk0"].is_ethernet
     assert by_dev["lo0"].is_loopback
 
@@ -32,6 +33,8 @@ def test_choose_bind_prefers_local_ethernet_over_tunnel():
     # Tailscale (unk0) may own the OS route, but LAN overlap must bind eth0.
     choice = choose_bind(["192.168.69.0/24"], ifaces, privileged=True)
     assert choice.device == "eth0" and choice.privileged is True
+    # -e alone keeps the VPN source address: replies never return and every port looks filtered.
+    assert choice.source == "192.168.69.102"
 
     single = choose_bind(["192.168.69.50"], ifaces, privileged=True)
     assert single.device == "eth0"

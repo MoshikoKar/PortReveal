@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 from app.core.web_capture.identify_ai import identify_local_ai
-from app.scanner.known_ports import AI_LLM_TCP_PORTS, merge_port_scope
-from app.scanner.nmap_scanner import build_fixed_port_args, build_port_args
-from app.scanner.types import PortProfile
+from app.scanner.known_ports import AI_LLM_TCP_PORTS, STANDARD_EXTRA_TCP_PORTS, merge_port_scope
 
 
 def test_known_ports_include_documented_defaults():
@@ -41,11 +39,5 @@ def test_title_identifies_open_webui():
     assert identify_local_ai(title="Open WebUI", body="<html></html>") == "Open WebUI"
 
 
-def test_fixed_port_args_include_ai_candidates():
-    profile = PortProfile(full=False, top_ports=3000)
-    std = build_port_args(True, profile)
-    assert "--top-ports" in std
-    fixed = build_fixed_port_args(True, profile, AI_LLM_TCP_PORTS)
-    assert "-p" in fixed
-    spec = fixed[fixed.index("-p") + 1]
-    assert "11434" in spec and "1234" in spec
+def test_standard_extra_ports_include_ai_candidates():
+    assert set(AI_LLM_TCP_PORTS) <= set(STANDARD_EXTRA_TCP_PORTS)

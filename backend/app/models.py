@@ -205,6 +205,7 @@ class DevicePort(Base):
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     opened_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    version_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # last -sV on this port
     device: Mapped[Device] = relationship(back_populates="ports")
 
 
@@ -220,6 +221,7 @@ class Scan(Base):
     target_count: Mapped[int] = mapped_column(Integer, default=0)
     criteria: Mapped[str | None] = mapped_column(Text)  # human-readable selection filter, if any
     port_scope: Mapped[str | None] = mapped_column(Text)  # nmap port list actually scanned
+    ignore_version_cache: Mapped[bool] = mapped_column(Boolean, default=False)  # -sV every open port
     requested_by: Mapped[str | None] = mapped_column(String(150))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
@@ -229,6 +231,7 @@ class Scan(Base):
     hosts_discovered: Mapped[int] = mapped_column(Integer, default=0)
     hosts_scanned: Mapped[int] = mapped_column(Integer, default=0)
     hosts_failed: Mapped[int] = mapped_column(Integer, default=0)
+    open_ports_found: Mapped[int] = mapped_column(Integer, default=0)  # live progress of the port stage
     events_count: Mapped[int] = mapped_column(Integer, default=0)
     is_baseline: Mapped[bool] = mapped_column(Boolean, default=False)
     error: Mapped[str | None] = mapped_column(Text)

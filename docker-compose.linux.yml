@@ -1,0 +1,15 @@
+# Linux host overlay: host networking so nmap sees the real LAN (ARP / MAC).
+# Requires Docker Engine on Linux (not Docker Desktop on Windows/macOS).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.linux.yml --env-file .env.production up -d --build
+#
+# With host networking the app reaches Postgres via the host-published DB port
+# (POSTGRES_PORT in .env.production, default 5434), not the Compose service name.
+
+services:
+  app:
+    network_mode: host
+    ports: !reset []
+    environment:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: ${POSTGRES_PORT:-5434}

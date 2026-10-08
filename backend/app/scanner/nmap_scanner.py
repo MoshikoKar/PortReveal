@@ -6,6 +6,7 @@ a temporary file and passed with -iL.
 """
 from __future__ import annotations
 
+import functools
 import ipaddress
 import logging
 import os
@@ -16,9 +17,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from ..netutils import PortScope
+from ..netutils import PortScope, ip_sort_key
 from .known_ports import AI_LLM_DISCOVERY_TCP_PORTS, STANDARD_EXTRA_TCP_PORTS, merge_port_scope
-from .nmap_iface import resolve_bind
+from .nmap_iface import BindChoice, resolve_bind
 from .nmap_parser import parse_nmap_xml
 from .types import (
     HostObservation,
@@ -42,7 +43,6 @@ DISCOVERY_TIMEOUT_S = 30 * 60
 # chunk times out, leaving every scan of that network partial (no removals, no baseline).
 _DISCOVERY_MIN_RATE = {"polite": 100, "normal": 300, "fast": 600}
 _DISCOVERY_RETRIES = 2
-EXTRA_PORTS_TIMEOUT_S = 20 * 60
 
 
 def nmap_is_privileged(setting: str) -> bool:
@@ -98,57 +98,51 @@ def discovery_timeout(targets: list[str], timing: str) -> float:
     return max(DISCOVERY_TIMEOUT_S, worst * 1.5)
 
 
-def build_port_args(privileged: bool, profile: PortProfile) -> list[str]:
-    args = ["-Pn", "-n", "-sV"]
+@functools.lru_cache(maxsize=8)
+def top_tcp_ports(exe: str, n: int) -> tuple[int, ...]:
+    """nmap's own --top-ports N list (open-frequency order from its installed nmap-services).
+
+    Asked from nmap itself with no targets (nothing is scanned), so the list and its tie-breaking
+    match --top-ports exactly on every platform.
+    """
+    try:
+        out = subprocess.run([exe, "-sT", "--top-ports", str(int(n)), "-oX", "-"],
+                             capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ScanStageError(f"could not read nmap's top ports: {exc}") from exc
+    spec = parse_nmap_xml(out.stdout).port_scope if out.returncode == 0 else None
+    if not spec:
+        raise ScanStageError(f"could not read nmap's top {n} ports (exit code {out.returncode})")
+    ports: list[int] = []
+    for part in spec.split(","):
+        a, _, b = part.partition("-")
+        ports.extend(range(int(a), int(b or a) + 1))
+    return tuple(ports)
+
+
+def standard_port_spec(exe: str, top_n: int) -> str:
+    """Explicit -p list for standard scans: nmap's top-N TCP ports plus the extra web/AI ports.
+
+    --top-ports and -p cannot be combined into a union, and a second nmap pass for the extras
+    would version-scan the overlapping ports twice.
+    """
+    return PortScope.from_ports({*top_tcp_ports(exe, top_n), *STANDARD_EXTRA_TCP_PORTS})
+
+
+def build_port_args(privileged: bool, profile: PortProfile, ports: str, *, versions: bool = True,
+                    os_scan: bool = True) -> list[str]:
+    args = ["-Pn", "-n"] + (["-sV"] if versions else [])
     args += ["--privileged", "-sS"] if privileged else ["--unprivileged", "-sT"]
-    if profile.full:
-        args += ["-p", "1-65535"]
-    else:
-        args += ["--top-ports", str(int(profile.top_ports))]
     args += [
+        "-p", ports,
         _TIMING.get(profile.timing, "-T3"),
         "--max-retries", "2",
         "--host-timeout", f"{int(profile.host_timeout_minutes)}m",
         "--min-hostgroup", str(max(1, int(profile.batch_size))),
     ]
-    if profile.os_detection and privileged:
+    if os_scan and profile.os_detection and privileged:
         args += ["-O", "--osscan-limit", "--max-os-tries", "1"]
     return args
-
-
-def build_fixed_port_args(privileged: bool, profile: PortProfile, ports: tuple[int, ...] | list[int]) -> list[str]:
-    """Service scan a fixed TCP port list (used for AI/LLM ports outside --top-ports)."""
-    spec = PortScope.from_ports(ports)
-    assert spec, "fixed port list must not be empty"
-    args = ["-Pn", "-n", "-sV"]
-    args += ["--privileged", "-sS"] if privileged else ["--unprivileged", "-sT"]
-    args += [
-        "-p", spec,
-        _TIMING.get(profile.timing, "-T3"),
-        "--max-retries", "2",
-        "--host-timeout", f"{int(profile.host_timeout_minutes)}m",
-        "--min-hostgroup", str(max(1, int(profile.batch_size))),
-    ]
-    return args
-
-
-def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
-    """Union open ports from a follow-up scan into the primary host observation."""
-    if extra.ports is None:
-        if extra.port_scan_failed and base.ports is None:
-            base.port_scan_failed = True
-        return
-    by_key: dict[tuple[str, int], PortObservation] = {
-        (p.protocol, p.port): p for p in (base.ports or [])
-    }
-    for p in extra.ports:
-        by_key[(p.protocol, p.port)] = p
-    base.ports = sorted(by_key.values(), key=lambda p: (p.protocol, p.port))
-    base.port_scan_failed = False
-    base.mac = base.mac or extra.mac
-    base.vendor = base.vendor or extra.vendor
-    base.hostname = base.hostname or extra.hostname
-    base.os_name = extra.os_name or base.os_name
 
 
 class NmapScanner:
@@ -168,29 +162,26 @@ class NmapScanner:
         bind = resolve_bind(self.exe, targets, self.privileged)
         args = build_discovery_args(bind.privileged, self.timing)
         run = self._run(args, targets, discovery_timeout(targets, self.timing), ctx, "discovery",
-                        device=bind.device)
+                        device=bind.device, source=bind.source)
         return StageResult(hosts=run.hosts)
 
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:
         bind = resolve_bind(self.exe, ips, self.privileged)
-        args = build_port_args(bind.privileged, profile)
+        spec = "1-65535" if profile.full else standard_port_spec(self.exe, profile.top_ports)
         timeout = profile.host_timeout_minutes * 60 + 15 * 60
-        run = self._run(args, ips, timeout, ctx, "full" if profile.full else "ports",
-                        device=bind.device)
+        label = "full" if profile.full else "ports"
+        cached = {ip: profile.version_cache[ip] for ip in ips if profile.version_cache.get(ip)}
+        # Nothing cached for this batch (first scan, cache off or forced): one nmap pass with -sV.
+        run = self._run(build_port_args(bind.privileged, profile, spec, versions=not cached), ips, timeout,
+                        ctx, label, device=bind.device, source=bind.source)
         by_ip = {h.ip: h for h in run.hosts}
-        port_scope = run.port_scope or ("1-65535" if profile.full else None)
-
-        # --top-ports misses uncommon local AI/LLM API and web-app dev-server ports; scan them too.
-        if not profile.full and STANDARD_EXTRA_TCP_PORTS:
-            extra_args = build_fixed_port_args(bind.privileged, profile, STANDARD_EXTRA_TCP_PORTS)
-            extra_timeout = min(timeout, EXTRA_PORTS_TIMEOUT_S)
-            extra = self._run(extra_args, ips, extra_timeout, ctx, "ports-extra", device=bind.device)
-            for h in extra.hosts:
-                if h.ip in by_ip:
-                    _merge_host_ports(by_ip[h.ip], h)
-                else:
-                    by_ip[h.ip] = h
-            port_scope = merge_port_scope(port_scope or extra.port_scope, STANDARD_EXTRA_TCP_PORTS)
+        port_scope = run.port_scope or spec
+        if not cached:
+            for h in run.hosts:
+                for p in h.ports or []:
+                    p.version_checked = True
+        else:
+            self._detect_versions(by_ip, cached, bind, profile, timeout, ctx, label)
 
         hosts = []
         for ip in ips:
@@ -203,13 +194,46 @@ class NmapScanner:
             hosts.append(h)
         return StageResult(hosts=hosts, port_scope=port_scope)
 
+    def _detect_versions(self, by_ip: dict[str, HostObservation], cached: dict[str, frozenset[int]],
+                         bind: BindChoice, profile: PortProfile, timeout: float, ctx: ScanContext,
+                         label: str) -> None:
+        """-sV only the open ports without a fresh cached version (new, reopened or expired ones).
+
+        Cached ports keep nmap's port-table guess here (method=table, unreliable), which change
+        detection never lets overwrite the stored product/version.
+        """
+        need = {
+            ip: ports for ip, h in by_ip.items()
+            if (ports := {p.port for p in h.ports or [] if p.protocol == "tcp" and p.port not in cached.get(ip, ())})
+        }
+        if not need:
+            return
+        args = build_port_args(bind.privileged, profile, PortScope.from_ports(set().union(*need.values())),
+                               os_scan=False)
+        try:
+            run = self._run(args, sorted(need, key=ip_sort_key), timeout, ctx, f"{label}-versions",
+                            device=bind.device, source=bind.source)
+        except ScanStageError as exc:
+            # Open ports from the first pass stay valid; unversioned ports are retried next scan.
+            log.warning("scan %s: version detection failed, keeping port results: %s", ctx.scan_id, exc)
+            return
+        for vh in run.hosts:
+            h = by_ip.get(vh.ip)
+            if h is None or h.ports is None or vh.ports is None:
+                continue  # host dropped or timed out in the -sV pass: keep the first pass result
+            found = {(p.protocol, p.port): p for p in vh.ports}
+            for i, p in enumerate(h.ports):
+                if (v := found.get((p.protocol, p.port))) is not None:
+                    v.version_checked = True
+                    h.ports[i] = v
+
     def _run(self, args: list[str], targets: list[str], timeout: float, ctx: ScanContext, label: str,
-             device: str | None = None):
+             device: str | None = None, source: str | None = None):
         ctx.check_cancelled()
         fd, target_file = tempfile.mkstemp(prefix=f"scan{ctx.scan_id}_", suffix=".txt", dir=self.tmp_dir)
         with os.fdopen(fd, "w") as fh:
             fh.write("\n".join(targets) + "\n")
-        bind = ["-e", device] if device else []
+        bind = (["-e", device] if device else []) + (["-S", source] if device and source else [])
         if device:
             log.info("scan %s: binding nmap %s to interface %s", ctx.scan_id, label, device)
         cmd = [self.exe, *args, *bind, "-iL", target_file, "-oX", "-"]

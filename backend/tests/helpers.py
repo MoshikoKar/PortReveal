@@ -23,7 +23,8 @@ STANDARD_SCOPE = "1-10000"
 
 
 def port(n: int, service: str = "http", product: str | None = None, version: str | None = None) -> PortObservation:
-    return PortObservation(port=n, service=service, product=product, version=version, method="probed", confidence=10)
+    return PortObservation(port=n, service=service, product=product, version=version, method="probed", confidence=10,
+                           version_checked=True)
 
 
 def host(ip: str, ports: list[PortObservation] | None = None, mac: str | None = None,
@@ -45,6 +46,7 @@ class ScriptedScanner:
         self.fail_all = fail_all
         self.discovery_targets: list[list[str]] = []
         self.port_targets: list[list[str]] = []
+        self.version_caches: list[dict[str, frozenset[int]]] = []
         self._disc_calls = 0
 
     def discover(self, targets: list[str], ctx: ScanContext) -> StageResult:
@@ -58,6 +60,7 @@ class ScriptedScanner:
 
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:
         self.port_targets.append(ips)
+        self.version_caches.append(dict(profile.version_cache))
         if self.fail_ports:
             raise ScanStageError("simulated port scan failure")
         scope = "1-65535" if profile.full else STANDARD_SCOPE
@@ -78,12 +81,15 @@ def make_network(db, cidr: str = "10.0.0.0/24", name: str = "Test Net") -> Netwo
     return net
 
 
-def scan(scanner, scan_type: str = "standard", network_id: int | None = None, targets: str | None = None) -> Scan:
+def scan(scanner, scan_type: str = "standard", network_id: int | None = None, targets: str | None = None,
+         ignore_version_cache: bool = False) -> Scan:
     with session_scope() as db:
         if network_id is not None:
-            s = create_scan(db, scan_type, network=db.get(Network, network_id))
+            s = create_scan(db, scan_type, network=db.get(Network, network_id),
+                            ignore_version_cache=ignore_version_cache)
         else:
-            s = create_scan(db, scan_type, targets=AddressSet.from_specs(targets or ""))
+            s = create_scan(db, scan_type, targets=AddressSet.from_specs(targets or ""),
+                            ignore_version_cache=ignore_version_cache)
         scan_id = s.id
     run_scan(scan_id, ScanContext(scan_id), scanner=scanner)
     with session_scope() as db:

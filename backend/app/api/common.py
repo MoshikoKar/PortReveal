@@ -137,6 +137,8 @@ def scan_out(s: Scan, network_name: str | None = None) -> dict:
         "hosts_discovered": s.hosts_discovered,
         "hosts_scanned": s.hosts_scanned,
         "hosts_failed": s.hosts_failed,
+        "open_ports_found": s.open_ports_found,
+        "ignore_version_cache": s.ignore_version_cache,
         "events_count": s.events_count,
         "is_baseline": s.is_baseline,
         "error": s.error,

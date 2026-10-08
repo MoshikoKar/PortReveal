@@ -294,10 +294,10 @@ export default function Scans() {
               {[...running, ...queued].map((s) => (
                 <tr key={s.id}>
                   <td>{s.id}</td>
-                  <td>{SCAN_TYPE_LABELS[s.scan_type]} {s.scan_type === 'full' && <span className="badge medium">deep</span>} <MockBadge mode={s.scanner_mode} /></td>
+                  <td>{SCAN_TYPE_LABELS[s.scan_type]} {s.scan_type === 'full' && <span className="badge medium">deep</span>} {s.ignore_version_cache && <span className="badge" title="Version cache ignored: -sV on every open port">all versions</span>} <MockBadge mode={s.scanner_mode} /></td>
                   <td><ScanScope s={s} /><div className="muted small">{s.target_count.toLocaleString()} addresses · {s.trigger}</div></td>
                   <td><ScanStatusBadge status={s.status} /></td>
-                  <td>{s.status === 'running' ? <><Progress value={s.progress} /><div className="muted small" style={{ marginTop: 4 }}>{s.stage} · {Math.round(s.progress * 100)}%</div></> : <span className="muted small">waiting for the current scan</span>}</td>
+                  <td>{s.status === 'running' ? <><Progress value={s.progress} /><div className="muted small" style={{ marginTop: 4 }}>{s.stage} · {Math.round(s.progress * 100)}%{s.open_ports_found > 0 && ` · ${s.open_ports_found} open ports so far`}</div></> : <span className="muted small">waiting for the current scan</span>}</td>
                   <td className="small">{s.hosts_discovered} found · {s.hosts_scanned} scanned</td>
                   <td className="small">{s.started_at ? `${fmtTime(s.started_at)} (${duration(s.started_at, null)})` : fmtTime(s.created_at)}</td>
                   {isAdmin && (

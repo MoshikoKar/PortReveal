@@ -28,6 +28,7 @@ export function ScanDialog({ preset, onClose, onStarted }: {
   const [mode, setMode] = useState<'networks' | 'targets' | 'devices'>(preset?.device_uuids ? 'devices' : 'networks');
   const [selected, setSelected] = useState<number[]>([]);
   const [targets, setTargets] = useState('');
+  const [allVersions, setAllVersions] = useState(preset?.scan_type === 'full');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unavailable = system?.scanner.mode === 'unavailable';
@@ -37,6 +38,7 @@ export function ScanDialog({ preset, onClose, onStarted }: {
     setError(null);
     try {
       const body: Record<string, unknown> = { scan_type: type };
+      if (type !== 'discovery' && allVersions) body.ignore_version_cache = true;
       if (mode === 'devices') body.device_uuids = preset?.device_uuids;
       else if (mode === 'networks') body.network_ids = selected;
       else body.targets = targets;
@@ -72,13 +74,22 @@ export function ScanDialog({ preset, onClose, onStarted }: {
         <h3>Scan type</h3>
         {(['discovery', 'standard', 'full'] as ScanType[]).map((t) => (
           <label key={t} className="check" style={{ alignItems: 'flex-start' }}>
-            <input type="radio" name="scan_type" checked={type === t} onChange={() => setType(t)} style={{ marginTop: 3 }} />
+            <input type="radio" name="scan_type" checked={type === t} onChange={() => { setType(t); setAllVersions(t === 'full'); }} style={{ marginTop: 3 }} />
             <span>
               <strong>{t === 'full' ? 'Full port scan (1-65535)' : t[0].toUpperCase() + t.slice(1)}</strong>
               <div className={`small ${t === 'full' ? '' : 'muted'}`} style={t === 'full' ? { color: 'var(--medium)' } : undefined}>{TYPE_INFO[t]}</div>
             </span>
           </label>
         ))}
+        {type !== 'discovery' && (
+          <label className="check" style={{ alignItems: 'flex-start' }}>
+            <input type="checkbox" checked={allVersions} onChange={(e) => setAllVersions(e.target.checked)} style={{ marginTop: 3 }} />
+            <span>
+              Re-detect all service versions
+              <div className="small muted">Ignore the version cache and run -sV on every open port. Slower; catches silent service upgrades.</div>
+            </span>
+          </label>
+        )}
       </div>
 
       <div className="stack">

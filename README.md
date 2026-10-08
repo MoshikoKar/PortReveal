@@ -140,11 +140,13 @@ To try PostgreSQL in development, point `DATABASE_URL` at any PostgreSQL server 
 
 Requirements:
 
-- A **Linux** VM/host inside the monitored network with Docker Engine + Compose plugin
-  (host networking; not Docker Desktop on Windows/macOS).
+- Docker Engine + Compose plugin. Default stack uses **bridge networking** and publishes
+  `APP_PORT` (works on Docker Desktop and Linux).
+- For **ARP/MAC** discovery, run on a **Linux** VM/host inside the monitored network and
+  load `docker-compose.linux.yml` (host networking). Docker Desktop cannot do that.
 - **Build egress:** `storage.googleapis.com:443` must be reachable from the host (Playwright
   Chromium). Also needed: package indexes (Debian/PyPI/npm) or your usual mirrors. If the
-  host uses an HTTP proxy, set `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` in `.env`.
+  host uses an HTTP proxy, set `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` in `.env.production`.
 - **Inbound:** TCP `APP_PORT` (default `8081`) open to clients that use the UI.
 - Place the host on the LAN segment you want ARP/MAC for (e.g. `10.10.0.0/16`). Routed
   scopes (e.g. `10.0.0.0/16` via a gateway) can be scanned for IP/ports but not MACs.
@@ -152,26 +154,33 @@ Requirements:
 
 ```bash
 git clone <repo> network_finder && cd network_finder
-cp .env.production.example .env
-#   edit .env: set POSTGRES_PASSWORD (required), APP_SECRET_KEY (openssl rand -hex 32), TZ, APP_PORT
-docker compose up -d --build
-docker compose ps            # app should become "healthy"
-docker compose logs -f app
+cp .env.production.example .env.production
+#   edit .env.production: set POSTGRES_PASSWORD (required), APP_SECRET_KEY (openssl rand -hex 32), TZ, APP_PORT
+docker compose -f docker-compose.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.yml --env-file .env.production ps            # app should become "healthy"
+docker compose -f docker-compose.yml --env-file .env.production logs -f app
 ```
 
-Open `http://<vm-ip>:8081` and complete the **first-run wizard**: administrator → network scope(s) → exclusions →
+Linux host with real LAN ARP/MAC (optional overlay):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.linux.yml --env-file .env.production up -d --build
+```
+
+Open `http://<host-ip>:8081` and complete the **first-run wizard**: administrator → network scope(s) → exclusions →
 schedule → SMTP → optional LDAP → email recipients → baseline scan.
 
 What Compose provides:
 
 - `db`: PostgreSQL 16, data in the `pgdata` volume, listening on `127.0.0.1` only.
 - `app`: built frontend + FastAPI + **nmap** (installed in the image), data in the `appdata` volume (`/data`).
-  It uses **host networking** and the `NET_RAW`/`NET_ADMIN` capabilities so nmap can do ARP/ICMP/SYN discovery and see
-  MAC addresses on the local segment. The process runs as a non-root user; nmap gets raw-socket access through file
-  capabilities. Host networking requires a Linux Docker host (not Docker Desktop on Windows or macOS).
+  By default it uses a **bridge** network and publishes `APP_PORT`. On bridge, scans leave via NAT
+  (no MACs). On Linux, add `docker-compose.linux.yml` for **host networking** plus `NET_RAW`/`NET_ADMIN`
+  so nmap can do ARP/ICMP/SYN discovery and see MAC addresses on the local segment. The process runs
+  as a non-root user; nmap gets raw-socket access through file capabilities.
 - One application process by design: the scan queue and the scheduler live inside it. Do not run several replicas.
 
-Upgrade: `git pull && docker compose up -d --build` (migrations run automatically).
+Upgrade: `git pull && docker compose -f docker-compose.yml --env-file .env.production up -d --build` (migrations run automatically).
 
 **HTTPS / reverse proxy.** Put nginx, Caddy or Traefik in front, set `COOKIE_SECURE=true`, and set
 `FORWARDED_ALLOW_IPS` to the proxy IP. Example Caddy: `netfinder.corp.local { reverse_proxy 127.0.0.1:8081 }`.
@@ -233,8 +242,15 @@ docker/Dockerfile, docker-compose.yml
 | Profile | nmap | When |
 |---|---|---|
 | Discovery | `-sn -PE -PP -PS<22 common ports> -PA80,443,3389` (+ ARP on local segments) | alone, or queued before the daily standard scan (default) |
-| Standard | discovery, then `-Pn -sV --top-ports N` (default 3000) on live hosts only | daily schedule / manual |
+| Standard | discovery, then `-Pn -sV -p <nmap's top N (default 1000) + common web/AI ports>` on live hosts only | daily schedule / manual |
 | Full port | discovery, then `-Pn -sV -p 1-65535` on live hosts | manual only, for hosts/ranges/networks |
+
+**Version cache.** `-sV` is the slow part of a port scan, so an open port whose service/version was detected in the
+last 7 days (*Settings → Scan → Version cache*, 0 = off) is only confirmed open. A batch with nothing cached runs one
+nmap pass with `-sV`, exactly as above; otherwise a port pass (same timing/retries, no `-sV`) is followed by `-sV` on
+just the new, reopened or expired ports. A different device (MAC) on a known IP never inherits its cache. Tick
+*Re-detect all service versions* when starting a scan (default for full scans) to ignore the cache and catch silent
+service upgrades.
 
 **Daily schedule.** At the configured time, each enabled network gets an optional discovery-only pass (default on)
 followed by a standard scan, so new hosts are registered before the longer service scan. Toggle under

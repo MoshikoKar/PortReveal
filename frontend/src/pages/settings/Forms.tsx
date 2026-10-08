@@ -149,12 +149,13 @@ export function ScanProfileForm() {
       <div className="stack">
         <div className="grid three">
           <div className="alert"><strong>Discovery</strong><div className="muted small">nmap -sn with ARP, ICMP echo/timestamp and TCP SYN/ACK probes. Hosts that ignore ping are still found via TCP.</div></div>
-          <div className="alert"><strong>Standard (daily)</strong><div className="muted small">Discovery, then the top {s.top_ports} TCP ports with safe service/version detection (-sV) on live hosts only.</div></div>
+          <div className="alert"><strong>Standard (daily)</strong><div className="muted small">Discovery, then nmap's top {s.top_ports} TCP ports plus common web/AI ports, with safe service/version detection (-sV) on live hosts only.</div></div>
           <div className="alert"><strong>Full port scan</strong><div className="muted small">All 65,535 TCP ports with -sV. Manual only, for selected hosts, ranges or networks.</div></div>
         </div>
         <div className="muted small">No exploitation, brute force, authentication attempts or intrusive NSE scripts are ever used. Raw nmap arguments are not configurable.</div>
         <div className="form-grid">
-          <Num label="Common TCP ports (standard scan)" value={s.top_ports} min={100} max={10000} onChange={(v) => set({ top_ports: v })} hint="nmap --top-ports, 100–10000" />
+          <Num label="Common TCP ports (standard scan)" value={s.top_ports} min={100} max={10000} onChange={(v) => set({ top_ports: v })} hint="nmap's most common ports, 100–10000" />
+          <Num label="Version cache (days)" value={s.version_cache_days} min={0} max={90} onChange={(v) => set({ version_cache_days: v })} hint="Open ports with a version detected this recently skip -sV. 0 = always -sV" />
           <label className="field">Timing
             <select value={s.timing} onChange={(e) => set({ timing: e.target.value as ScanSettings['timing'] })}>
               <option value="polite">Polite (T2) – slowest, gentlest</option>

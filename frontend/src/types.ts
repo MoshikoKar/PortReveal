@@ -49,6 +49,8 @@ export interface Scan {
   hosts_discovered: number;
   hosts_scanned: number;
   hosts_failed: number;
+  open_ports_found: number;
+  ignore_version_cache: boolean;
   events_count: number;
   is_baseline: boolean;
   error: string | null;
@@ -349,6 +351,7 @@ export interface ScanSettings {
   host_timeout_minutes: number;
   full_host_timeout_minutes: number;
   os_detection: boolean;
+  version_cache_days: number;
   disappear_after_missed: number;
   mass_change_guard_percent: number;
   keep_raw_xml: boolean;

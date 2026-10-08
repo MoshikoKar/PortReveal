@@ -21,6 +21,7 @@ class PortObservation:
     extra_info: str | None = None
     method: str | None = None  # probed | table
     confidence: int | None = None
+    version_checked: bool = False  # -sV ran on this port in this scan (refreshes the version cache)
 
     @property
     def reliable(self) -> bool:
@@ -63,11 +64,13 @@ class PortProfile:
     """What the port stage should scan. Built only from validated settings."""
 
     full: bool
-    top_ports: int = 3000
+    top_ports: int = 1000
     timing: str = "normal"
     host_timeout_minutes: int = 15
     os_detection: bool = False
     batch_size: int = 32
+    # ip -> open TCP ports whose last -sV result is still fresh; those ports skip -sV this scan
+    version_cache: dict[str, frozenset[int]] = field(default_factory=dict)
 
 
 class ScanCancelled(Exception):

@@ -356,6 +356,8 @@ class _Applier:
             else:
                 row.last_seen = now
                 self._compare_service(dev, row, po, mode)
+            if po.version_checked:
+                row.version_checked_at = now
 
         closures = []
         for key, row in rows.items():

@@ -185,7 +185,8 @@ class MockScanner:
             obs = self._observation(ip, host, net_id)
             all_ports = {**host.ports, **(host.high_ports if profile.full else {})}
             obs.ports = [
-                PortObservation(port=p, service=s, product=prod, version=ver, method="probed", confidence=10)
+                PortObservation(port=p, service=s, product=prod, version=ver, method="probed", confidence=10,
+                                version_checked=True)
                 for p, (s, prod, ver) in sorted(all_ports.items())
                 if p in scope
             ]

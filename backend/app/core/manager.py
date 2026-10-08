@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 def create_scan(db, scan_type: str, *, trigger: str = "manual", network: Network | None = None,
                 targets: AddressSet | None = None, requested_by: str | None = None,
-                criteria: str | None = None) -> Scan:
+                criteria: str | None = None, ignore_version_cache: bool = False) -> Scan:
     scan = Scan(
         scan_type=scan_type,
         trigger=trigger,
@@ -40,6 +40,7 @@ def create_scan(db, scan_type: str, *, trigger: str = "manual", network: Network
         target_count=len(AddressSet.from_specs(network.cidr)) if network else len(targets or AddressSet()),
         criteria=criteria,
         requested_by=requested_by,
+        ignore_version_cache=ignore_version_cache,
     )
     db.add(scan)
     db.flush()

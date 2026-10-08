@@ -1,11 +1,10 @@
-# Production deployment (Linux Docker host only):
+# Default Compose stack (bridge network + published APP_PORT).
+# Works on Docker Desktop (Windows/macOS) and any Linux host:
 #   docker compose -f docker-compose.yml --env-file .env.production up -d --build
-#   (or: cp .env.production.example .env  &&  docker compose -f docker-compose.yml up -d --build)
+#   (or: docker compose --env-file .env.production up -d --build)
 #
-# Host networking: nmap sees the LAN directly (ARP / MAC on the local segment).
-# Docker Desktop (Windows/macOS) cannot do this: docker-compose.override.yml is auto-loaded
-# there and replaces host networking with a bridge + published port (no MACs). On a Linux
-# host run  docker compose -f docker-compose.yml up -d --build  to skip the override.
+# For real LAN ARP/MAC discovery on a Linux Docker host, also load the linux overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.linux.yml --env-file .env.production up -d --build
 #
 # Build-time egress: allow storage.googleapis.com:443 (Playwright Chromium),
 # or set HTTP_PROXY / HTTPS_PROXY in .env.production if builds go through a proxy.
@@ -48,7 +47,8 @@ services:
         no_proxy: ${NO_PROXY:-}
     image: network-finder:latest
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "${APP_PORT:-8081}:${APP_PORT:-8081}"
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -60,8 +60,9 @@ services:
     environment:
       APP_ENV: production
       APP_PORT: ${APP_PORT:-8081}
-      POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PORT: ${POSTGRES_PORT:-5434}
+      # Bridge network: reach Postgres by service name on the container port.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
       POSTGRES_DB: ${POSTGRES_DB:-netfinder}
       POSTGRES_USER: ${POSTGRES_USER:-netfinder}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production (or .env)}

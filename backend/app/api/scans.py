@@ -24,6 +24,7 @@ class ScanRequest(BaseModel):
     targets: str | None = Field(None, max_length=10000)
     device_uuids: list[str] | None = Field(None, max_length=5000)
     criteria: str | None = Field(None, max_length=1000)
+    ignore_version_cache: bool = False  # -sV every open port (catches silent service upgrades)
 
 
 def _names(db: Session) -> dict[int, str]:
@@ -93,7 +94,7 @@ def start_scan(body: ScanRequest, request: Request, db: Session = Depends(get_db
             if network_has_active_scan(db, net.id, body.scan_type):
                 raise HTTPException(409, f"A {body.scan_type} scan of {net.name} is already queued or running")
             created.append(create_scan(db, body.scan_type, network=net, requested_by=user.username,
-                                       criteria=criteria))
+                                       criteria=criteria, ignore_version_cache=body.ignore_version_cache))
         target_desc = ", ".join(db.get(Network, n).name for n in dict.fromkeys(body.network_ids))
     else:
         if body.device_uuids:
@@ -112,7 +113,7 @@ def start_scan(body: ScanRequest, request: Request, db: Session = Depends(get_db
         if len(targets) > MAX_SCAN_ADDRESSES:
             raise HTTPException(422, f"Too many addresses ({len(targets)}); maximum is {MAX_SCAN_ADDRESSES}")
         created.append(create_scan(db, body.scan_type, targets=targets, requested_by=user.username,
-                                   criteria=criteria))
+                                   criteria=criteria, ignore_version_cache=body.ignore_version_cache))
         target_desc = targets.describe()
 
     action = "scan.full_port" if body.scan_type == SCAN_FULL else f"scan.{body.scan_type}"

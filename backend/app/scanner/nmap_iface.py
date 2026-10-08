@@ -2,7 +2,9 @@
 
 When a VPN/tunnel (e.g. Tailscale) steals the OS route for a LAN subnet, privileged
 nmap tries ARP on that non-ethernet device and quits. Binding to the overlapping
-local ethernet device forces packets onto the correct NIC.
+local ethernet device forces packets onto the correct NIC, and that NIC's own address
+is used as the source (-S): with -e alone nmap keeps the OS default-route source (the
+VPN address), so replies to TCP/ICMP probes never come back and every port looks filtered.
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ class NmapIface:
     network: ipaddress.IPv4Network
     type: str  # ethernet | other | loopback | ...
     up: bool
+    address: ipaddress.IPv4Address | None = None  # this host's address on the interface
 
     @property
     def is_ethernet(self) -> bool:
@@ -52,6 +55,7 @@ class BindChoice:
 
     device: str | None
     privileged: bool
+    source: str | None = None  # source address for -S (the bound device's own address)
 
 
 def parse_nmap_iflist(text: str) -> list[NmapIface]:
@@ -80,6 +84,7 @@ def parse_nmap_iflist(text: str) -> list[NmapIface]:
         try:
             # Host bits may be set (e.g. 192.168.69.102/24); strict=False accepts that.
             network = ipaddress.ip_network(ipmask, strict=False)
+            address = ipaddress.ip_interface(ipmask).ip
         except ValueError:
             continue
         if network.version != 4:
@@ -93,6 +98,7 @@ def parse_nmap_iflist(text: str) -> list[NmapIface]:
                 network=network,
                 type=m.group("type").lower(),
                 up=m.group("up").lower() == "up",
+                address=address,
             )
         )
     return out
@@ -143,7 +149,8 @@ def choose_bind(targets: list[str], ifaces: list[NmapIface], privileged: bool) -
     overlapping.sort(key=_score, reverse=True)
     best = overlapping[0]
     if best.is_ethernet:
-        return BindChoice(device=best.dev, privileged=privileged)
+        return BindChoice(device=best.dev, privileged=privileged,
+                          source=str(best.address) if best.address is not None else None)
     # Overlap only via tunnel/VPN ("other"): ARP/raw ethernet probes cannot work.
     if privileged:
         log.info(

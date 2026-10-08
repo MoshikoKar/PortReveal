@@ -88,7 +88,7 @@ class PresenceSettings(BaseModel):
 class ScanSettings(BaseModel):
     """Scan profile tuning. Deliberately small: no raw nmap arguments."""
 
-    top_ports: int = Field(3000, ge=100, le=10000)
+    top_ports: int = Field(1000, ge=100, le=10000)
     timing: Literal["polite", "normal", "fast"] = "normal"
     parallelism: int = Field(4, ge=1, le=16)
     discovery_chunk_size: int = Field(1024, ge=16, le=16384)
@@ -96,6 +96,8 @@ class ScanSettings(BaseModel):
     host_timeout_minutes: int = Field(15, ge=1, le=240)
     full_host_timeout_minutes: int = Field(120, ge=5, le=720)
     os_detection: bool = False
+    # Days a detected service/version is trusted before -sV runs on that port again (0 = always -sV)
+    version_cache_days: int = Field(7, ge=0, le=90)
     disappear_after_missed: int = Field(2, ge=1, le=30)
     mass_change_guard_percent: int = Field(50, ge=10, le=100)
     keep_raw_xml: bool = False
