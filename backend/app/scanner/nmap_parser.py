@@ -72,6 +72,7 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
         ports_el = host.find("ports")
         if timed_out:
             obs.port_scan_failed = True
+            obs.failure_reason = "host timed out"
         elif ports_el is not None:
             obs.ports = []
             for p in ports_el.findall("port"):

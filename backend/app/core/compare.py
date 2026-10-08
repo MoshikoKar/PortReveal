@@ -61,6 +61,8 @@ from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.types import HostObservation, PortObservation
 from ..settings_store import PresenceSettings, ScanSettings, get_section
 from .identity import match_hosts, normalize_hostname, normalize_mac
+from .port_profiles import auto_mark, profile_ports
+from .services import UNKNOWN, shown_service
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +77,8 @@ class ScanOutcome:
     port_scope: str | None = None  # None when the scan had no port stage
     discovery_complete: bool = True
     port_stage_complete: bool = True
+    # ip -> device-profile ports scanned on that host on top of port_scope (see core/port_profiles.py)
+    extra_ports: dict[str, tuple[int, ...]] = field(default_factory=dict)
 
     @property
     def complete(self) -> bool:
@@ -105,11 +109,13 @@ class ApplyResult:
     hosts_failed: int = 0
 
 
-def describe_service(service: str | None, product: str | None, version: str | None) -> str:
+def describe_service(service: str | None, product: str | None, version: str | None, method: str | None) -> str:
+    """Event text for a port's service; a name nmap only looked up from the port number reads "unknown"."""
+    shown = shown_service(service, method)
     parts = [p for p in (product, version) if p]
     if parts:
-        return " ".join(parts) + (f" ({service})" if service else "")
-    return service or "unknown"
+        return " ".join(parts) + (f" ({shown})" if shown != UNKNOWN else "")
+    return shown
 
 
 def device_label(d: Device) -> str:
@@ -278,19 +284,27 @@ class _Applier:
                 else:
                     ip_row.last_seen = now
             seen_devices[h.ip] = dev
+            auto_mark(dev, dev.hostname, "hostname")
 
             if h.ports is not None and self.scope is not None:
+                extra = frozenset(outcome.extra_ports.get(h.ip, ()))
                 open_ports_scanned += sum(
-                    1 for p in dev.ports if p.is_open and p.protocol == "tcp" and p.port in self.scope
+                    1 for p in dev.ports
+                    if p.is_open and p.protocol == "tcp" and (p.port in self.scope or p.port in extra)
                 )
-                pending_closures += self._process_ports(dev, h.ports, is_new, mode)
+                pending_closures += self._process_ports(dev, h.ports, is_new, mode, extra)
                 dev.port_scan_failed = False
+                dev.scan_failure = dev.scan_failure_scan_id = None
+                if extra:
+                    dev.port_profile_scan_id = self.scan.id
                 dev.last_port_scan_id = self.scan.id
                 dev.last_port_scan_at = now
                 if outcome.scan_type == SCAN_FULL:
                     dev.full_scanned_at = now
             elif h.port_scan_failed:
                 dev.port_scan_failed = True
+                dev.scan_failure = h.failure_reason or "port scan failed"
+                dev.scan_failure_scan_id = self.scan.id
                 self.result.hosts_failed += 1
 
             if is_new:
@@ -316,25 +330,30 @@ class _Applier:
         self._maybe_baseline()
         return self.result
 
-    def _process_ports(self, dev: Device, observed: list[PortObservation], is_new: bool, mode: str):
+    def _process_ports(self, dev: Device, observed: list[PortObservation], is_new: bool, mode: str,
+                       extra: frozenset[int] = frozenset()):
         now, scope = self.now, self.scope
         assert scope is not None
         rows = {(r.protocol, r.port): r for r in dev.ports}
         label = device_label(dev)
         last_scope = self.prior_scope(dev.last_port_scan_id)
         full_before = dev.full_scanned_at is not None
+        # Profile ports count as covered only if the device's last port scan included them.
+        last_extra = (frozenset(profile_ports(dev.port_profile))
+                      if dev.port_profile_scan_id is not None and dev.port_profile_scan_id == dev.last_port_scan_id
+                      else frozenset())
 
         def previously_covered(port: int) -> bool:
             if is_new:
                 return False
-            return full_before or (last_scope is not None and port in last_scope)
+            return full_before or (last_scope is not None and port in last_scope) or port in last_extra
 
         seen: set[tuple[str, int]] = set()
         for po in observed:
             key = (po.protocol, po.port)
             seen.add(key)
             row = rows.get(key)
-            svc = describe_service(po.service, po.product, po.version)
+            svc = describe_service(po.service, po.product, po.version, po.method)
             if row is None:
                 row = DevicePort(
                     protocol=po.protocol, port=po.port, is_open=True, service=po.service, product=po.product,
@@ -361,7 +380,7 @@ class _Applier:
 
         closures = []
         for key, row in rows.items():
-            if row.is_open and key not in seen and row.protocol == "tcp" and row.port in scope:
+            if row.is_open and key not in seen and row.protocol == "tcp" and (row.port in scope or row.port in extra):
                 closures.append((dev, row, mode))
         return closures
 
@@ -385,10 +404,10 @@ class _Applier:
             return
         label = device_label(dev)
         port_txt = f"{row.protocol.upper()}/{row.port}"
-        old = describe_service(row.service, row.product, row.version)
+        old = describe_service(row.service, row.product, row.version, row.method)
         new_product = po.product or row.product
         new_version = po.version if po.product else (po.version or row.version)
-        new = describe_service(po.service or row.service, new_product, new_version)
+        new = describe_service(po.service or row.service, new_product, new_version, po.method)
         old_reliable = _is_reliable(row.method, row.confidence)
         op, np_ = _norm(row.product), _norm(po.product)
         etype = None
@@ -429,7 +448,7 @@ class _Applier:
             )
             return
         for dev, row, mode in pending:
-            svc = describe_service(row.service, row.product, row.version)
+            svc = describe_service(row.service, row.product, row.version, row.method)
             row.is_open = False
             row.closed_at = self.now
             self.emit(dev, EV_PORT_CLOSED, mode,

@@ -1,8 +1,9 @@
 """Extra TCP ports to include in standard scans (candidates only).
 
 These are documented *default* listen ports for common local / self-hosted
-stacks (AI/LLM, web-app dev servers, infrastructure UIs, and TrueNAS SCALE
-Apps catalog host ports). They exist so nmap --top-ports does not miss them.
+stacks (AI/LLM, web-app dev servers, infrastructure UIs). They exist so nmap
+--top-ports does not miss them. TrueNAS SCALE Apps catalog host ports are a
+per-device profile (see ``PORT_PROFILES``), scanned only on verified TrueNAS hosts.
 
 Ports are NOT identity: an open port here only means "worth scanning / probing".
 Service names (Ollama, LM Studio, …) must come from response fingerprints
@@ -646,14 +647,18 @@ TRUENAS_APPS_TCP_PORTS: tuple[int, ...] = (
 )
 
 # Ports added to every standard scan on top of nmap's top-N: local AI/LLM APIs, web-app
-# dev servers, infrastructure web UIs, and TrueNAS SCALE Apps catalog host ports.
-# De-duplicated and sorted.
+# dev servers and infrastructure web UIs. De-duplicated and sorted.
 STANDARD_EXTRA_TCP_PORTS: tuple[int, ...] = tuple(sorted(
     set(AI_LLM_TCP_PORTS)
     | set(WEB_DEV_TCP_PORTS)
     | set(INFRA_WEB_TCP_PORTS)
-    | set(TRUENAS_APPS_TCP_PORTS)
 ))
+
+# Extra ports per device profile, added to standard scans only for devices carrying that profile
+# (verified from what the device reports about itself, or set by an admin; see core/port_profiles.py).
+PORT_PROFILES: dict[str, tuple[int, ...]] = {
+    "truenas": tuple(sorted(set(TRUENAS_APPS_TCP_PORTS))),
+}
 
 # Short list for host-discovery SYN/connect probes (keep discovery cheap): the AI API ports
 # plus the handful of dev-server ports that most often identify a live app box.

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { del } from '../api';
+import { del, patch } from '../api';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
@@ -26,7 +26,8 @@ export default function DeviceDetail() {
   const [scPage, setScPage] = useState(1);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
-  const { data: d, error } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
+  const { data: d, error, reload } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 25 }, 15000);
   const scans = useApi<Paged<ScanRow>>(`/devices/${uuid}/scans`, { page: scPage, page_size: 15 });
   const webIf = useApi<DeviceWebInterfaces>(`/devices/${uuid}/web-interfaces`, undefined, 15000);
@@ -49,6 +50,16 @@ export default function DeviceDetail() {
     nav('/devices');
   };
 
+  const setProfile = async (value: string) => {
+    setProfileError(null);
+    try {
+      await patch(`/devices/${d.uuid}`, { port_profile: value || null });
+      reload();
+    } catch (e: any) {
+      setProfileError(`Update failed: ${e.message}`);
+    }
+  };
+
   return (
     <>
       <div className="page-head">
@@ -56,7 +67,7 @@ export default function DeviceDetail() {
           <div className="muted small"><Link to="/devices">Devices</Link> /</div>
           <h1 className="row" style={{ gap: 12 }}>
             {d.hostname ?? d.current_ip}
-            <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} />
+            <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} reason={d.scan_failure} />
           </h1>
           <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
         </div>
@@ -83,9 +94,9 @@ export default function DeviceDetail() {
                   {[...open, ...(showClosed ? closed : [])].map((p) => (
                     <tr key={`${p.protocol}${p.port}`} className={p.is_open ? '' : 'dim'}>
                       <td className="mono nowrap"><strong>{p.protocol.toUpperCase()}/{p.port}</strong>{!p.is_open && <span className="badge outline" style={{ marginLeft: 6 }}>closed {fmtTime(p.closed_at)}</span>}</td>
-                      <td>{p.service ?? '—'}</td>
+                      <td>{p.service === 'unknown' ? <span className="muted">unknown</span> : p.service}</td>
                       <td>{[p.product, p.version].filter(Boolean).join(' ') || <span className="muted">—</span>}{p.extra_info && <div className="muted small">{p.extra_info}</div>}</td>
-                      <td className="small">{p.method === 'probed' ? <span className="badge ok">fingerprinted</span> : <span className="badge outline" title="Guessed from the port number">port guess</span>}{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
+                      <td className="small">{p.method === 'probed' ? <span className="badge ok">fingerprinted</span> : <span className="badge outline" title="nmap did not identify this service; a name looked up from the port number is not shown">not identified</span>}{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
                       <td className="nowrap small">{fmtTime(p.opened_at)}</td>
                       <td className="nowrap small">{relTime(p.last_seen)}</td>
                     </tr>
@@ -109,6 +120,19 @@ export default function DeviceDetail() {
             <dt>First seen</dt><dd>{fmtTime(d.first_seen)}</dd>
             <dt>Last seen</dt><dd>{fmtTime(d.last_seen)} <span className="muted">({relTime(d.last_seen)})</span></dd>
             <dt>Last port scan</dt><dd>{fmtTime(d.last_port_scan_at)}</dd>
+            {d.port_scan_failed && <><dt>Port scan failed</dt><dd>{d.scan_failure ?? 'reason not recorded'}{d.scan_failure_scan_id != null && <span className="muted"> (scan #{d.scan_failure_scan_id})</span>}</dd></>}
+            <dt>Extra ports</dt>
+            <dd>
+              {isAdmin ? (
+                <select value={d.port_profile ?? ''} onChange={(e) => setProfile(e.target.value)} aria-label="Extra port profile">
+                  <option value="">Automatic{d.port_profile == null ? ' (none detected)' : ''}</option>
+                  {d.port_profiles.map((p) => <option key={p} value={p}>{p === 'truenas' ? 'TrueNAS apps' : p}</option>)}
+                  <option value="none">Off</option>
+                </select>
+              ) : (d.port_profile && d.port_profile !== 'none' ? d.port_profile : '—')}
+              {d.port_profile && d.port_profile !== 'none' && d.port_profile_source && <span className="muted small"> verified by {d.port_profile_source}</span>}
+              <ErrorBox error={profileError} />
+            </dd>
             <dt>Last full scan</dt><dd>{d.full_scanned_at ? fmtTime(d.full_scanned_at) : 'never'}</dd>
             {d.missed_scans > 0 && <><dt>Missed scans</dt><dd>{d.missed_scans} consecutive</dd></>}
             <dt>Device ID</dt><dd className="mono small">{d.uuid}</dd>

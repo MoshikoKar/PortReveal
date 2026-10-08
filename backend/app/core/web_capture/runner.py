@@ -23,6 +23,7 @@ from ...models import (
     WEB_CAPTURE_PARTIAL,
     WEB_CAPTURE_RUNNING,
     WEB_PAGE_STREAM,
+    Device,
     DevicePort,
     Exclusion,
     WebCapture,
@@ -32,6 +33,7 @@ from ...models import (
 from ...netutils import AddressSet, TargetError
 from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
+from ..port_profiles import auto_mark
 from ..web_storage import delete_capture_files, write_screenshot
 from .classify import BLANK_PAGE_REASON, unusable_page_reason
 from .inventory import find_web_endpoints
@@ -396,6 +398,10 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                         dport.product = hint
                         if not dport.service or "http" not in dport.service.lower():
                             dport.service = dport.service or "http"
+                # The device's own web UI title can verify an extra port profile (e.g. "TrueNAS")
+                titles = " ".join(p.title for p in probe.pages if p.title and not p.external_redirect)
+                if titles and (dev := db.get(Device, ep["device_id"])) is not None:
+                    auto_mark(dev, titles, "web title")
                 db.flush()
                 # Collect pages needing real screenshots
                 pending = [

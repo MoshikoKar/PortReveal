@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
 from ..core.mockdata import device_visible, event_visible, snapshot_visible
+from ..core.services import NO_RESPONSE, UNKNOWN, shown_service_sql
 from ..db import get_db, utcnow
 from ..models import (
     DEVICE_ACTIVE,
@@ -66,8 +67,8 @@ def exposed_ports(db: Session, network_id: int | None = None, limit: int | None 
     """Open ports ranked by host count, labelled with the service most hosts report for them.
     With `limit`, only the top-ranked ports are aggregated per service (ranking done in SQL)."""
     conds = _open_port_conds(db, network_id)
-    # literal_column: keeps the SELECT and GROUP BY coalesce() identical on PostgreSQL (see dashboard)
-    svc = func.coalesce(DevicePort.service, literal_column("'unknown'"))
+    # Shown name only ("unknown" for port-table guesses); built from literals so GROUP BY works on PostgreSQL
+    svc = shown_service_sql()
     q = (
         select(DevicePort.protocol, DevicePort.port, svc, func.count(DevicePort.id))
         .join(Device, Device.id == DevicePort.device_id)
@@ -99,7 +100,7 @@ def exposed_ports(db: Session, network_id: int | None = None, limit: int | None 
         row["count"] += n
     for row in by_port.values():
         row["services"].sort(key=lambda x: (-x["count"], x["service"]))
-        named = [x for x in row["services"] if x["service"] not in ("unknown", "tcpwrapped")]
+        named = [x for x in row["services"] if x["service"] not in (UNKNOWN, NO_RESPONSE)]
         row["service"] = (named or row["services"])[0]["service"]
     return sorted(by_port.values(), key=lambda r: (-r["count"], r["protocol"], r["port"]))
 
@@ -137,9 +138,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
 
     recent = db.scalars(select(Event).where(event_visible(db)).order_by(Event.id.desc()).limit(30)).unique().all()
 
-    # literal_column: PostgreSQL rejects GROUP BY when the SELECT and GROUP BY coalesce()
-    # use different bind parameters; a literal keeps both expressions identical.
-    service_name = func.coalesce(DevicePort.service, literal_column("'unknown'"))
+    service_name = shown_service_sql()
     top_services = db.execute(
         select(service_name, func.count(DevicePort.id))
         .join(Device, Device.id == DevicePort.device_id)

@@ -39,6 +39,7 @@ class HostObservation:
     # None = no port data for this host in this stage/scan
     ports: list[PortObservation] | None = None
     port_scan_failed: bool = False
+    failure_reason: str | None = None  # why the port scan of this host failed (with port_scan_failed)
 
     def merge(self, other: HostObservation) -> None:
         """Merge information from another stage of the same scan."""
@@ -49,14 +50,18 @@ class HostObservation:
         if other.ports is not None:
             self.ports = other.ports
             self.port_scan_failed = False
+            self.failure_reason = None
         elif other.port_scan_failed and self.ports is None:
             self.port_scan_failed = True
+            self.failure_reason = other.failure_reason or self.failure_reason
 
 
 @dataclass
 class StageResult:
     hosts: list[HostObservation] = field(default_factory=list)
     port_scope: str | None = None
+    extra_ports: tuple[int, ...] = ()  # profile ports scanned on top of port_scope for these hosts
+    notes: list[str] = field(default_factory=list)  # non-fatal problems (e.g. version detection failed)
 
 
 @dataclass
@@ -71,6 +76,8 @@ class PortProfile:
     batch_size: int = 32
     # ip -> open TCP ports whose last -sV result is still fresh; those ports skip -sV this scan
     version_cache: dict[str, frozenset[int]] = field(default_factory=dict)
+    # Device port-profile ports for this batch (standard scans only; every host in the batch has the profile)
+    extra_ports: tuple[int, ...] = ()
 
 
 class ScanCancelled(Exception):

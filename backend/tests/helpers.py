@@ -47,6 +47,7 @@ class ScriptedScanner:
         self.discovery_targets: list[list[str]] = []
         self.port_targets: list[list[str]] = []
         self.version_caches: list[dict[str, frozenset[int]]] = []
+        self.extra_ports: list[tuple[int, ...]] = []  # profile ports per port-scan batch
         self._disc_calls = 0
 
     def discover(self, targets: list[str], ctx: ScanContext) -> StageResult:
@@ -61,6 +62,7 @@ class ScriptedScanner:
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:
         self.port_targets.append(ips)
         self.version_caches.append(dict(profile.version_cache))
+        self.extra_ports.append(profile.extra_ports)
         if self.fail_ports:
             raise ScanStageError("simulated port scan failure")
         scope = "1-65535" if profile.full else STANDARD_SCOPE
@@ -69,9 +71,9 @@ class ScriptedScanner:
             h = copy.deepcopy(self.hosts[ip])
             if h.ports is not None:
                 limit = 65535 if profile.full else 10000
-                h.ports = [p for p in h.ports if p.port <= limit]
+                h.ports = [p for p in h.ports if p.port <= limit or p.port in profile.extra_ports]
             out.append(h)
-        return StageResult(hosts=out, port_scope=scope)
+        return StageResult(hosts=out, port_scope=scope, extra_ports=() if profile.full else profile.extra_ports)
 
 
 def make_network(db, cidr: str = "10.0.0.0/24", name: str = "Test Net") -> Network:

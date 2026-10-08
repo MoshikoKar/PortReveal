@@ -190,3 +190,15 @@ def list_nmap_interfaces(nmap_exe: str, refresh: bool = False) -> list[NmapIface
 
 def resolve_bind(nmap_exe: str, targets: list[str], privileged: bool) -> BindChoice:
     return choose_bind(targets, list_nmap_interfaces(nmap_exe), privileged)
+
+
+def off_segment_networks(nmap_exe: str, cidrs: list[str]) -> list[str]:
+    """Scan networks with no local ethernet interface on them: nmap cannot see MAC addresses there
+    (routed subnet, VPN, or a container on a Docker bridge network)."""
+    ifaces = [i for i in list_nmap_interfaces(nmap_exe) if i.up and i.is_ethernet and not i.is_loopback]
+    off = []
+    for spec in cidrs:
+        nets = _target_networks(re.split(r"[\s,;]+", spec))
+        if nets and not any(_overlaps(i, nets) for i in ifaces):
+            off.append(spec)
+    return off

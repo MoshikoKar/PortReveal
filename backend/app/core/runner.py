@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 
 from sqlalchemy import func, select
@@ -35,6 +35,7 @@ from ..models import (
 )
 from ..netutils import MAX_SCAN_ADDRESSES, AddressSet, TargetError, ip_sort_key
 from ..scanner import scanner_status
+from ..scanner.known_ports import PORT_PROFILES
 from ..scanner.mock_scanner import LAST_STEP, MockScanner
 from ..scanner.nmap_scanner import NmapScanner, nmap_is_privileged
 from ..scanner.types import (
@@ -78,15 +79,28 @@ def scan_targets(db, scan: Scan) -> AddressSet:
     return base.subtract(exclusion_set(db))
 
 
+def _shared_ips(db) -> set[str]:
+    return set(db.scalars(select(Device.current_ip).group_by(Device.current_ip).having(func.count() > 1)))
+
+
+def _same_device(live: dict[str, HostObservation], shared: set[str], ip: str, mac: str | None) -> bool:
+    """The live host at `ip` is the stored device: exactly one known device holds the IP and, when
+    discovery saw a MAC, that device has the same MAC (a different device on a reused IP is not)."""
+    h = live.get(ip)
+    if h is None or ip in shared:
+        return False
+    seen_mac = normalize_mac(h.mac)
+    return not (seen_mac and mac and seen_mac != mac)
+
+
 def version_cache(db, live: dict[str, HostObservation], days: int) -> dict[str, frozenset[int]]:
     """Open TCP ports per live IP whose service/version was detected within `days` (skip -sV on them).
 
-    An IP is trusted only when exactly one known device holds it and, when discovery saw a MAC, that
-    device has the same MAC: a different device on a reused IP gets a fresh -sV.
+    Only for IPs that are still the same device (see _same_device): a different device gets a fresh -sV.
     """
     if days <= 0 or not live:
         return {}
-    shared = set(db.scalars(select(Device.current_ip).group_by(Device.current_ip).having(func.count() > 1)))
+    shared = _shared_ips(db)
     rows = db.execute(
         select(Device.current_ip, Device.mac, DevicePort.port)
         .join(DevicePort, DevicePort.device_id == Device.id)
@@ -95,14 +109,20 @@ def version_cache(db, live: dict[str, HostObservation], days: int) -> dict[str, 
     ).tuples()
     cache: dict[str, set[int]] = {}
     for ip, mac, port in rows:
-        h = live.get(ip)
-        if h is None or ip in shared:
-            continue
-        seen_mac = normalize_mac(h.mac)
-        if seen_mac and mac and seen_mac != mac:
-            continue
-        cache.setdefault(ip, set()).add(port)
+        if _same_device(live, shared, ip, mac):
+            cache.setdefault(ip, set()).add(port)
     return {ip: frozenset(ports) for ip, ports in cache.items()}
+
+
+def port_profiles(db, live: dict[str, HostObservation]) -> dict[str, str]:
+    """Live IPs whose (same) device carries an extra port profile -> profile name."""
+    if not live:
+        return {}
+    shared = _shared_ips(db)
+    rows = db.execute(
+        select(Device.current_ip, Device.mac, Device.port_profile).where(Device.port_profile.in_(list(PORT_PROFILES)))
+    ).tuples()
+    return {ip: prof for ip, mac, prof in rows if _same_device(live, shared, ip, mac)}
 
 
 def mock_step_key(network_id: int) -> str:
@@ -225,18 +245,28 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
         if disc.failures and not disc.results:
             raise ScanStageError("discovery failed: " + disc.failures[0])
         discovery_complete = not disc.failures
+        mac_note: str | None = None
+        if scanner.mode == "nmap" and live and not any(h.mac for h in live.values()):
+            mac_note = ("No MAC addresses were returned: the scanned hosts are not on a network segment local to "
+                        "the scanner (routed subnet, VPN, Docker bridge networking) or nmap is unprivileged. "
+                        "MAC, vendor and MAC-based device identity are unavailable for this scan.")
 
         # ---- Stage 2: port / service scan ---------------------------------------
         port_scope: str | None = None
         port_stage_complete = True
         failures = list(disc.failures)
         cache_note: str | None = None
+        version_notes: list[str] = []
+        extra_ports: dict[str, tuple[int, ...]] = {}
         if has_ports and live:
             full = scan_type == SCAN_FULL
             cache: dict[str, frozenset[int]] = {}
-            if not ignore_version_cache:
-                with session_scope() as db:
+            profiles: dict[str, str] = {}
+            with session_scope() as db:
+                if not ignore_version_cache:
                     cache = version_cache(db, live, cfg.version_cache_days)
+                if not full:
+                    profiles = port_profiles(db, live)
             profile = PortProfile(
                 full=full,
                 top_ports=cfg.top_ports,
@@ -246,8 +276,17 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
                 batch_size=min(cfg.port_batch_size, 16) if full else cfg.port_batch_size,
                 version_cache=cache,
             )
-            ips = sorted(live, key=ip_sort_key)
-            batches = [ips[i:i + profile.batch_size] for i in range(0, len(ips), profile.batch_size)]
+            # Hosts with a port profile go in their own batches: nmap takes one -p list per run.
+            groups: dict[str, list[str]] = {}
+            for ip in sorted(live, key=ip_sort_key):
+                groups.setdefault(profiles.get(ip, ""), []).append(ip)
+            bs = profile.batch_size
+            batches = [g[i:i + bs] for g in groups.values() for i in range(0, len(g), bs)]
+            ips = [ip for b in batches for ip in b]
+
+            def batch_profile(batch: list[str]) -> PortProfile:
+                prof = profiles.get(batch[0])
+                return replace(profile, extra_ports=PORT_PROFILES[prof]) if prof else profile
             stage = "full port scan" if full else "service scan"
             _update(scan_id, stage=f"{stage}, cached versions" if cache else stage, progress=disc_weight,
                     hosts_discovered=len(live))
@@ -257,15 +296,19 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
                 _update(scan_id, hosts_scanned=done_hosts, open_ports_found=found,
                         progress=disc_weight + (1 - disc_weight) * done_hosts / max(len(ips), 1))
 
-            ports = _run_parallel(batches, lambda b: scanner.scan_ports(b, profile, ctx), cfg.parallelism, ctx, port_done)
+            ports = _run_parallel(batches, lambda b: scanner.scan_ports(b, batch_profile(b), ctx), cfg.parallelism,
+                                  ctx, port_done)
             for r in ports.results:
                 port_scope = port_scope or r.port_scope
+                version_notes += r.notes
                 for h in r.hosts:
                     if h.ip in live:
                         live[h.ip].merge(h)
-            for item in ports.failed_items:
+                        if r.extra_ports and h.ports is not None:
+                            extra_ports[h.ip] = r.extra_ports
+            for item, err in zip(ports.failed_items, ports.failures, strict=True):
                 for ip in item:
-                    live[ip].merge(HostObservation(ip=ip, port_scan_failed=True))
+                    live[ip].merge(HostObservation(ip=ip, port_scan_failed=True, failure_reason=err))
             port_stage_complete = not ports.failures
             failures += ports.failures
             if cache:
@@ -286,6 +329,7 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
             port_scope=port_scope,
             discovery_complete=discovery_complete,
             port_stage_complete=port_stage_complete,
+            extra_ports=extra_ports,
         )
 
         # ---- Compare, store, snapshot -----------------------------------------
@@ -298,8 +342,13 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
             event_ids = [e.id for e in res.events]
             status = SCAN_COMPLETED if outcome.complete and not res.guard_tripped else SCAN_PARTIAL
             notes = list(res.notes)
+            if mac_note:
+                notes.append(mac_note)
             if cache_note:
                 notes.append(cache_note)
+            if version_notes:
+                notes.append(f"{len(version_notes)} version detection pass(es) failed; those services are retried "
+                             "next scan: " + "; ".join(version_notes[:3]))
             if failures:
                 notes.append(f"{len(failures)} scan task(s) failed: " + "; ".join(failures[:3]))
             scan.status = status

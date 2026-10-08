@@ -118,6 +118,9 @@ export interface DeviceSummary {
   first_seen: string;
   last_seen: string;
   port_scan_failed: boolean;
+  /** Why the latest port scan of this device failed (only while port_scan_failed). */
+  scan_failure: string | null;
+  scan_failure_scan_id: number | null;
   open_port_count: number;
   open_ports: { port: number; protocol: string; service: string | null }[];
 }
@@ -143,6 +146,10 @@ export interface DeviceDetail extends DeviceSummary {
   missed_scans: number;
   last_port_scan_at: string | null;
   full_scanned_at: string | null;
+  /** Extra port profile (e.g. "truenas"), "none" when an admin disabled it, null = automatic. */
+  port_profile: string | null;
+  port_profile_source: string | null;
+  port_profiles: string[];
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
   previous_ips: string[];

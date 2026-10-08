@@ -43,6 +43,11 @@ DISCOVERY_TIMEOUT_S = 30 * 60
 # chunk times out, leaving every scan of that network partial (no removals, no baseline).
 _DISCOVERY_MIN_RATE = {"polite": 100, "normal": 300, "fast": 600}
 _DISCOVERY_RETRIES = 2
+# Exit codes that mean nmap was stopped from outside, not that the scan itself failed.
+_EXIT_REASONS = {
+    0xC000013A: "interrupted (Ctrl+C or the console was closed)",  # Windows STATUS_CONTROL_C_EXIT
+    0x40010004: "terminated by another process",  # Windows DBG_TERMINATE_PROCESS
+}
 
 
 def nmap_is_privileged(setting: str) -> bool:
@@ -120,13 +125,22 @@ def top_tcp_ports(exe: str, n: int) -> tuple[int, ...]:
     return tuple(ports)
 
 
-def standard_port_spec(exe: str, top_n: int) -> str:
-    """Explicit -p list for standard scans: nmap's top-N TCP ports plus the extra web/AI ports.
+def standard_port_spec(exe: str, top_n: int, extra: tuple[int, ...] = ()) -> str:
+    """Explicit -p list for standard scans: nmap's top-N TCP ports plus the extra web/AI ports
+    (and a device profile's ports when given).
 
     --top-ports and -p cannot be combined into a union, and a second nmap pass for the extras
     would version-scan the overlapping ports twice.
     """
-    return PortScope.from_ports({*top_tcp_ports(exe, top_n), *STANDARD_EXTRA_TCP_PORTS})
+    return PortScope.from_ports({*top_tcp_ports(exe, top_n), *STANDARD_EXTRA_TCP_PORTS, *extra})
+
+
+def exit_reason(code: int) -> str:
+    """Readable nmap exit status (negative = killed by a POSIX signal)."""
+    if code < 0:
+        return f"killed by signal {-code}"
+    known = _EXIT_REASONS.get(code & 0xFFFFFFFF)
+    return f"exited with code {code}" + (f" - {known}" if known else "")
 
 
 def build_port_args(privileged: bool, profile: PortProfile, ports: str, *, versions: bool = True,
@@ -167,47 +181,58 @@ class NmapScanner:
 
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:
         bind = resolve_bind(self.exe, ips, self.privileged)
+        extra = () if profile.full else profile.extra_ports
         spec = "1-65535" if profile.full else standard_port_spec(self.exe, profile.top_ports)
+        run_spec = standard_port_spec(self.exe, profile.top_ports, extra) if extra else spec
         timeout = profile.host_timeout_minutes * 60 + 15 * 60
         label = "full" if profile.full else "ports"
         cached = {ip: profile.version_cache[ip] for ip in ips if profile.version_cache.get(ip)}
         # Nothing cached for this batch (first scan, cache off or forced): one nmap pass with -sV.
-        run = self._run(build_port_args(bind.privileged, profile, spec, versions=not cached), ips, timeout,
+        run = self._run(build_port_args(bind.privileged, profile, run_spec, versions=not cached), ips, timeout,
                         ctx, label, device=bind.device, source=bind.source)
         by_ip = {h.ip: h for h in run.hosts}
-        port_scope = run.port_scope or spec
+        # The scan-wide scope stays the standard one; profile ports are reported separately per batch.
+        port_scope = spec if extra else (run.port_scope or spec)
+        notes: list[str] = []
         if not cached:
             for h in run.hosts:
                 for p in h.ports or []:
                     p.version_checked = True
-        else:
-            self._detect_versions(by_ip, cached, bind, profile, timeout, ctx, label)
+        elif err := self._detect_versions(by_ip, cached, bind, profile, timeout, ctx, label):
+            notes.append(err)
 
         hosts = []
         for ip in ips:
             h = by_ip.get(ip)
             if h is None:
-                # With -Pn every target should be reported; missing means nmap gave up on it
-                h = HostObservation(ip=ip, port_scan_failed=True)
+                # nmap leaves out hosts it found down. Even with -Pn it must ARP-resolve targets on a local
+                # segment, so a device that went to sleep or left right after discovery ends up here.
+                h = HostObservation(ip=ip, port_scan_failed=True,
+                                    failure_reason="host down during the port scan (stopped answering after discovery)")
             elif h.ports is None:
                 h.port_scan_failed = True
+                h.failure_reason = (
+                    f"host timed out after {int(profile.host_timeout_minutes)} min (--host-timeout)"
+                    if h.failure_reason == "host timed out" else h.failure_reason or "nmap returned no port results"
+                )
             hosts.append(h)
-        return StageResult(hosts=hosts, port_scope=port_scope)
+        return StageResult(hosts=hosts, port_scope=port_scope, extra_ports=extra, notes=notes)
 
     def _detect_versions(self, by_ip: dict[str, HostObservation], cached: dict[str, frozenset[int]],
                          bind: BindChoice, profile: PortProfile, timeout: float, ctx: ScanContext,
-                         label: str) -> None:
+                         label: str) -> str | None:
         """-sV only the open ports without a fresh cached version (new, reopened or expired ones).
 
         Cached ports keep nmap's port-table guess here (method=table, unreliable), which change
-        detection never lets overwrite the stored product/version.
+        detection never lets overwrite the stored product/version. Returns an error text when the
+        -sV pass failed (the open ports from the first pass are kept).
         """
         need = {
             ip: ports for ip, h in by_ip.items()
             if (ports := {p.port for p in h.ports or [] if p.protocol == "tcp" and p.port not in cached.get(ip, ())})
         }
         if not need:
-            return
+            return None
         args = build_port_args(bind.privileged, profile, PortScope.from_ports(set().union(*need.values())),
                                os_scan=False)
         try:
@@ -216,7 +241,7 @@ class NmapScanner:
         except ScanStageError as exc:
             # Open ports from the first pass stay valid; unversioned ports are retried next scan.
             log.warning("scan %s: version detection failed, keeping port results: %s", ctx.scan_id, exc)
-            return
+            return f"version detection failed for {len(need)} host(s), open ports kept: {exc}"
         for vh in run.hosts:
             h = by_ip.get(vh.ip)
             if h is None or h.ports is None or vh.ports is None:
@@ -226,6 +251,7 @@ class NmapScanner:
                 if (v := found.get((p.protocol, p.port))) is not None:
                     v.version_checked = True
                     h.ports[i] = v
+        return None
 
     def _run(self, args: list[str], targets: list[str], timeout: float, ctx: ScanContext, label: str,
              device: str | None = None, source: str | None = None):
@@ -265,7 +291,8 @@ class NmapScanner:
                 log.warning("could not keep raw nmap output: %s", exc)
         if proc.returncode != 0:
             msg = (err or "").strip().splitlines()[-3:]
-            raise ScanStageError(f"nmap {label} exited with code {proc.returncode}: {' | '.join(msg)}")
+            detail = f": {' | '.join(msg)}" if msg else ""
+            raise ScanStageError(f"nmap {label} {exit_reason(proc.returncode)}{detail}")
         run = parse_nmap_xml(out)
         if not run.finished_ok:
             raise ScanStageError(f"nmap {label}: {run.error}")

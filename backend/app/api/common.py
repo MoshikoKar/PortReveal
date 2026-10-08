@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import Query
 
+from ..core.services import shown_service
 from ..models import Device, DevicePort, Event, Network, Scan, User
 
 
@@ -60,7 +61,7 @@ def port_out(p: DevicePort) -> dict:
         "protocol": p.protocol,
         "port": p.port,
         "is_open": p.is_open,
-        "service": p.service,
+        "service": shown_service(p.service, p.method),
         "product": p.product,
         "version": p.version,
         "extra_info": p.extra_info,
@@ -88,9 +89,12 @@ def device_summary(d: Device, open_ports: list[DevicePort] | None = None, networ
         "first_seen": d.first_seen,
         "last_seen": d.last_seen,
         "port_scan_failed": d.port_scan_failed,
+        "scan_failure": d.scan_failure if d.port_scan_failed else None,
+        "scan_failure_scan_id": d.scan_failure_scan_id if d.port_scan_failed else None,
         "open_port_count": len(ports),
         "open_ports": [
-            {"port": p.port, "protocol": p.protocol, "service": p.service} for p in sorted(ports, key=lambda x: x.port)
+            {"port": p.port, "protocol": p.protocol, "service": shown_service(p.service, p.method)}
+            for p in sorted(ports, key=lambda x: x.port)
         ],
     }
 

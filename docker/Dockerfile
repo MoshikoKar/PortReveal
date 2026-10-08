@@ -1,7 +1,9 @@
 # Production image: built frontend + FastAPI backend + nmap, served by uvicorn on one port.
 # Build context is the repository root:  docker compose build
 #
-# Linux Docker host only (matches docker-compose host networking).
+# The image is the same everywhere; networking is chosen in Compose: docker-compose.yml runs it with
+# host networking (Linux Docker host, MAC/vendor visible), docker-compose.desktop.yml with bridge
+# networking (Docker Desktop on Windows/macOS, no MAC addresses).
 #
 # Build egress (required):
 #   - registry.npmjs.org / deb.debian.org / pypi.org (or mirrors)

@@ -36,7 +36,7 @@ def test_parse_standard_scan_xml():
         "ssh", "OpenSSH", "8.9p1 Ubuntu 3ubuntu0.10", "probed", 10)
     assert h.ports[0].reliable and not h.ports[2].reliable
     timed_out = run.hosts[1]
-    assert timed_out.port_scan_failed and timed_out.ports is None
+    assert timed_out.port_scan_failed and timed_out.ports is None and timed_out.failure_reason == "host timed out"
 
 
 def test_parse_rejects_garbage_and_incomplete_output():
@@ -145,6 +145,7 @@ def test_failed_version_pass_keeps_port_results(monkeypatch):
     h = res.hosts[0]
     assert len(calls) == 2 and not h.port_scan_failed
     assert [p.port for p in h.ports] == [22, 8080] and not any(p.version_checked for p in h.ports)
+    assert res.notes and "version detection failed" in res.notes[0]
 
 
 def test_discovery_timeout_scales_with_chunk_size():

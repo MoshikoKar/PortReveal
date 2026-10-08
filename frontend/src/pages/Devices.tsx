@@ -219,7 +219,7 @@ export default function Devices() {
                 {items.map((d) => (
                   <tr key={d.uuid} className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
-                    <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} /></td>
+                    <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} reason={d.scan_failure} /></td>
                     <td className="mono">{d.current_ip}</td>
                     <td>{d.hostname ?? <span className="muted">—</span>}</td>
                     <td><span className="mono">{d.mac ?? '—'}</span>{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
