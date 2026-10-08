@@ -1,7 +1,13 @@
-# Production deployment:   cp .env.production.example .env  &&  docker compose up -d
+# Production deployment (Linux Docker host only):
+#   cp .env.production.example .env
+#   # edit .env (POSTGRES_PASSWORD, APP_SECRET_KEY, TZ, APP_PORT, …)
+#   docker compose up -d --build
 #
-# The app container uses host networking so nmap can see the local LAN directly
-# (ARP discovery, MAC addresses, no NAT). Linux Docker hosts only.
+# Host networking: nmap sees the LAN directly (ARP / MAC on the local segment).
+# Does not work on Docker Desktop for Windows/macOS.
+#
+# Build-time egress: allow storage.googleapis.com:443 (Playwright Chromium),
+# or set HTTP_PROXY / HTTPS_PROXY in .env if builds go through a proxy.
 
 services:
   db:
@@ -25,6 +31,13 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
+        http_proxy: ${HTTP_PROXY:-}
+        https_proxy: ${HTTPS_PROXY:-}
+        no_proxy: ${NO_PROXY:-}
     image: network-finder:latest
     restart: unless-stopped
     network_mode: host
