@@ -14,7 +14,10 @@ scans. Rules:
   complete. Partial/failed scans can add and refresh, never remove, so a broken
   scan cannot replace the last known-good state.
 * A device is only reported as gone after `disappear_after_missed` consecutive
-  complete scans that covered its IP missed it ("unknown" until then).
+  complete scans that covered its IP missed it ("unknown" until then). While
+  presence correlation is enabled these per-scan disappear/reappear events are
+  recorded without email; emails come from the correlated absence streak
+  (core/presence.py), and any sighting resets that streak.
 * Mass-change guard: if a scan would mark a large share of devices as gone, or
   close a large share of ports at once, the removals are skipped and the scan
   is flagged as partial (likely a scanner/network problem, not real change).
@@ -56,7 +59,7 @@ from ..models import (
 )
 from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.types import HostObservation, PortObservation
-from ..settings_store import ScanSettings
+from ..settings_store import PresenceSettings, ScanSettings, get_section
 from .identity import match_hosts, normalize_hostname, normalize_mac
 
 log = logging.getLogger(__name__)
@@ -107,8 +110,10 @@ def _is_reliable(method: str | None, confidence: int | None) -> bool:
 
 
 class _Applier:
-    def __init__(self, db: Session, scan: Scan, outcome: ScanOutcome, cfg: ScanSettings, now: datetime):
+    def __init__(self, db: Session, scan: Scan, outcome: ScanOutcome, cfg: ScanSettings, now: datetime,
+                 correlate: bool = False):
         self.db, self.scan, self.outcome, self.cfg, self.now = db, scan, outcome, cfg, now
+        self.correlate = correlate
         self.result = ApplyResult()
         self.networks = [(n, AddressSet.from_specs(n.cidr)) for n in db.scalars(select(Network)).all()]
         self._scope_cache: dict[int, PortScope | None] = {}
@@ -149,7 +154,7 @@ class _Applier:
 
     def emit(self, device: Device, etype: str, mode: str, message: str, *, ip: str | None = None,
              protocol: str | None = None, port: int | None = None, old: str | None = None,
-             new: str | None = None) -> None:
+             new: str | None = None, quiet: bool = False) -> None:
         if mode == "silent":
             return
         ev = Event(
@@ -164,7 +169,7 @@ class _Applier:
             old_value=old,
             new_value=new,
             message=message,
-            notify=mode == "alert",
+            notify=mode == "alert" and not quiet,
         )
         self.db.add(ev)
         self.result.events.append(ev)
@@ -211,7 +216,8 @@ class _Applier:
                               ip=h.ip, old=dev.current_ip, new=h.ip)
                     dev.current_ip = h.ip
                 if dev.status == DEVICE_NOT_DETECTED:
-                    self.emit(dev, EV_DEVICE_REAPPEARED, mode, f"{label} ({h.ip}) is detected again", ip=h.ip)
+                    self.emit(dev, EV_DEVICE_REAPPEARED, mode, f"{label} ({h.ip}) is detected again", ip=h.ip,
+                              quiet=self.correlate and not dev.absence_alerted)
                 if mac and not dev.mac:
                     dev.mac = mac
                 if mac and h.vendor:
@@ -223,6 +229,7 @@ class _Applier:
                     dev.os_name = h.os_name
                 dev.status = DEVICE_ACTIVE
                 dev.missed_scans = 0
+                dev.absence_days, dev.absence_counted_on, dev.absence_alerted = 0, None, False
                 dev.last_seen = now
                 if net is not None:
                     dev.network_id = net.id
@@ -412,7 +419,7 @@ class _Applier:
                 net = self.network_for(d.current_ip)
                 self.emit(d, EV_DEVICE_DISAPPEARED, self.mode_for(net),
                           f"{device_label(d)} ({d.current_ip}) is no longer detected "
-                          f"(missed {d.missed_scans} consecutive scans)")
+                          f"(missed {d.missed_scans} consecutive scans)", quiet=self.correlate)
             else:
                 d.status = DEVICE_UNKNOWN
 
@@ -433,5 +440,6 @@ class _Applier:
 
 def apply_outcome(db: Session, scan: Scan, outcome: ScanOutcome, cfg: ScanSettings,
                   now: datetime | None = None) -> ApplyResult:
-    return _Applier(db, scan, outcome, cfg, now or utcnow()).run()
+    correlate = get_section(db, PresenceSettings).enabled
+    return _Applier(db, scan, outcome, cfg, now or utcnow(), correlate=correlate).run()
 

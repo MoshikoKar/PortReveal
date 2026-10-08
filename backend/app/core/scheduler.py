@@ -12,9 +12,10 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 
 from ..db import session_scope, utcnow
-from ..models import SCAN_DISCOVERY, SCAN_STANDARD, Network, Scan
+from ..models import SCAN_DISCOVERY, SCAN_STANDARD, TRIGGER_PRESENCE, TRIGGER_SCHEDULED, Network, Scan
 from ..settings_store import (
     NotificationSettings,
+    PresenceSettings,
     RetentionSettings,
     ScanSettings,
     ScheduleSettings,
@@ -24,12 +25,14 @@ from ..settings_store import (
 )
 from .manager import create_scan, manager, network_has_active_scan
 from .notify import send_daily_digest
+from .presence import evaluate_absence, presence_scan_active
 from .retention import run_retention
 
 log = logging.getLogger(__name__)
 
 STATE_KEY = "scheduler_state"
 CATCH_UP_WINDOW = timedelta(hours=6)  # run a missed schedule if the app was down briefly
+PRESENCE_CATCH_UP_WINDOW = timedelta(hours=1)  # a stale presence slot is skipped, not run hours late
 RETENTION_TIME = (3, 15)
 TICK_SECONDS = 20
 # A network without a baseline gets another standard scan this long after its last one started,
@@ -38,9 +41,31 @@ BASELINE_RETRY_AFTER = timedelta(hours=12)
 NEW_NETWORK_GRACE = timedelta(hours=1)  # leave time for the admin to start the first scan themselves
 
 
-def _due_today(cfg: ScheduleSettings, now: datetime) -> datetime:
-    hh, mm = (int(x) for x in cfg.time.split(":"))
+def _at(now: datetime, hhmm: str) -> datetime:
+    hh, mm = (int(x) for x in hhmm.split(":"))
     return now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+
+def _due_today(cfg: ScheduleSettings, now: datetime) -> datetime:
+    return _at(now, cfg.time)
+
+
+def next_presence_run(cfg: PresenceSettings, now: datetime | None = None,
+                      done_today: list[str] | None = None) -> datetime | None:
+    if not cfg.enabled or not cfg.days or not cfg.times:
+        return None
+    now = now or datetime.now().astimezone()
+    done_today = done_today or []
+    for offset in range(0, 8):
+        day = now + timedelta(days=offset)
+        if day.weekday() not in cfg.days:
+            continue
+        for slot in cfg.times:
+            due = _at(day, slot)
+            if offset == 0 and (due < now - timedelta(minutes=1) or slot in done_today):
+                continue
+            return due
+    return None
 
 
 def next_run(cfg: ScheduleSettings, now: datetime | None = None, last_run_date: str | None = None) -> datetime | None:
@@ -63,10 +88,22 @@ def _enqueue_network_scans(db, net: Network, *, discovery_before: bool) -> list[
     the serial scan worker registers new hosts before the longer service scan."""
     ids: list[int] = []
     if discovery_before:
-        disc = create_scan(db, SCAN_DISCOVERY, trigger="scheduled", network=net, requested_by="scheduler")
+        disc = create_scan(db, SCAN_DISCOVERY, trigger=TRIGGER_SCHEDULED, network=net, requested_by="scheduler")
         ids.append(disc.id)
-    scan = create_scan(db, SCAN_STANDARD, trigger="scheduled", network=net, requested_by="scheduler")
+    scan = create_scan(db, SCAN_STANDARD, trigger=TRIGGER_SCHEDULED, network=net, requested_by="scheduler")
     ids.append(scan.id)
+    return ids
+
+
+def enqueue_presence_scans(db) -> list[int]:
+    """Queue one discovery-only presence scan per enabled network (no port stage, no web capture)."""
+    ids = []
+    for net in db.scalars(select(Network).where(Network.enabled.is_(True)).order_by(Network.id)).all():
+        if network_has_active_scan(db, net.id):
+            log.info("presence scan for %s skipped: a scan is already queued/running", net.name)
+            continue
+        ids.append(create_scan(db, SCAN_DISCOVERY, trigger=TRIGGER_PRESENCE, network=net,
+                               requested_by="scheduler").id)
     return ids
 
 
@@ -110,12 +147,14 @@ def tick(now: datetime | None = None) -> None:
     with session_scope() as db:
         state = dict(get_value(db, STATE_KEY, {}) or {})
         cfg = get_section(db, ScheduleSettings)
+        pcfg = get_section(db, PresenceSettings)
         changed = False
 
         if "initialized" not in state:
             # First start: never "catch up" a schedule that passed before installation
             state = {"initialized": today, "last_scan_date": today if now >= _due_today(cfg, now) else None,
-                     "last_retention_date": None}
+                     "last_retention_date": None, "presence_date": today,
+                     "presence_slots": [t for t in pcfg.times if now >= _at(now, t)]}
             changed = True
         elif cfg.enabled and now.weekday() in cfg.days and state.get("last_scan_date") != today:
             due = _due_today(cfg, now)
@@ -126,6 +165,26 @@ def tick(now: datetime | None = None) -> None:
                 log.info("scheduled scan triggered (%s): queued scans %s", cfg.time, queued)
         if cfg.enabled and "initialized" in state:
             queued += enqueue_baseline_retries(db, cfg=cfg)
+
+        if pcfg.enabled and now.weekday() in pcfg.days:
+            slots = list(state.get("presence_slots") or []) if state.get("presence_date") == today else []
+            for slot in pcfg.times:
+                due = _at(now, slot)
+                if slot not in slots and due <= now < due + PRESENCE_CATCH_UP_WINDOW:
+                    ids = enqueue_presence_scans(db)
+                    queued += ids
+                    slots.append(slot)
+                    log.info("presence scan triggered (%s): queued scans %s", slot, ids)
+            if state.get("presence_date") != today or slots != state.get("presence_slots"):
+                state["presence_date"], state["presence_slots"] = today, slots
+                changed = True
+            last_due = _at(now, pcfg.times[-1])
+            last_settled = pcfg.times[-1] in slots or now >= last_due + PRESENCE_CATCH_UP_WINDOW
+            if (state.get("last_absence_eval_date") != today and now >= last_due and last_settled
+                    and not presence_scan_active(db)):
+                evaluate_absence(db, pcfg, now.date(), utcnow())
+                state["last_absence_eval_date"] = today
+                changed = True
 
         rt = now.replace(hour=RETENTION_TIME[0], minute=RETENTION_TIME[1], second=0, microsecond=0)
         if now >= rt and state.get("last_retention_date") != today:
@@ -162,6 +221,13 @@ def tick(now: datetime | None = None) -> None:
 def last_scheduled_date() -> str | None:
     with session_scope() as db:
         return (get_value(db, STATE_KEY, {}) or {}).get("last_scan_date")
+
+
+def presence_slots_done_today() -> list[str]:
+    today = datetime.now().astimezone().date().isoformat()
+    with session_scope() as db:
+        state = get_value(db, STATE_KEY, {}) or {}
+        return list(state.get("presence_slots") or []) if state.get("presence_date") == today else []
 
 
 class Scheduler:

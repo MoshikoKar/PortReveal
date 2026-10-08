@@ -10,13 +10,14 @@ from ..auth.ldap_auth import ldap_authenticate, ldap_test
 from ..core.audit import audit
 from ..core.notify import format_sample_digest, send_email
 from ..core.retention import run_retention
-from ..core.scheduler import last_scheduled_date, next_run
+from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
 from ..db import get_db
 from ..models import EVENT_TYPES, User
 from ..security import encrypt_secret
 from ..settings_store import (
     LdapSettings,
     NotificationSettings,
+    PresenceSettings,
     RetentionSettings,
     ScanSettings,
     ScheduleSettings,
@@ -49,6 +50,26 @@ def put_schedule(body: ScheduleSettings, request: Request, db: Session = Depends
     audit(db, user.username, "settings.schedule", None, body.model_dump(), _ip(request))
     db.commit()
     return schedule_out(body)
+
+
+# --- presence (daytime discovery + correlated absence) ----------------------------
+def presence_out(cfg: PresenceSettings) -> dict:
+    nxt = next_presence_run(cfg, done_today=presence_slots_done_today())
+    return {**cfg.model_dump(), "next_run": nxt.isoformat() if nxt else None}
+
+
+@router.get("/presence")
+def get_presence(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return presence_out(get_section(db, PresenceSettings))
+
+
+@router.put("/presence")
+def put_presence(body: PresenceSettings, request: Request, db: Session = Depends(get_db),
+                 user: User = Depends(require_admin)):
+    put_section(db, body)
+    audit(db, user.username, "settings.presence", None, body.model_dump(), _ip(request))
+    db.commit()
+    return presence_out(body)
 
 
 # --- scan profile ---------------------------------------------------------------

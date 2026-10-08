@@ -32,7 +32,7 @@ export type ScanType = 'discovery' | 'standard' | 'full';
 export interface Scan {
   id: number;
   scan_type: ScanType;
-  trigger: 'manual' | 'scheduled';
+  trigger: 'manual' | 'scheduled' | 'presence';
   status: ScanStatus;
   scanner_mode: 'nmap' | 'mock' | null;
   network_id: number | null;
@@ -329,6 +329,14 @@ export interface ScheduleSettings {
   time: string;
   days: number[];
   discovery_before_standard: boolean;
+  next_run?: string | null;
+}
+
+export interface PresenceSettings {
+  enabled: boolean;
+  times: string[];
+  days: number[];
+  absence_days: number;
   next_run?: string | null;
 }
 
