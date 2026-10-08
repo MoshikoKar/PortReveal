@@ -300,3 +300,30 @@ def test_exposed_ports_labelled_by_most_common_service(db):
     assert rows[3389]["count"] == 3 and rows[3389]["service"] == "ms-wbt-server"  # not max() -> "ssh"
     assert rows[445]["service"] == "microsoft-ds"  # a named service beats tcpwrapped
     assert exposed_ports(db, network_id=net.id + 1) == []
+
+
+def test_device_load_is_scoped_but_identity_matching_sees_all_devices(db):
+    from app.core.compare import ScanOutcome, _Applier
+    from app.db import utcnow
+    from app.models import Scan
+    from app.netutils import AddressSet
+
+    net_a = make_network(db, cidr="10.0.0.0/24", name="A")
+    net_b = make_network(db, cidr="10.1.0.0/24", name="B")
+    scan(ScriptedScanner(baseline_hosts()), network_id=net_a.id)
+    scan(ScriptedScanner([host("10.1.0.5", [port(80, "http")], mac=MAC_C, hostname="cam-c.corp"),
+                          host("10.1.0.6", [port(80, "http")], hostname="cam-d.corp")]), network_id=net_b.id)
+
+    # MAC_C moved from network B into A: matched although its old IP is outside the scan targets.
+    moved = host("10.0.0.60", [port(80, "http")], mac=MAC_C, hostname="cam-c.corp")
+    outcome = ScanOutcome(scan_type="standard", targets=AddressSet.from_specs(net_a.cidr),
+                          hosts={h.ip: h for h in [*baseline_hosts(), moved]})
+    applier = _Applier(db, db.query(Scan).first(), outcome, ScanSettings(), utcnow())
+    loaded, matches = applier.load_devices(list(outcome.hosts.values()))
+
+    assert matches["10.0.0.60"] is not None and matches["10.0.0.60"].current_ip == "10.1.0.5"
+    assert sorted(d.current_ip for d in loaded) == ["10.0.0.1", "10.0.0.2", "10.1.0.5"]  # not 10.1.0.6
+
+    s = scan(ScriptedScanner([*baseline_hosts(), moved]), network_id=net_a.id)
+    assert event_types(db, s.id) == ["ip_changed"]
+    assert len(devices(db)) == 4

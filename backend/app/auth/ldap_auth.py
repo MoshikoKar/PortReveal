@@ -37,12 +37,26 @@ def _server(cfg: LdapSettings) -> Server:
 def _connect(cfg: LdapSettings, server: Server, user: str | None, password: str | None) -> Connection:
     conn = Connection(server, user=user or None, password=password or None, auto_bind=False,
                       receive_timeout=cfg.timeout_seconds, raise_exceptions=False)
-    conn.open()
-    if cfg.start_tls and not cfg.server_uri.lower().startswith("ldaps://"):
-        conn.start_tls()
-    if not conn.bind():
-        raise LDAPException(f"bind failed: {conn.result.get('description', 'invalid credentials')}")
+    try:
+        conn.open()
+        if cfg.start_tls and not cfg.server_uri.lower().startswith("ldaps://"):
+            conn.start_tls()
+        if not conn.bind():
+            raise LDAPException(f"bind failed: {conn.result.get('description', 'invalid credentials')}")
+    except Exception:
+        _unbind(conn)  # opened socket must not leak when STARTTLS or the bind fails
+        raise
     return conn
+
+
+def _unbind(conn: Connection | None) -> None:
+    """Close a connection, never raising (cleanup runs on error paths)."""
+    if conn is None:
+        return
+    try:
+        conn.unbind()
+    except Exception:  # already closed / network gone
+        pass
 
 
 def _is_member(conn: Connection, cfg: LdapSettings, user_dn: str, member_of: list[str], group_dn: str) -> bool:
@@ -64,6 +78,7 @@ def ldap_authenticate(cfg: LdapSettings, username: str, password: str) -> LdapRe
         return LdapResult(False, error="LDAP is not enabled")
     if not username or not password:
         return LdapResult(False, error="username and password required")  # never allow anonymous binds
+    svc: Connection | None = None
     try:
         server = _server(cfg)
         svc = _connect(cfg, server, cfg.bind_dn, decrypt_secret(cfg.bind_password_enc))
@@ -78,7 +93,7 @@ def ldap_authenticate(cfg: LdapSettings, username: str, password: str) -> LdapRe
         member_of = [str(g) for g in attrs.get("memberOf", [])]
         display = (attrs.get("displayName") or attrs.get("cn") or [username])[0]
         try:
-            _connect(cfg, server, user_dn, password).unbind()
+            _unbind(_connect(cfg, server, user_dn, password))
         except LDAPException:
             return LdapResult(False, error="invalid credentials")
         if _is_member(svc, cfg, user_dn, member_of, cfg.admin_group_dn):
@@ -87,7 +102,6 @@ def ldap_authenticate(cfg: LdapSettings, username: str, password: str) -> LdapRe
             role = ROLE_VIEWER
         else:
             return LdapResult(False, error="user is not a member of an allowed group")
-        svc.unbind()
         return LdapResult(True, role=role, display_name=str(display))
     except LDAPException as exc:
         log.warning("LDAP authentication error: %s", exc)
@@ -95,17 +109,21 @@ def ldap_authenticate(cfg: LdapSettings, username: str, password: str) -> LdapRe
     except Exception as exc:  # network errors etc.
         log.warning("LDAP connection error: %s", exc)
         return LdapResult(False, error=f"LDAP connection error: {exc}")
+    finally:
+        _unbind(svc)  # every path, including early returns (user not found, not in an allowed group)
 
 
 def ldap_test(cfg: LdapSettings) -> tuple[bool, str]:
     """Check connectivity + service bind + base DN search."""
+    conn: Connection | None = None
     try:
         server = _server(cfg)
         conn = _connect(cfg, server, cfg.bind_dn, decrypt_secret(cfg.bind_password_enc))
         conn.search(cfg.user_base_dn, "(objectClass=*)", search_scope=BASE, attributes=["objectClass"])
         ok = bool(conn.entries)
-        conn.unbind()
         return (True, "Connected and bound successfully; user base DN found.") if ok else (
             False, "Bound successfully but the user base DN was not found.")
     except Exception as exc:
         return False, f"LDAP test failed: {exc}"
+    finally:
+        _unbind(conn)

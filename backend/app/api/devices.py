@@ -200,7 +200,7 @@ def device_events(uuid: str, paging: Paging = Depends(), db: Session = Depends(g
     d = _get(db, uuid)
     conds = (Event.device_id == d.id, event_visible(db))
     base = select(Event).where(*conds)
-    total = len(db.scalars(select(Event.id).where(*conds)).all())
+    total = db.scalar(select(func.count(Event.id)).where(*conds)) or 0
     rows = db.scalars(base.order_by(Event.id.desc()).offset(paging.offset).limit(paging.page_size)).unique().all()
     return paged([event_out(e) for e in rows], total, paging)
 
@@ -210,7 +210,7 @@ def device_scans(uuid: str, paging: Paging = Depends(), db: Session = Depends(ge
                  user: User = Depends(current_user)):
     d = _get(db, uuid)
     conds = (ScanHost.device_id == d.id, scan_visible(db))
-    total = len(db.scalars(select(ScanHost.id).join(Scan, Scan.id == ScanHost.scan_id).where(*conds)).all())
+    total = db.scalar(select(func.count(ScanHost.id)).join(Scan, Scan.id == ScanHost.scan_id).where(*conds)) or 0
     rows = db.execute(
         select(ScanHost, Scan).join(Scan, Scan.id == ScanHost.scan_id).where(*conds)
         .order_by(ScanHost.id.desc()).offset(paging.offset).limit(paging.page_size)

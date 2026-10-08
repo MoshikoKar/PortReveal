@@ -143,6 +143,7 @@ def test_notifications(body: TestEmailIn, request: Request, db: Session = Depend
     cfg = get_section(db, NotificationSettings)
     if body.recipient:
         cfg = cfg.model_copy(update={"recipients": [body.recipient.strip()]})
+    db.commit()  # end the read transaction: no DB connection is held during SMTP I/O (up to the 20 s timeout)
     try:
         subject, plain, html_body = format_sample_digest()
         send_email(cfg, subject, plain + f"\nSent by: {user.username}\n", html_body)

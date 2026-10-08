@@ -81,6 +81,21 @@ class ScanOutcome:
         return self.discovery_complete and self.port_stage_complete
 
 
+@dataclass(slots=True)
+class _DeviceKey:
+    """A device's identity columns only: all `match_hosts` reads, without ORM rows, ports or IPs."""
+    id: int
+    current_ip: str
+    mac: str | None
+    hostname: str | None
+    status: str
+    last_seen: datetime | None
+
+
+# Device ids per `IN (...)` when loading the scoped devices (well under SQLite's bound-parameter limit).
+_LOAD_CHUNK = 1000
+
+
 @dataclass
 class ApplyResult:
     events: list[Event] = field(default_factory=list)
@@ -174,15 +189,39 @@ class _Applier:
         self.db.add(ev)
         self.result.events.append(ev)
 
+    def load_devices(self, hosts: list[HostObservation]) -> tuple[list[Device], dict[str, Device | None]]:
+        """Load only the devices this scan can touch, with their ports and IPs.
+
+        Identity matching (MAC / IP / moved hostname) runs over every known device, but on a light
+        column projection. Full rows are then loaded for the matched devices plus the active/unknown
+        devices inside the scan targets (the candidates for "not detected"); devices elsewhere in
+        the inventory are never materialized.
+        """
+        keys = [_DeviceKey(*row) for row in self.db.execute(
+            select(Device.id, Device.current_ip, Device.mac, Device.hostname, Device.status, Device.last_seen)
+            .order_by(Device.id)
+        ).tuples()]
+        key_matches = match_hosts(hosts, keys)
+        targets = self.outcome.targets
+        wanted = {k.id for k in key_matches.values() if k is not None}
+        wanted.update(k.id for k in keys if k.status in (DEVICE_ACTIVE, DEVICE_UNKNOWN) and k.current_ip in targets)
+        ids = sorted(wanted)
+        devices: list[Device] = []
+        for i in range(0, len(ids), _LOAD_CHUNK):
+            devices += self.db.scalars(
+                select(Device).where(Device.id.in_(ids[i:i + _LOAD_CHUNK])).order_by(Device.id)
+                .options(selectinload(Device.ports), selectinload(Device.ips))
+            ).all()
+        by_id = {d.id: d for d in devices}
+        matches = {ip: (by_id[k.id] if k is not None else None) for ip, k in key_matches.items()}
+        return devices, matches
+
     # --- main ----------------------------------------------------------------
     def run(self) -> ApplyResult:
         outcome, now = self.outcome, self.now
-        devices = list(
-            self.db.scalars(select(Device).options(selectinload(Device.ports), selectinload(Device.ips))).all()
-        )
         hosts = sorted(outcome.hosts.values(), key=lambda h: ip_sort_key(h.ip))
         mac_counts = Counter(m for h in hosts if (m := normalize_mac(h.mac)))
-        matches = match_hosts(hosts, devices)
+        devices, matches = self.load_devices(hosts)
         if self.scope is not None:
             self.prefetch_scopes({d.last_port_scan_id for d in matches.values() if d and d.last_port_scan_id is not None})
 

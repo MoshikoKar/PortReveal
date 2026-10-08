@@ -24,6 +24,8 @@ export default function DeviceDetail() {
   const [showClosed, setShowClosed] = useState(false);
   const [evPage, setEvPage] = useState(1);
   const [scPage, setScPage] = useState(1);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
   const { data: d, error } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
   const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 25 }, 15000);
   const scans = useApi<Paged<ScanRow>>(`/devices/${uuid}/scans`, { page: scPage, page_size: 15 });
@@ -34,8 +36,16 @@ export default function DeviceDetail() {
   const closed = d.ports.filter((p) => !p.is_open);
 
   const remove = async () => {
-    if (!confirm('Delete this device and its history? If it is still on the network it will be re-discovered as a new device.')) return;
-    await del(`/devices/${d.uuid}`);
+    if (removing || !confirm('Delete this device and its history? If it is still on the network it will be re-discovered as a new device.')) return;
+    setRemoveError(null);
+    setRemoving(true);
+    try {
+      await del(`/devices/${d.uuid}`);
+    } catch (e: any) {
+      setRemoveError(`Delete failed: ${e.message}`);
+      setRemoving(false);
+      return;
+    }
     nav('/devices');
   };
 
@@ -55,10 +65,11 @@ export default function DeviceDetail() {
             <button className="btn" onClick={() => setScanType('standard')}>Standard scan</button>
             <button className="btn warn" onClick={() => setScanType('full')}>Full port scan</button>
             <button className="btn" onClick={() => setWebCapture(true)}>Capture web interfaces</button>
-            <button className="btn danger" onClick={remove}>Delete</button>
+            <button className="btn danger" onClick={remove} disabled={removing}>{removing ? 'Deleting…' : 'Delete'}</button>
           </div>
         )}
       </div>
+      <ErrorBox error={removeError} />
 
       <div className="grid two">
         <Card title={`Network exposure — ${open.length} open port${open.length === 1 ? '' : 's'}`} flush

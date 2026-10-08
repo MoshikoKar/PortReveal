@@ -205,8 +205,9 @@ docker compose exec app python -m app.cli import-data /tmp/inventory.zip --yes
 ```
 
 The same actions are available in the UI under **Settings → Data** (admin only). Import **replaces** inventory on
-the target; production admin users and SMTP/LDAP settings are kept. Both environments must be on the same database
-schema revision (normal after `git pull` / migrate).
+the target; production admin users and SMTP/LDAP settings are kept. Oversized packages are refused before wipe
+(`IMPORT_MAX_UPLOAD_MB` / `IMPORT_MAX_UNCOMPRESSED_MB` / `IMPORT_MAX_ROWS` in `.env.example`). Both environments
+must be on the same database schema revision (normal after `git pull` / migrate).
 
 ---
 

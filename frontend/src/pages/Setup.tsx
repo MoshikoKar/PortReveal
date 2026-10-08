@@ -63,11 +63,16 @@ function AdminStep({ onUser }: { onUser: (u: User) => void }) {
   );
 }
 
-function BaselineStep({ onFinish }: { onFinish: () => void }) {
+function BaselineStep({ onFinish }: { onFinish: () => Promise<void> }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [finishing, setFinishing] = useState(false);
+  const busy = starting || finishing;
   const start = async () => {
+    if (busy) return;
     setError(null);
+    setStarting(true);
     try {
       const nets = await get<Network[]>('/networks');
       if (!nets.length) return setError('Add at least one network first.');
@@ -75,6 +80,20 @@ function BaselineStep({ onFinish }: { onFinish: () => void }) {
       setMsg(`Baseline scan queued for ${nets.length} network(s). It runs in the background; nothing found by it will alert.`);
     } catch (e: any) {
       setError(e.message);
+    } finally {
+      setStarting(false);
+    }
+  };
+  const finish = async () => {
+    if (busy) return;
+    setError(null);
+    setFinishing(true);
+    try {
+      await onFinish();
+    } catch (e: any) {
+      setError(`Could not finish setup: ${e.message}`);
+    } finally {
+      setFinishing(false);
     }
   };
   return (
@@ -86,8 +105,8 @@ function BaselineStep({ onFinish }: { onFinish: () => void }) {
       {msg && <div className="alert ok">{msg}</div>}
       <ErrorBox error={error} />
       <div className="row">
-        {!msg && <button className="btn primary" onClick={start}>Run baseline scan now</button>}
-        <button className="btn" onClick={onFinish}>{msg ? 'Finish setup' : 'Skip – finish setup'}</button>
+        {!msg && <button className="btn primary" onClick={start} disabled={busy}>{starting ? 'Queuing…' : 'Run baseline scan now'}</button>}
+        <button className="btn" onClick={finish} disabled={busy}>{finishing ? 'Finishing…' : msg ? 'Finish setup' : 'Skip – finish setup'}</button>
       </div>
     </div>
   );
@@ -99,6 +118,7 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
   const [sp, setSp] = useSearchParams();
   const step = stepFromSearch(sp, startAtAdmin);
   const [netCount, setNetCount] = useState<number | null>(null);
+  const [formDirty, setFormDirty] = useState(false); // the current step's settings form has unsaved edits
   const needsNetwork = step === 1 && !netCount; // still loading (null) or none yet
 
   const goTo = (n: number) => {
@@ -106,8 +126,14 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
     const next = new URLSearchParams(sp);
     next.set(STEP_PARAM, String(nextStep));
     setSp(next, { replace: true });
+    setFormDirty(false);
   };
   const next = () => goTo(step + 1);
+  /** Footer Back/Next/Skip: leaving a step with unsaved form edits would silently drop them. */
+  const leave = (n: number) => {
+    if (formDirty && !confirm('This step has unsaved changes. Leave without saving them?\n\nChoose Cancel, then Save, to keep them.')) return;
+    goTo(n);
+  };
   const finish = async () => {
     await post('/setup/complete');
     onDone();
@@ -127,18 +153,18 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
           {step === 0 && <AdminStep onUser={(u) => { onUser(u); next(); }} />}
           {step === 1 && <NetworksSettings compact onCount={setNetCount} />}
           {step === 2 && <ExclusionsSettings />}
-          {step === 3 && <ScheduleForm onSaved={next} />}
-          {step === 4 && <NotificationsForm part="smtp" onSaved={next} />}
-          {step === 5 && <LdapForm onSaved={next} />}
-          {step === 6 && <NotificationsForm part="recipients" onSaved={next} />}
+          {step === 3 && <ScheduleForm onSaved={next} onDirtyChange={setFormDirty} />}
+          {step === 4 && <NotificationsForm part="smtp" onSaved={next} onDirtyChange={setFormDirty} />}
+          {step === 5 && <LdapForm onSaved={next} onDirtyChange={setFormDirty} />}
+          {step === 6 && <NotificationsForm part="recipients" onSaved={next} onDirtyChange={setFormDirty} />}
           {step === 7 && <BaselineStep onFinish={finish} />}
           {step > 0 && (
             <div className="spread" style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
-              <button className="btn ghost" onClick={() => goTo(step - 1)} disabled={step <= 1}>Back</button>
+              <button className="btn ghost" onClick={() => leave(step - 1)} disabled={step <= 1}>Back</button>
               <div className="row">
                 {step === 1 && netCount === 0 && <span className="muted small">Add at least one network to continue – the schedule and baseline scan need one.</span>}
                 {step < LAST_STEP && (
-                  <button className="btn" onClick={next} disabled={needsNetwork}>{[2, 4, 5, 6].includes(step) ? 'Skip / next' : 'Next'}</button>
+                  <button className="btn" onClick={() => leave(step + 1)} disabled={needsNetwork}>{[2, 4, 5, 6].includes(step) ? 'Skip / next' : 'Next'}</button>
                 )}
               </div>
             </div>

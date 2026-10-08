@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -44,7 +44,7 @@ def scan_summary(db: Session) -> dict:
     shown = scan_visible(db)  # running/queued scans always show: they are live work, not history
     return {
         "current": out(_scan(db, Scan.status == SCAN_RUNNING)),
-        "queued": len(db.scalars(select(Scan.id).where(Scan.status == SCAN_QUEUED)).all()),
+        "queued": db.scalar(select(func.count(Scan.id)).where(Scan.status == SCAN_QUEUED)) or 0,
         "last_completed": out(_scan(db, Scan.status.in_((SCAN_COMPLETED, SCAN_PARTIAL)), shown)),
         "last_successful": out(_scan(db, Scan.status == SCAN_COMPLETED, shown)),
         "last_failed": out(_scan(db, Scan.status == SCAN_FAILED, shown)),
