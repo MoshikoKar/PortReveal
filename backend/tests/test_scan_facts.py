@@ -96,6 +96,12 @@ def test_profile_ports_scanned_but_not_in_scan_wide_scope(monkeypatch):
     assert APP_PORT not in PortScope(res.port_scope) and res.extra_ports == TRUENAS
 
 
+def test_host_missing_from_port_scan_is_reported_down(monkeypatch):
+    sc, _ = _fake_nmap(monkeypatch, ParsedRun(hosts=[], port_scope="22"))
+    h = sc.scan_ports(["10.0.0.8"], PortProfile(full=False), ScanContext(1)).hosts[0]
+    assert h.port_scan_failed and h.failure_reason.startswith("host down during the port scan")
+
+
 def test_exit_reason_names_external_stops():
     assert "interrupted" in exit_reason(3221225786)
     assert exit_reason(-9) == "killed by signal 9"

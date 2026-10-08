@@ -205,8 +205,10 @@ class NmapScanner:
         for ip in ips:
             h = by_ip.get(ip)
             if h is None:
-                # With -Pn every target should be reported; missing means nmap gave up on it
-                h = HostObservation(ip=ip, port_scan_failed=True, failure_reason="nmap returned no result for host")
+                # nmap leaves out hosts it found down. Even with -Pn it must ARP-resolve targets on a local
+                # segment, so a device that went to sleep or left right after discovery ends up here.
+                h = HostObservation(ip=ip, port_scan_failed=True,
+                                    failure_reason="host down during the port scan (stopped answering after discovery)")
             elif h.ports is None:
                 h.port_scan_failed = True
                 h.failure_reason = (
