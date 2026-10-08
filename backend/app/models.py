@@ -42,6 +42,10 @@ SCAN_STANDARD = "standard"
 SCAN_FULL = "full"
 SCAN_TYPES = (SCAN_DISCOVERY, SCAN_STANDARD, SCAN_FULL)
 
+TRIGGER_MANUAL = "manual"
+TRIGGER_SCHEDULED = "scheduled"  # night inventory schedule
+TRIGGER_PRESENCE = "presence"    # daytime discovery-only presence schedule
+
 EV_DEVICE_DISCOVERED = "device_discovered"
 EV_DEVICE_DISAPPEARED = "device_disappeared"
 EV_DEVICE_REAPPEARED = "device_reappeared"
@@ -154,6 +158,10 @@ class Device(Base):
     last_port_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     full_scanned_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     port_scan_failed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Correlated absence: local days on which the night scan and every presence scan missed it.
+    absence_days: Mapped[int] = mapped_column(Integer, default=0)
+    absence_counted_on: Mapped[date | None] = mapped_column(Date)
+    absence_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     ports: Mapped[list[DevicePort]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DevicePort.port"
@@ -204,7 +212,7 @@ class Scan(Base):
     __tablename__ = "scans"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     scan_type: Mapped[str] = mapped_column(String(20))
-    trigger: Mapped[str] = mapped_column(String(20), default="manual")  # manual | scheduled
+    trigger: Mapped[str] = mapped_column(String(20), default=TRIGGER_MANUAL)  # manual | scheduled | presence
     status: Mapped[str] = mapped_column(String(20), default=SCAN_QUEUED, index=True)
     scanner_mode: Mapped[str | None] = mapped_column(String(10))  # nmap | mock
     network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), index=True)

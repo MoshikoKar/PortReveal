@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading } from '../../components/ui';
-import type { EventType, LdapSettings, NotificationSettings, ScanSettings, ScheduleSettings, WebCaptureSettings } from '../../types';
+import type { EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, WebCaptureSettings } from '../../types';
 import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
 
 function useForm<T>(path: string) {
@@ -76,6 +76,45 @@ export function ScheduleForm({ onSaved }: { onSaved?: () => void }) {
         <div className="muted small">Next run: {f.data?.next_run ? `${fmtTime(f.data.next_run)} (${relTime(f.data.next_run)})` : 'not scheduled'}</div>
         <Msg msg={f.msg} />
         <div><button className="btn primary" onClick={async () => { if (await f.save({ enabled: s.enabled, time: s.time, days: s.days, discovery_before_standard: s.discovery_before_standard })) onSaved?.(); }}>Save schedule</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- presence
+export function PresenceForm() {
+  const f = useForm<PresenceSettings>('/settings/presence');
+  if (!f.form) return <Card title="Daytime presence"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  return (
+    <Card title="Daytime presence">
+      <div className="stack">
+        <div className="muted small">
+          Quick discovery-only scans during working hours (no port scan, no web capture). A device counts one absence day
+          only when the night scan and every presence scan that day missed it; any sighting resets the count. Disappeared /
+          reappeared emails are sent only after this many consecutive absence days.
+        </div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => f.setForm({ ...s, enabled: e.target.checked })} />Presence scans and correlated absence enabled</label>
+        <div className="row wrap">
+          {s.times.map((t, i) => (
+            <label className="field" key={i}>Presence time {i + 1} (HH:MM)
+              <input type="time" value={t} onChange={(e) => f.setForm({ ...s, times: s.times.map((x, j) => (j === i ? e.target.value : x)) })} />
+            </label>
+          ))}
+          <Num label="Absence days before email" value={s.absence_days} min={1} max={30} onChange={(v) => f.setForm({ ...s, absence_days: v })} hint="Consecutive days missed by both night and daytime scans" />
+          <div className="field"><span>Days</span>
+            <div className="row wrap" style={{ gap: 8 }}>
+              {DAYS.map((d, i) => (
+                <label className="check small" key={d}>
+                  <input type="checkbox" checked={s.days.includes(i)} onChange={(e) => f.setForm({ ...s, days: e.target.checked ? [...s.days, i].sort() : s.days.filter((x) => x !== i) })} />{d}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="muted small">Next presence scan: {f.data?.next_run ? `${fmtTime(f.data.next_run)} (${relTime(f.data.next_run)})` : 'not scheduled'}</div>
+        <Msg msg={f.msg} />
+        <div><button className="btn primary" onClick={() => f.save({ enabled: s.enabled, times: s.times, days: s.days, absence_days: s.absence_days })}>Save presence</button></div>
       </div>
     </Card>
   );

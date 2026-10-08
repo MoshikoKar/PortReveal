@@ -25,6 +25,7 @@ from ..models import (
     SCAN_PARTIAL,
     SCAN_RUNNING,
     SCAN_STANDARD,
+    TRIGGER_PRESENCE,
     Exclusion,
     Network,
     Scan,
@@ -159,7 +160,7 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
             if len(targets) > MAX_SCAN_ADDRESSES:
                 raise ScanStageError(f"too many target addresses ({len(targets)} > {MAX_SCAN_ADDRESSES})")
             scanner = scanner or build_scanner(db, cfg)
-            scan_type, network_id = scan.scan_type, scan.network_id
+            scan_type, network_id, trigger = scan.scan_type, scan.network_id, scan.trigger
             scan.status, scan.started_at, scan.scanner_mode = SCAN_RUNNING, utcnow(), scanner.mode
             scan.target_count, scan.stage, scan.progress, scan.error = len(targets), "discovery", 0.0, None
         if cfg.keep_raw_xml and scanner.mode == "nmap":
@@ -270,7 +271,8 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
                 net = db.get(Network, network_id)
                 if scan_type == SCAN_STANDARD and net is not None:
                     create_snapshot(db, net, scan, utcnow())
-                if scanner.mode == "mock" and scan_type in (SCAN_STANDARD, SCAN_DISCOVERY):
+                if (scanner.mode == "mock" and scan_type in (SCAN_STANDARD, SCAN_DISCOVERY)
+                        and trigger != TRIGGER_PRESENCE):
                     key = mock_step_key(network_id)
                     set_value(db, key, min(int(get_value(db, key, 0)) + 1, LAST_STEP))
             if has_ports and status in (SCAN_COMPLETED, SCAN_PARTIAL):

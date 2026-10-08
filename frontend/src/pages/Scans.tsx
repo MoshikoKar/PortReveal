@@ -321,7 +321,7 @@ export default function Scans() {
                       <td className="small">{duration(s.started_at, s.finished_at)}</td>
                       <td className="small">{s.hosts_discovered}{s.hosts_failed > 0 && <span style={{ color: 'var(--medium)' }}> ({s.hosts_failed} failed)</span>}</td>
                       <td>{s.events_count}</td>
-                      <td className="small muted">{s.trigger === 'scheduled' ? 'schedule' : s.requested_by}</td>
+                      <td className="small muted">{s.trigger === 'scheduled' ? 'schedule' : s.trigger === 'presence' ? 'presence' : s.requested_by}</td>
                       {isAdmin && (
                         <td className="right nowrap" onClick={(e) => e.stopPropagation()}>
                           {isActiveStatus(s.status) ? (

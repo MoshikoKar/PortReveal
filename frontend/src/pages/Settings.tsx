@@ -3,7 +3,7 @@ import { useApp } from '../context';
 import { AuditSettings, HealthPanel, UsersSettings } from './settings/Admin';
 import { DataTransferPanel } from './settings/DataTransfer';
 import { ExclusionsSettings } from './settings/Exclusions';
-import { LdapForm, NotificationsForm, RetentionForm, ScanProfileForm, ScheduleForm, WebCaptureForm } from './settings/Forms';
+import { LdapForm, NotificationsForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, WebCaptureForm } from './settings/Forms';
 import { NetworksSettings } from './settings/Networks';
 
 const TABS = [
@@ -39,7 +39,7 @@ export default function Settings() {
       </nav>
       {tab === 'networks' && <NetworksSettings />}
       {tab === 'exclusions' && <ExclusionsSettings />}
-      {tab === 'schedule' && <ScheduleForm />}
+      {tab === 'schedule' && <><ScheduleForm /><PresenceForm /></>}
       {tab === 'scan-profiles' && <ScanProfileForm />}
       {tab === 'web-capture' && <WebCaptureForm />}
       {tab === 'notifications' && <NotificationsForm />}

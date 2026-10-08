@@ -219,7 +219,8 @@ backend/app/
   core/compare.py   the single change-detection engine
   core/identity.py  device identity matching
   core/manager.py   persistent scan queue (one scan at a time)
-  core/scheduler.py daily schedule + retention (re-reads settings every tick)
+  core/scheduler.py daily schedule, presence scans + retention (re-reads settings every tick)
+  core/presence.py  correlated absence (night scan + daytime presence scans)
   api/              REST endpoints;  auth/  sessions, CSRF, LDAP;  alembic/  migrations
 frontend/src/       React UI (Dashboard, Devices, Device details, Changes, Scans, Settings, first-run wizard)
 scripts/            npm helpers (setup, dev runner, venv python launcher)
@@ -237,6 +238,18 @@ docker/Dockerfile, docker-compose.yml
 **Daily schedule.** At the configured time, each enabled network gets an optional discovery-only pass (default on)
 followed by a standard scan, so new hosts are registered before the longer service scan. Toggle under
 *Settings → Schedule*.
+
+**Daytime presence + correlated absence.** Laptops taken home at night are missed by the night scan, so a second
+schedule runs quick discovery-only presence scans (no port stage, no web capture, no snapshot/baseline) at
+**10:00 and 15:00, Sunday-Friday** by default (*Settings → Schedule → Daytime presence*). A device accumulates one
+*absence day* only when, on that local day, the network's night standard scan **and** every presence scan completed
+and none of them saw it. Any sighting (any scan) resets the count. Disappeared / reappeared **emails** are sent only
+when the count reaches **5 days** (configurable): the *disappeared* email when the threshold is reached, the
+*reappeared* email on the next sighting after that. Per-scan disappear/reappear events (below) are still recorded in
+*Changes* but without email while presence is enabled; disabling presence restores per-scan emails. Days without a
+presence schedule (Saturday by default), or with a failed/partial night or presence scan, never count. Schedules use
+server-local time: set `TZ=Asia/Jerusalem` (or your zone) for the container. Retention should exceed the absence window,
+otherwise a long-absent device that was deleted returns as a *new device*.
 
 **/16 networks.** Exclusions are subtracted *before* nmap runs. The remaining addresses are split into discovery
 chunks (default 1,024 addresses = 64 chunks for a /16) that run with bounded parallelism (default 4 nmap processes),
@@ -256,7 +269,8 @@ without contradicting MAC or hostname → unique non-generic hostname (detects I
   *new device* event, and a device's first full-port scan records high ports silently. Standard scans never close
   ports that only a full scan can see.
 - A device is *not detected* only after N consecutive **complete** scans missed it (default 2; *Unconfirmed* in
-  between). A failed host ping alone never means offline.
+  between). A failed host ping alone never means offline. With daytime presence enabled these per-scan transitions
+  are not emailed; see *Daytime presence + correlated absence*.
 - **Failed or partial scans never remove anything.** A failed scan changes nothing. A partial scan (a chunk or
   batch failed) may add or refresh, but never closes ports or marks devices gone, and it creates no snapshot or
   baseline. A **mass-change guard** skips removals when an implausible share of devices or ports vanishes at once.

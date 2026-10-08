@@ -49,6 +49,42 @@ class ScheduleSettings(BaseModel):
         return sorted(set(v))
 
 
+def _hhmm(v: str, field: str) -> str:
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", v.strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise ValueError(f"{field} must be HH:MM (24h)")
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+
+class PresenceSettings(BaseModel):
+    """Daytime discovery-only presence scans, correlated with the night scan.
+
+    A device only accumulates an absence day when both that day's night standard scan and all of
+    that day's presence scans missed it; any sighting resets the streak. Disappear/reappear emails
+    are sent only once the streak reaches `absence_days`.
+    """
+
+    enabled: bool = True
+    times: list[str] = Field(default_factory=lambda: ["10:00", "15:00"])  # local time HH:MM
+    days: list[int] = Field(default_factory=lambda: [6, 0, 1, 2, 3, 4])  # 0=Monday; Sunday-Friday
+    absence_days: int = Field(5, ge=1, le=30)
+
+    @field_validator("times")
+    @classmethod
+    def _times(cls, v: list[str]) -> list[str]:
+        out = sorted({_hhmm(t, "presence time") for t in v})
+        if not 1 <= len(out) <= 4:
+            raise ValueError("between 1 and 4 distinct presence times are required")
+        return out
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, v: list[int]) -> list[int]:
+        if any(d < 0 or d > 6 for d in v):
+            raise ValueError("days must be 0 (Monday) .. 6 (Sunday)")
+        return sorted(set(v))
+
+
 class ScanSettings(BaseModel):
     """Scan profile tuning. Deliberately small: no raw nmap arguments."""
 
@@ -184,6 +220,7 @@ class WebCaptureSettings(BaseModel):
 
 SECTIONS: dict[str, type[BaseModel]] = {
     "schedule": ScheduleSettings,
+    "presence": PresenceSettings,
     "scan": ScanSettings,
     "notifications": NotificationSettings,
     "ldap": LdapSettings,
