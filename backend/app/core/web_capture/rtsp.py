@@ -85,6 +85,23 @@ def looks_like_rtsp(url: str, *, timeout: float = 4.0) -> tuple[bool, str]:
     return True, first[:80]
 
 
+def rtsp_describe(host: str, port: int, path: str = "/", *, timeout: float = 4.0) -> int | None:
+    """One RTSP DESCRIBE; returns the status code (401 = the server requires a password) or None."""
+    req = (f"DESCRIBE rtsp://{host}:{port}{path} RTSP/1.0\r\nCSeq: 2\r\nAccept: application/sdp\r\n"
+           f"User-Agent: NetworkFinder/1.0\r\n\r\n").encode("ascii", errors="ignore")
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(req)
+            first = sock.recv(1024).decode("latin-1", errors="replace").split("\r\n", 1)[0]
+    except OSError:
+        return None
+    parts = first.split()
+    if len(parts) >= 2 and parts[0].upper().startswith("RTSP/") and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
 def build_rtsp_url(scheme: str, host: str, port: int, path: str = "/") -> str:
     sch = "rtsps" if scheme == "rtsps" else "rtsp"
     if not path.startswith("/"):

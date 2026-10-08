@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, Pager, PortChips, SkeletonRows } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, FlagChips, Pager, PortChips, SkeletonRows, vendorLabel } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -221,8 +221,11 @@ export default function Devices() {
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
                     <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} reason={d.scan_failure} /></td>
                     <td className="mono">{d.current_ip}</td>
-                    <td>{d.hostname ?? <span className="muted">—</span>}</td>
-                    <td><span className="mono">{d.mac ?? '—'}</span>{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
+                    <td>
+                      {d.hostname ?? (d.name ? <span title={`Announced by the device via ${d.name.source}`}>{d.name.value}</span> : <span className="muted">—</span>)}
+                      {d.flags.length > 0 && <div className="row" style={{ gap: 4, marginTop: 2 }}><FlagChips flags={d.flags} /></div>}
+                    </td>
+                    <td><span className="mono">{d.mac ?? '—'}</span>{vendorLabel(d) && <div className="muted small">{vendorLabel(d)}</div>}</td>
                     <td><PortChips ports={d.open_ports} /></td>
                     <td className="small">{d.network_name ?? <span className="muted">—</span>}</td>
                     <td className="nowrap" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>

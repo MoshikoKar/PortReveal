@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import Query
 
+from ..core.port_facts import device_flags, device_identity, is_private_mac, port_summary
 from ..core.services import shown_service
 from ..models import Device, DevicePort, Event, Network, Scan, User
 
@@ -56,8 +57,12 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
     }
 
 
-def port_out(p: DevicePort) -> dict:
+def port_out(p: DevicePort, host_scripts: dict | None = None) -> dict:
+    summary, flags = port_summary(p.port, p.service, p.method, p.details, host_scripts) if p.is_open else (None, [])
     return {
+        "summary": summary,
+        "flags": flags,
+        "details": p.details,
         "protocol": p.protocol,
         "port": p.port,
         "is_open": p.is_open,
@@ -76,12 +81,17 @@ def port_out(p: DevicePort) -> dict:
 
 def device_summary(d: Device, open_ports: list[DevicePort] | None = None, network_name: str | None = None) -> dict:
     ports = open_ports if open_ports is not None else [p for p in d.ports if p.is_open]
+    host_scripts = (d.details or {}).get("host_scripts")
     return {
         "uuid": d.uuid,
         "current_ip": d.current_ip,
         "mac": d.mac,
         "vendor": d.vendor,
+        "mac_private": is_private_mac(d.mac),
         "hostname": d.hostname,
+        # Name the device announced itself (mDNS / NetBIOS / UPnP / ...), shown when there is no hostname
+        "name": device_identity(d.details, ports).get("name"),
+        "flags": device_flags(ports, host_scripts),
         "os_name": d.os_name,
         "status": d.status,
         "network_id": d.network_id,

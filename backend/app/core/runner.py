@@ -50,6 +50,7 @@ from ..scanner.types import (
 from ..settings_store import ScanSettings, get_section, get_value, set_value
 from .compare import ScanOutcome, apply_outcome
 from .identity import normalize_mac
+from .selfid import self_id_worker
 from .snapshots import create_snapshot
 from .web_capture.auto import maybe_enqueue_auto_web_capture
 from .web_capture.manager import web_capture_manager
@@ -383,6 +384,8 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
         )
         if auto_capture_id is not None:
             web_capture_manager.wake()
+        if has_ports and scanner.mode == "nmap":  # never probe anything for simulated scans
+            self_id_worker.enqueue(scan_id)
         return status
 
     except ScanCancelled:

@@ -33,13 +33,14 @@ from ...models import (
 from ...netutils import AddressSet, TargetError
 from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
+from ..compare import with_key
 from ..port_profiles import auto_mark
 from ..web_storage import delete_capture_files, write_screenshot
 from .classify import BLANK_PAGE_REASON, unusable_page_reason
 from .inventory import find_web_endpoints
 from .mock import mock_probe_endpoint, mock_rtsp_endpoint, placeholder_image
 from .probe import EndpointProbe, probe_endpoint
-from .rtsp import ffmpeg_available, placeholder_rtsp_webp, probe_rtsp
+from .rtsp import ffmpeg_available, placeholder_rtsp_webp, probe_rtsp, rtsp_describe
 from .screenshot import playwright_available, take_screenshot
 from .wordlist import discovery_paths
 
@@ -534,6 +535,18 @@ def _ips(aset: AddressSet) -> set[str]:
     return set(aset.addresses())
 
 
+def _record_rtsp_auth(ep: dict) -> int | None:
+    """DESCRIBE the stream root once and store what the server answered on the port's details."""
+    status = rtsp_describe(ep["hosts"][0], ep["port"])
+    auth = {401: "required", 200: "none"}.get(status)
+    if auth is not None:
+        with session_scope() as db:
+            dport = db.get(DevicePort, ep["device_port_id"])
+            if dport is not None:
+                dport.details = with_key(dport.details, "rtsp", {"auth": auth, "describe_status": status})
+    return status
+
+
 def _capture_rtsp_endpoint(
     *,
     capture_id: int,
@@ -575,6 +588,10 @@ def _capture_rtsp_endpoint(
             shot_path = f"{capture_uuid}/{page_uuid}.webp"
             shot_budget -= 1
             screenshots_done += 1
+    elif scheme == "rtsp" and _record_rtsp_auth(ep) == 401:
+        # One DESCRIBE told us the stream needs a password: no ffmpeg attempts against it.
+        shot_status = SCREENSHOT_SKIPPED
+        shot_err = "RTSP requires password"
     elif not ffmpeg_ok:
         shot_status = SCREENSHOT_SKIPPED
         shot_err = "ffmpeg unavailable"

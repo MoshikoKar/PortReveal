@@ -9,6 +9,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
 from ..core.mockdata import device_visible, event_visible, scan_visible
+from ..core.port_facts import device_identity
 from ..core.port_profiles import PROFILE_NONE, SOURCE_MANUAL
 from ..core.services import shown_service_sql
 from ..db import get_db
@@ -194,7 +195,10 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "port_profile": d.port_profile,
         "port_profile_source": d.port_profile_source,
         "port_profiles": sorted(PORT_PROFILES),
-        "ports": [port_out(p) for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
+        "ports": [port_out(p, (d.details or {}).get("host_scripts"))
+                  for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
+        "identity": device_identity(d.details, [p for p in d.ports if p.is_open]),
+        "host_scripts": (d.details or {}).get("host_scripts"),
         "ips": [{"ip": i.ip, "first_seen": i.first_seen, "last_seen": i.last_seen} for i in d.ips],
         "previous_ips": [i.ip for i in d.ips if i.ip != d.current_ip],
     })

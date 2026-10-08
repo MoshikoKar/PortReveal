@@ -61,6 +61,7 @@ from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.types import HostObservation, PortObservation
 from ..settings_store import PresenceSettings, ScanSettings, get_section
 from .identity import match_hosts, normalize_hostname, normalize_mac
+from .port_facts import script_identity, tls_subject_text
 from .port_profiles import auto_mark, profile_ports
 from .services import UNKNOWN, shown_service
 
@@ -116,6 +117,15 @@ def describe_service(service: str | None, product: str | None, version: str | No
     if parts:
         return " ".join(parts) + (f" ({shown})" if shown != UNKNOWN else "")
     return shown
+
+
+def with_key(details: dict | None, key: str, value) -> dict | None:
+    """Copy of a JSON details dict with `key` set (or removed when value is empty); None when empty.
+    A new object, so SQLAlchemy sees the change."""
+    out = {k: v for k, v in (details or {}).items() if k != key}
+    if value:
+        out[key] = value
+    return out or None
 
 
 def device_label(d: Device) -> str:
@@ -284,7 +294,12 @@ class _Applier:
                 else:
                     ip_row.last_seen = now
             seen_devices[h.ip] = dev
+            if h.scripts:
+                old = (dev.details or {}).get("host_scripts") or {}
+                dev.details = with_key(dev.details, "host_scripts", {**old, **h.scripts})
             auto_mark(dev, dev.hostname, "hostname")
+            if name := script_identity((dev.details or {}).get("host_scripts")).get("name"):
+                auto_mark(dev, *name)
 
             if h.ports is not None and self.scope is not None:
                 extra = frozenset(outcome.extra_ports.get(h.ip, ()))
@@ -358,7 +373,7 @@ class _Applier:
                 row = DevicePort(
                     protocol=po.protocol, port=po.port, is_open=True, service=po.service, product=po.product,
                     version=po.version, extra_info=po.extra_info, method=po.method, confidence=po.confidence,
-                    first_seen=now, last_seen=now, opened_at=now,
+                    first_seen=now, last_seen=now, opened_at=now, details=with_key(None, "scripts", po.scripts),
                 )
                 dev.ports.append(row)
                 rows[key] = row
@@ -377,6 +392,8 @@ class _Applier:
                 self._compare_service(dev, row, po, mode)
             if po.version_checked:
                 row.version_checked_at = now
+                row.details = with_key(row.details, "scripts", po.scripts)  # cached ports keep their old output
+            auto_mark(dev, tls_subject_text(po.scripts), "TLS cert")
 
         closures = []
         for key, row in rows.items():

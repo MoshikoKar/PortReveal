@@ -98,6 +98,12 @@ def cmd_scan(args) -> int:
         scan_id = scan.id
     status = run_scan(scan_id)
     with session_scope() as db:
+        real = db.get(Scan, scan_id).scanner_mode == "nmap"
+    if real and status in ("completed", "partial") and args.type != "discovery":
+        from .core.selfid import run_self_id  # no background workers in the CLI: run it here
+
+        run_self_id(scan_id)
+    with session_scope() as db:
         s = db.get(Scan, scan_id)
         print(json.dumps({"scan_id": s.id, "status": status, "hosts": s.hosts_discovered,
                           "events": s.events_count, "baseline": s.is_baseline, "notes": s.notes,

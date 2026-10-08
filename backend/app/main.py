@@ -32,6 +32,7 @@ from .api import (
 from .config import get_settings
 from .core.manager import manager
 from .core.scheduler import scheduler
+from .core.selfid import self_id_worker
 from .core.web_capture import web_capture_manager
 from .db import init_engine, session_scope
 from .logging_setup import setup_logging
@@ -70,9 +71,11 @@ async def lifespan(app: FastAPI):
     if s.background_jobs:
         manager.start()
         web_capture_manager.start()
+        self_id_worker.start()
         scheduler.start()
     yield
     scheduler.stop()
+    self_id_worker.stop()
     web_capture_manager.stop()
     manager.stop()
 

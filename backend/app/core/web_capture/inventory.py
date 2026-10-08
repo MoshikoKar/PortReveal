@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ...models import Device
-from ...scanner.known_ports import AI_LLM_WEB_PORTS
+from ...scanner.known_ports import AI_LLM_WEB_PORTS, is_raw_print_port
 
 # Service names nmap commonly uses for HTTP(S)
 WEB_SERVICE_NAMES = frozenset({
@@ -105,7 +105,7 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
             continue
         found = 0
         for p in dev.ports:
-            if not p.is_open or p.protocol != "tcp":
+            if not p.is_open or p.protocol != "tcp" or is_raw_print_port(p.port):
                 continue
             # Service label wins: RTSP on any port (e.g. 8443) must not fall through to HTTP.
             by_rtsp = is_rtsp_service(p.service) or (

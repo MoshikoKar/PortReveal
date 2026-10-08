@@ -22,6 +22,7 @@ class PortObservation:
     method: str | None = None  # probed | table
     confidence: int | None = None
     version_checked: bool = False  # -sV ran on this port in this scan (refreshes the version cache)
+    scripts: dict[str, dict] = field(default_factory=dict)  # kept NSE output: id -> {output, data}
 
     @property
     def reliable(self) -> bool:
@@ -40,6 +41,7 @@ class HostObservation:
     ports: list[PortObservation] | None = None
     port_scan_failed: bool = False
     failure_reason: str | None = None  # why the port scan of this host failed (with port_scan_failed)
+    scripts: dict[str, dict] = field(default_factory=dict)  # kept NSE hostscript output
 
     def merge(self, other: HostObservation) -> None:
         """Merge information from another stage of the same scan."""
@@ -47,6 +49,7 @@ class HostObservation:
         self.vendor = self.vendor or other.vendor
         self.hostname = self.hostname or other.hostname
         self.os_name = other.os_name or self.os_name
+        self.scripts = {**self.scripts, **other.scripts}
         if other.ports is not None:
             self.ports = other.ports
             self.port_scan_failed = False

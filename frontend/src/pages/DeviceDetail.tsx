@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { del, patch } from '../api';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, Loading, MockBadge, Pager, ScanStatusBadge } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, FlagChips, Loading, MockBadge, Pager, ScanStatusBadge, vendorLabel } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
 import { SCAN_TYPE_LABELS, fmtTime, relTime, useApi } from '../util';
@@ -28,12 +28,19 @@ export default function DeviceDetail() {
   const [removing, setRemoving] = useState(false);
   const { data: d, error, reload } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [rawPort, setRawPort] = useState<string | null>(null);
+  const [rawHost, setRawHost] = useState(false);
   const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 25 }, 15000);
   const scans = useApi<Paged<ScanRow>>(`/devices/${uuid}/scans`, { page: scPage, page_size: 15 });
   const webIf = useApi<DeviceWebInterfaces>(`/devices/${uuid}/web-interfaces`, undefined, 15000);
 
   if (!d) return <>{error ? <ErrorBox error={error} /> : <Loading />}</>;
   const open = d.ports.filter((p) => p.is_open);
+  const id = d.identity;
+  const flags = [...new Set([...d.flags, ...open.flatMap((p) => p.flags)])];
+  const reported = (r?: { value: string; source: string }) => r ? <span title={`Reported by the device via ${r.source}`}>{r.value}</span> : '—';
+  const modelLine = [id.manufacturer?.value, id.model?.value].filter(Boolean).join(' ') + (id.firmware ? ` · fw ${id.firmware.value}` : '');
+  const modelSources = [...new Set([id.manufacturer, id.model, id.firmware].filter(Boolean).map((r) => r!.source))].join(', ');
   const closed = d.ports.filter((p) => !p.is_open);
 
   const remove = async () => {
@@ -66,10 +73,12 @@ export default function DeviceDetail() {
         <div>
           <div className="muted small"><Link to="/devices">Devices</Link> /</div>
           <h1 className="row" style={{ gap: 12 }}>
-            {d.hostname ?? d.current_ip}
+            {d.hostname ?? id.name?.value ?? d.current_ip}
             <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} reason={d.scan_failure} />
+            <FlagChips flags={flags} />
           </h1>
           <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
+          {modelLine.trim() && <p title={`Reported by the device via ${modelSources}`}>{modelLine}</p>}
         </div>
         {isAdmin && (
           <div className="row">
@@ -89,18 +98,31 @@ export default function DeviceDetail() {
           {open.length === 0 && !showClosed ? <Empty>No open ports detected.</Empty> : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Port</th><th>Service</th><th>Product / version</th><th>Confidence</th><th>Open since</th><th>Last seen</th></tr></thead>
+                <thead><tr><th>Port</th><th>Service</th><th>Product / version</th><th>Verified details</th><th>Confidence</th><th>Open since</th><th>Last seen</th></tr></thead>
                 <tbody>
-                  {[...open, ...(showClosed ? closed : [])].map((p) => (
-                    <tr key={`${p.protocol}${p.port}`} className={p.is_open ? '' : 'dim'}>
+                  {[...open, ...(showClosed ? closed : [])].map((p) => {
+                    const key = `${p.protocol}${p.port}`;
+                    const scripts = Object.entries(p.details?.scripts ?? {});
+                    return (<Fragment key={key}>
+                    <tr className={p.is_open ? '' : 'dim'}>
                       <td className="mono nowrap"><strong>{p.protocol.toUpperCase()}/{p.port}</strong>{!p.is_open && <span className="badge outline" style={{ marginLeft: 6 }}>closed {fmtTime(p.closed_at)}</span>}</td>
                       <td>{p.service === 'unknown' ? <span className="muted">unknown</span> : p.service}</td>
                       <td>{[p.product, p.version].filter(Boolean).join(' ') || <span className="muted">—</span>}{p.extra_info && <div className="muted small">{p.extra_info}</div>}</td>
+                      <td className="small">
+                        {p.summary ?? <span className="muted">—</span>}
+                        {scripts.length > 0 && <> <button className="btn sm" onClick={() => setRawPort(rawPort === key ? null : key)}>{rawPort === key ? 'hide' : 'raw'}</button></>}
+                      </td>
                       <td className="small">{p.method === 'probed' ? <span className="badge ok">fingerprinted</span> : <span className="badge outline" title="nmap did not identify this service; a name looked up from the port number is not shown">not identified</span>}{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
                       <td className="nowrap small">{fmtTime(p.opened_at)}</td>
                       <td className="nowrap small">{relTime(p.last_seen)}</td>
                     </tr>
-                  ))}
+                    {rawPort === key && (
+                      <tr><td colSpan={7}>
+                        {scripts.map(([sid, s]) => <div key={sid}><div className="muted small">{sid}</div><pre className="mono small" style={{ whiteSpace: 'pre-wrap', margin: '2px 0 8px' }}>{s.output}</pre></div>)}
+                      </td></tr>
+                    )}
+                    </Fragment>);
+                  })}
                 </tbody>
               </table>
             </div>
@@ -114,7 +136,19 @@ export default function DeviceDetail() {
             <dt>Current IP</dt><dd className="mono">{d.current_ip}</dd>
             <dt>Previous IPs</dt><dd className="mono">{d.previous_ips.length ? d.previous_ips.join(', ') : '—'}</dd>
             <dt>MAC</dt><dd className="mono">{d.mac ?? '— (not on scanner L2 segment)'}</dd>
-            <dt>Vendor</dt><dd>{d.vendor ?? '—'}</dd>
+            <dt>Vendor</dt><dd title={d.mac_private ? 'Locally administered (randomized) MAC: the prefix identifies no manufacturer' : undefined}>{vendorLabel(d) ?? '—'}</dd>
+            <dt>Announced name</dt><dd>{reported(id.name)}</dd>
+            <dt>Model</dt><dd>{reported(id.model)}</dd>
+            <dt>Manufacturer</dt><dd>{reported(id.manufacturer)}</dd>
+            <dt>Firmware</dt><dd>{reported(id.firmware)}</dd>
+            <dt>OS (reported)</dt><dd>{reported(id.os)}</dd>
+            {d.host_scripts && Object.keys(d.host_scripts).length > 0 && <>
+              <dt>Host checks</dt>
+              <dd>
+                <button className="btn sm" onClick={() => setRawHost(!rawHost)}>{rawHost ? 'hide raw' : 'raw'}</button>
+                {rawHost && Object.entries(d.host_scripts).map(([sid, s]) => <div key={sid}><div className="muted small">{sid}</div><pre className="mono small" style={{ whiteSpace: 'pre-wrap', margin: '2px 0 8px' }}>{s.output}</pre></div>)}
+              </dd>
+            </>}
             <dt>OS guess</dt><dd>{d.os_name ?? '—'}</dd>
             <dt>Network</dt><dd>{d.network_name ?? '—'}</dd>
             <dt>First seen</dt><dd>{fmtTime(d.first_seen)}</dd>

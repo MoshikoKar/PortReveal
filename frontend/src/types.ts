@@ -105,12 +105,21 @@ export interface ChangeEvent {
 
 export type DeviceStatus = 'active' | 'unknown' | 'not_detected';
 
+/** A value the device reported about itself, with where it came from (mDNS, UPnP, NetBIOS, ...). */
+export interface Reported { value: string; source: string }
+
 export interface DeviceSummary {
   uuid: string;
   current_ip: string;
   mac: string | null;
   vendor: string | null;
+  /** Locally administered (randomized / private) MAC: its prefix names no vendor. */
+  mac_private: boolean;
   hostname: string | null;
+  /** Name the device announced (shown when there is no hostname). */
+  name: Reported | null;
+  /** Factual findings, e.g. "SMBv1 enabled", "TLS expired". */
+  flags: string[];
   os_name: string | null;
   status: DeviceStatus;
   network_id: number | null;
@@ -129,6 +138,10 @@ export interface DevicePort {
   protocol: string;
   port: number;
   is_open: boolean;
+  /** One short line of verified details (key fingerprint, cert, SMB facts, ...). */
+  summary: string | null;
+  flags: string[];
+  details: { scripts?: Record<string, { output: string }>; rtsp?: { auth: string; describe_status: number } } | null;
   service: string | null;
   product: string | null;
   version: string | null;
@@ -150,6 +163,9 @@ export interface DeviceDetail extends DeviceSummary {
   port_profile: string | null;
   port_profile_source: string | null;
   port_profiles: string[];
+  /** name / model / manufacturer / firmware / os, each only when the device itself returned it. */
+  identity: Partial<Record<'name' | 'model' | 'manufacturer' | 'firmware' | 'os', Reported>>;
+  host_scripts: Record<string, { output: string }> | null;
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
   previous_ips: string[];

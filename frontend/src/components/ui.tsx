@@ -197,6 +197,16 @@ export function Progress({ value }: { value: number }) {
   return <div className="progress"><div style={{ width: `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%` }} /></div>;
 }
 
+export function FlagChips({ flags }: { flags: string[] }) {
+  if (!flags.length) return null;
+  return <>{flags.map((f) => <span key={f} className="badge medium" title="Reported by the device to a read-only check">{f}</span>)}</>;
+}
+
+/** "Vendor" line: never a vendor for a randomized MAC, whose prefix identifies no manufacturer. */
+export function vendorLabel(d: { vendor: string | null; mac_private: boolean }): string | null {
+  return d.mac_private ? 'private MAC' : d.vendor;
+}
+
 export function PortChips({ ports, max = 8 }: { ports: { port: number; protocol: string; service: string | null }[]; max?: number }) {
   if (!ports.length) return <span className="muted">—</span>;
   return (

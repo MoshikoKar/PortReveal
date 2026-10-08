@@ -166,6 +166,9 @@ class Device(Base):
     port_profile: Mapped[str | None] = mapped_column(String(20))
     port_profile_source: Mapped[str | None] = mapped_column(String(40))
     port_profile_scan_id: Mapped[int | None] = mapped_column(Integer)
+    # Facts the device returned about itself: {"host_scripts": {nse id: {output, data}},
+    # "identity": {field: {"value", "source"}}, "selfid_at": iso time}. See core/selfid.py.
+    details: Mapped[dict | None] = mapped_column(JSON)
     # Correlated absence: local days on which the night scan and every presence scan missed it.
     absence_days: Mapped[int] = mapped_column(Integer, default=0)
     absence_counted_on: Mapped[date | None] = mapped_column(Date)
@@ -214,6 +217,8 @@ class DevicePort(Base):
     opened_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     version_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)  # last -sV on this port
+    # Kept NSE output from the last -sV of this port ({"scripts": {...}}) and RTSP auth result ({"rtsp": ...})
+    details: Mapped[dict | None] = mapped_column(JSON)
     device: Mapped[Device] = relationship(back_populates="ports")
 
 

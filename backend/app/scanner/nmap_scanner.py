@@ -20,7 +20,7 @@ from pathlib import Path
 from ..netutils import PortScope, ip_sort_key
 from .known_ports import AI_LLM_DISCOVERY_TCP_PORTS, STANDARD_EXTRA_TCP_PORTS, merge_port_scope
 from .nmap_iface import BindChoice, resolve_bind
-from .nmap_parser import parse_nmap_xml
+from .nmap_parser import KEPT_SCRIPTS, parse_nmap_xml
 from .types import (
     HostObservation,
     PortObservation,
@@ -44,6 +44,12 @@ DISCOVERY_TIMEOUT_S = 30 * 60
 _DISCOVERY_MIN_RATE = {"polite": 100, "normal": 300, "fast": 600}
 _DISCOVERY_RETRIES = 2
 # Exit codes that mean nmap was stopped from outside, not that the scan itself failed.
+# Read-only fact scripts, run only in the -sV pass (so they follow the version cache). Explicit list:
+# never -sC / categories, nothing intrusive, brute or vuln. Their port rules only match their own
+# services (ssh, smb, rdp, ssl, socks, vnc, rtsp); none match the raw printer ports 9100-9107, which
+# -sV itself also skips (nmap-service-probes "Exclude T:9100-9107").
+SCRIPTS = ",".join(sorted(KEPT_SCRIPTS))
+SCRIPT_TIMEOUT = "20s"
 _EXIT_REASONS = {
     0xC000013A: "interrupted (Ctrl+C or the console was closed)",  # Windows STATUS_CONTROL_C_EXIT
     0x40010004: "terminated by another process",  # Windows DBG_TERMINATE_PROCESS
@@ -145,7 +151,7 @@ def exit_reason(code: int) -> str:
 
 def build_port_args(privileged: bool, profile: PortProfile, ports: str, *, versions: bool = True,
                     os_scan: bool = True) -> list[str]:
-    args = ["-Pn", "-n"] + (["-sV"] if versions else [])
+    args = ["-Pn", "-n"] + (["-sV", "--script", SCRIPTS, "--script-timeout", SCRIPT_TIMEOUT] if versions else [])
     args += ["--privileged", "-sS"] if privileged else ["--unprivileged", "-sT"]
     args += [
         "-p", ports,
@@ -246,6 +252,7 @@ class NmapScanner:
             h = by_ip.get(vh.ip)
             if h is None or h.ports is None or vh.ports is None:
                 continue  # host dropped or timed out in the -sV pass: keep the first pass result
+            h.scripts.update(vh.scripts)
             found = {(p.protocol, p.port): p for p in vh.ports}
             for i, p in enumerate(h.ports):
                 if (v := found.get((p.protocol, p.port))) is not None:

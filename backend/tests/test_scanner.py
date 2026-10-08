@@ -4,13 +4,15 @@ from pathlib import Path
 import pytest
 
 from app.netutils import AddressSet, PortScope, TargetError, validate_network_cidr
-from app.scanner.nmap_parser import parse_nmap_xml
+from app.scanner.nmap_parser import KEPT_SCRIPTS, parse_nmap_xml
 from app.scanner import nmap_scanner
 from app.scanner.known_ports import STANDARD_EXTRA_TCP_PORTS
 from app.scanner.nmap_iface import BindChoice
 from app.scanner.nmap_parser import ParsedRun
 from app.scanner.nmap_scanner import (
     DISCOVERY_TIMEOUT_S,
+    SCRIPT_TIMEOUT,
+    SCRIPTS,
     NmapScanner,
     build_discovery_args,
     build_port_args,
@@ -58,10 +60,13 @@ def test_nmap_arguments_are_fixed_and_safe():
     std = build_port_args(True, PortProfile(full=False, host_timeout_minutes=15), "22,80,443")
     assert std[std.index("-p") + 1] == "22,80,443" and "-sV" in std and "-Pn" in std
     assert "--top-ports" not in std  # nmap does not union --top-ports with -p
-    assert "-A" not in std and "--script" not in " ".join(std)
-    # timing/retries are the same with or without version detection
+    assert "-A" not in std and "-sC" not in std and "-O" not in std
+    # read-only fact scripts only, named one by one (never a category such as default/vuln/intrusive/brute)
+    assert std[std.index("--script") + 1].split(",") == sorted(KEPT_SCRIPTS)
+    assert std[std.index("--script-timeout") + 1] == "20s" and "mqtt-subscribe" not in KEPT_SCRIPTS
+    # timing/retries are the same with or without version detection; scripts only ride along with -sV
     portmap = build_port_args(True, PortProfile(full=False, host_timeout_minutes=15), "22,80,443", versions=False)
-    assert portmap == [a for a in std if a != "-sV"]
+    assert portmap == [a for a in std if a not in ("-sV", "--script", "--script-timeout", SCRIPTS, SCRIPT_TIMEOUT)]
     full = build_port_args(False, PortProfile(full=True, host_timeout_minutes=120), "1-65535")
     assert "1-65535" in full and "-sT" in full
     os_profile = PortProfile(full=False, os_detection=True)

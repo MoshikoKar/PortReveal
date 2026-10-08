@@ -672,6 +672,11 @@ AI_LLM_DISCOVERY_TCP_PORTS: tuple[int, ...] = (
 AI_LLM_WEB_PORTS: frozenset[int] = frozenset(AI_LLM_TCP_PORTS) | frozenset(WEB_DEV_TCP_PORTS)
 
 
+def is_raw_print_port(port: int | None) -> bool:
+    """JetDirect raw printing ports 9100-9107: bytes sent there may be printed. Never probe them."""
+    return port is not None and 9100 <= port <= 9107
+
+
 def merge_port_scope(base: str | None, extra_ports: tuple[int, ...] | list[int]) -> str | None:
     """Append any extra TCP ports not already covered by an nmap services= scope."""
     extras = sorted({int(p) for p in extra_ports if 1 <= int(p) <= 65535})
