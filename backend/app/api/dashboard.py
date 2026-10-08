@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -16,10 +16,12 @@ from ..models import (
     EV_PORT_OPENED,
     EV_SERVICE_CHANGED,
     EV_VERSION_CHANGED,
+    SCAN_ACTIVE_STATES,
     Device,
     DevicePort,
     Event,
     Network,
+    Scan,
     Snapshot,
     User,
 )
@@ -35,6 +37,36 @@ def _event_counts(db: Session, since) -> dict[str, int]:
         .group_by(Event.event_type)
     ).all()
     return {t: n for t, n in rows}
+
+
+def exposed_ports(db: Session, network_id: int | None = None) -> list[dict]:
+    """Open ports ranked by host count, labelled with the service most hosts report for them."""
+    svc = func.coalesce(DevicePort.service, "unknown")
+    q = (
+        select(DevicePort.protocol, DevicePort.port, svc, func.count(DevicePort.id))
+        .join(Device, Device.id == DevicePort.device_id)
+        .where(DevicePort.is_open.is_(True), device_visible(db))
+        .group_by(DevicePort.protocol, DevicePort.port, svc)
+    )
+    if network_id is not None:
+        q = q.where(Device.network_id == network_id)
+    by_port: dict[tuple[str, int], dict] = {}
+    for proto, port, service, n in db.execute(q).all():
+        # one row per device/protocol/port, so per-service counts add up to the host count
+        row = by_port.setdefault((proto, port), {"protocol": proto, "port": port, "count": 0, "services": []})
+        row["services"].append({"service": service, "count": n})
+        row["count"] += n
+    for row in by_port.values():
+        row["services"].sort(key=lambda x: (-x["count"], x["service"]))
+        named = [x for x in row["services"] if x["service"] not in ("unknown", "tcpwrapped")]
+        row["service"] = (named or row["services"])[0]["service"]
+    return sorted(by_port.values(), key=lambda r: (-r["count"], r["protocol"], r["port"]))
+
+
+@router.get("/exposed-ports")
+def list_exposed_ports(network_id: int | None = Query(None), db: Session = Depends(get_db),
+                       user: User = Depends(current_user)):
+    return {"ports": exposed_ports(db, network_id)}
 
 
 @router.get("/dashboard")
@@ -68,14 +100,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
         .order_by(func.count(DevicePort.id).desc())
         .limit(10)
     ).all()
-    top_ports = db.execute(
-        select(DevicePort.protocol, DevicePort.port, func.count(DevicePort.id), func.max(DevicePort.service))
-        .join(Device, Device.id == DevicePort.device_id)
-        .where(DevicePort.is_open.is_(True), dev_ok)
-        .group_by(DevicePort.protocol, DevicePort.port)
-        .order_by(func.count(DevicePort.id).desc(), DevicePort.port)
-        .limit(12)
-    ).all()
+    all_ports = exposed_ports(db)
 
     since_day = (now - timedelta(days=30)).date()
     trend_rows = db.execute(
@@ -93,8 +118,9 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
             .group_by(Device.network_id)
         ).all()
     )
+    scanning = set(db.scalars(select(Scan.network_id).where(Scan.status.in_(SCAN_ACTIVE_STATES))).all())
     networks = [
-        network_out(n, per_net.get(n.id, 0), per_net_active.get(n.id, 0))
+        {**network_out(n, per_net.get(n.id, 0), per_net_active.get(n.id, 0)), "scan_active": n.id in scanning}
         for n in db.scalars(select(Network).order_by(Network.name)).all()
     ]
 
@@ -125,7 +151,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
         },
         "recent_events": [event_out(e) for e in recent],
         "top_services": [{"service": s, "count": n} for s, n in top_services],
-        "top_ports": [{"protocol": p, "port": port, "count": n, "service": svc} for p, port, n, svc in top_ports],
+        "top_ports": [{k: r[k] for k in ("protocol", "port", "count", "service")} for r in all_ports[:12]],
+        "exposed_ports_total": len(all_ports),
         "trend": [{"date": d.isoformat(), "hosts_active": int(a or 0), "open_ports": int(o or 0)} for d, a, o in trend_rows],
         "networks": networks,
         "scans": scan_summary(db),

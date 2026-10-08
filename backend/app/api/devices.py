@@ -1,27 +1,18 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import or_, select
+from sqlalchemy import BigInteger, Integer, cast, func, literal, or_, select
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
 from ..core.mockdata import device_visible, event_visible, scan_visible
 from ..db import get_db
 from ..models import Device, DeviceIP, DevicePort, Event, Network, Scan, ScanHost, User
-from ..netutils import ip_sort_key
 from .common import Paging, device_summary, event_out, like_pattern, paged, port_out
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
-
-SORTS = {
-    "ip": lambda d: ip_sort_key(d.current_ip),
-    "hostname": lambda d: (d.hostname or "~", ip_sort_key(d.current_ip)),
-    "last_seen": lambda d: d.last_seen,
-    "first_seen": lambda d: d.first_seen,
-    "open_ports": lambda d: (sum(1 for p in d.ports if p.is_open), -ip_sort_key(d.current_ip)),
-    "status": lambda d: (d.status, ip_sort_key(d.current_ip)),
-}
 
 # Soft cap for bulk UUID selection (web capture / scans). Matches settings max_addresses ceiling.
 MAX_UUIDS = 4096
@@ -48,7 +39,7 @@ def search_conditions(q: str):
     return or_(*conds)
 
 
-def _filtered_devices(
+def _device_filter_conds(
     db: Session,
     *,
     q: str | None,
@@ -56,28 +47,74 @@ def _filtered_devices(
     network_id: int | None,
     port: int | None,
     service: str | None,
-    sort: str,
-    order: str,
-    load_ports: bool = True,
-) -> list[Device]:
-    stmt = select(Device).where(device_visible(db))
-    if load_ports:
-        stmt = stmt.options(selectinload(Device.ports))
+) -> list:
+    conds: list = [device_visible(db)]
     if q:
-        stmt = stmt.where(search_conditions(q))
+        conds.append(search_conditions(q))
     if status:
-        stmt = stmt.where(Device.status == status)
+        conds.append(Device.status == status)
     if network_id is not None:
-        stmt = stmt.where(Device.network_id == network_id)
+        conds.append(Device.network_id == network_id)
     if port is not None:
-        stmt = stmt.where(Device.id.in_(select(DevicePort.device_id).where(DevicePort.is_open.is_(True),
-                                                                          DevicePort.port == port)))
+        conds.append(Device.id.in_(select(DevicePort.device_id).where(DevicePort.is_open.is_(True),
+                                                                      DevicePort.port == port)))
     if service:
-        stmt = stmt.where(Device.id.in_(select(DevicePort.device_id).where(DevicePort.is_open.is_(True),
-                                                                          DevicePort.service == service)))
-    devices = list(db.scalars(stmt).all())
-    devices.sort(key=SORTS[sort], reverse=order == "desc")
-    return devices
+        conds.append(Device.id.in_(select(DevicePort.device_id).where(DevicePort.is_open.is_(True),
+                                                                      DevicePort.service == service)))
+    return conds
+
+
+def _ipv4_int_expr(db: Session, col) -> ColumnElement:
+    """Numeric IPv4 ORDER BY key (matches netutils.ip_sort_key) for SQLite and PostgreSQL."""
+    if db.get_bind().dialect.name == "postgresql":
+        expr = (
+            cast(func.nullif(func.split_part(col, ".", 1), ""), BigInteger) * 16777216
+            + cast(func.nullif(func.split_part(col, ".", 2), ""), BigInteger) * 65536
+            + cast(func.nullif(func.split_part(col, ".", 3), ""), BigInteger) * 256
+            + cast(func.nullif(func.split_part(col, ".", 4), ""), BigInteger)
+        )
+    else:
+        dot = literal(".")
+        o1 = cast(func.substr(col, 1, func.instr(col, dot) - 1), Integer)
+        r1 = func.substr(col, func.instr(col, dot) + 1)
+        o2 = cast(func.substr(r1, 1, func.instr(r1, dot) - 1), Integer)
+        r2 = func.substr(r1, func.instr(r1, dot) + 1)
+        o3 = cast(func.substr(r2, 1, func.instr(r2, dot) - 1), Integer)
+        o4 = cast(func.substr(r2, func.instr(r2, dot) + 1), Integer)
+        expr = o1 * 16777216 + o2 * 65536 + o3 * 256 + o4
+    return func.coalesce(expr, 0)
+
+
+def _open_port_count_expr():
+    return (
+        select(func.count(DevicePort.id))
+        .where(DevicePort.device_id == Device.id, DevicePort.is_open.is_(True))
+        .correlate(Device)
+        .scalar_subquery()
+    )
+
+
+def _device_order_by(db: Session, sort: str, order: str) -> list:
+    desc = order == "desc"
+    ip_key = _ipv4_int_expr(db, Device.current_ip)
+
+    def directed(expr, *, flip: bool = False):
+        use_desc = desc ^ flip
+        return expr.desc() if use_desc else expr.asc()
+
+    if sort == "hostname":
+        host = func.coalesce(func.nullif(Device.hostname, ""), "~")
+        return [directed(host), directed(ip_key), directed(Device.id)]
+    if sort == "last_seen":
+        return [directed(Device.last_seen), directed(Device.id)]
+    if sort == "first_seen":
+        return [directed(Device.first_seen), directed(Device.id)]
+    if sort == "open_ports":
+        # Python key was (open_count, -ip); reverse flips both → IP tiebreak opposite primary.
+        return [directed(_open_port_count_expr()), directed(ip_key, flip=True), directed(Device.id)]
+    if sort == "status":
+        return [directed(Device.status), directed(ip_key), directed(Device.id)]
+    return [directed(ip_key), directed(Device.id)]
 
 
 @router.get("")
@@ -93,12 +130,18 @@ def list_devices(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    devices = _filtered_devices(
-        db, q=q, status=status, network_id=network_id, port=port, service=service, sort=sort, order=order,
-    )
+    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service)
+    total = db.scalar(select(func.count(Device.id)).where(*conds)) or 0
+    devices = list(db.scalars(
+        select(Device)
+        .where(*conds)
+        .order_by(*_device_order_by(db, sort, order))
+        .offset(paging.offset)
+        .limit(paging.page_size)
+        .options(selectinload(Device.ports))
+    ).unique().all())
     names = {n.id: n.name for n in db.scalars(select(Network)).all()}
-    page = devices[paging.offset:paging.offset + paging.page_size]
-    return paged([device_summary(d, network_name=names.get(d.network_id)) for d in page], len(devices), paging)
+    return paged([device_summary(d, network_name=names.get(d.network_id)) for d in devices], total, paging)
 
 
 @router.get("/uuids")
@@ -114,14 +157,14 @@ def list_device_uuids(
     user: User = Depends(current_user),
 ):
     """All device UUIDs matching the same filters as the list endpoint (for bulk select)."""
-    devices = _filtered_devices(
-        db, q=q, status=status, network_id=network_id, port=port, service=service, sort=sort, order=order,
-        load_ports=False,
-    )
-    total = len(devices)
+    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service)
+    total = db.scalar(select(func.count(Device.id)).where(*conds)) or 0
     if total > MAX_UUIDS:
         raise HTTPException(422, f"Too many matching devices ({total}); maximum selectable is {MAX_UUIDS}")
-    return {"uuids": [d.uuid for d in devices], "total": total}
+    uuids = list(db.scalars(
+        select(Device.uuid).where(*conds).order_by(*_device_order_by(db, sort, order))
+    ).all())
+    return {"uuids": uuids, "total": total}
 
 
 def _get(db: Session, uuid: str) -> Device:

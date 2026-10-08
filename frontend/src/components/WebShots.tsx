@@ -93,7 +93,8 @@ export function ShotTile({ p, onOpen }: { p: WebPage; onOpen?: () => void }) {
     <article className="shot">
       {isUsefulShot(p) ? (
         <button className="shot-img" onClick={onOpen} title={rtsp ? 'Open stream' : 'Open preview'}>
-          <img src={shotUrl(p)} alt={p.title ?? p.url} loading="lazy" />
+          {/* width/height only hint the 16:10 tile ratio; CSS sizes the image. */}
+          <img src={shotUrl(p)} alt={p.title ?? p.url} loading="lazy" decoding="async" width={320} height={200} />
         </button>
       ) : (
         <div className="shot-img shot-ph"><span>{shotNote(p)}</span></div>
@@ -154,7 +155,7 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
             />
           </div>
         ) : p.has_screenshot ? (
-          <img src={shotUrl(p)} alt={p.title ?? p.url} />
+          <img src={shotUrl(p)} alt={p.title ?? p.url} decoding="async" />
         ) : (
           <div className="rtsp-ph" style={{ minWidth: 320, minHeight: 200 }}><span>{shotNote(p)}</span></div>
         )}

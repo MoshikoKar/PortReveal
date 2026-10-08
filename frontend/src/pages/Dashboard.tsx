@@ -1,8 +1,11 @@
+import { useState, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { post } from '../api';
+import { useApp } from '../context';
 import { EventFeed } from '../components/EventFeed';
 import { Trend } from '../components/Trend';
 import { Card, ErrorBox, Kpi, Loading, MockBadge, Progress, ScanStatusBadge } from '../components/ui';
-import type { Dashboard as DashboardData, EventType } from '../types';
+import type { Dashboard as DashboardData, EventType, Network } from '../types';
 import { EVENT_LABELS, SCAN_TYPE_LABELS, duration, fmtTime, relTime, useApi } from '../util';
 
 const TYPE_COLORS: Record<EventType, string> = {
@@ -11,8 +14,41 @@ const TYPE_COLORS: Record<EventType, string> = {
   version_changed: 'var(--low)', device_reappeared: 'var(--low)', service_detected: 'var(--info)',
 };
 
+function BaselineCell({ n, onStarted }: { n: Network; onStarted: () => void }) {
+  const { isAdmin } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (n.baseline_at) return <>{fmtTime(n.baseline_at)}</>;
+  const start = async (e: MouseEvent) => {
+    e.stopPropagation();
+    setBusy(true);
+    setErr(null);
+    try {
+      await post('/scans', { scan_type: 'standard', network_ids: [n.id] });
+      onStarted();
+    } catch (ex: any) {
+      setErr(ex.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="row wrap" style={{ gap: 8 }}>
+      <span className="badge medium">pending first complete scan</span>
+      {n.scan_active ? (
+        <span className="muted small">scan queued / running</span>
+      ) : isAdmin && (
+        <button className="btn sm" disabled={busy} onClick={start} title="Run a standard scan of this network; when it completes, its result becomes the baseline">
+          {busy ? 'Starting…' : 'Run baseline scan'}
+        </button>
+      )}
+      {err && <span className="small" style={{ color: 'var(--high)' }}>{err}</span>}
+    </div>
+  );
+}
+
 export default function Dashboard() {
-  const { data, error } = useApi<DashboardData>('/dashboard', undefined, 10000);
+  const { data, error, reload } = useApi<DashboardData>('/dashboard', undefined, 10000);
   const nav = useNavigate();
   if (!data) return <>{error ? <ErrorBox error={error} /> : <Loading />}</>;
   const { devices, last_24h: d1, last_7d: d7, scans } = data;
@@ -104,7 +140,7 @@ export default function Dashboard() {
 
       <div className="grid three">
         <Card title="Exposure trend (30 days)"><Trend points={data.trend} /></Card>
-        <Card title="Most exposed ports" flush>
+        <Card title="Most exposed ports" flush actions={<Link to="/ports" className="small">See all{data.exposed_ports_total ? ` ${data.exposed_ports_total}` : ''} →</Link>}>
           {data.top_ports.length === 0 ? <div className="empty">No open ports known yet.</div> : (
             <table>
               <tbody>
@@ -144,7 +180,7 @@ export default function Dashboard() {
                   <td>{n.name}</td>
                   <td className="mono">{n.cidr}</td>
                   <td>{n.active_count} / {n.device_count}</td>
-                  <td>{n.baseline_at ? fmtTime(n.baseline_at) : <span className="badge medium">pending first complete scan</span>}</td>
+                  <td><BaselineCell n={n} onStarted={reload} /></td>
                 </tr>
               ))}
             </tbody>

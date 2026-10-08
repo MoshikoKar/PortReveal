@@ -9,10 +9,10 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from ..db import session_scope
-from ..models import SCAN_STANDARD, Network
+from ..db import session_scope, utcnow
+from ..models import SCAN_STANDARD, Network, Scan
 from ..settings_store import RetentionSettings, ScanSettings, ScheduleSettings, get_section, get_value, set_value
 from .manager import create_scan, manager, network_has_active_scan
 from .retention import run_retention
@@ -23,6 +23,10 @@ STATE_KEY = "scheduler_state"
 CATCH_UP_WINDOW = timedelta(hours=6)  # run a missed schedule if the app was down briefly
 RETENTION_TIME = (3, 15)
 TICK_SECONDS = 20
+# A network without a baseline gets another standard scan this long after its last one started,
+# so a failed/partial first scan is retried without waiting for someone to notice.
+BASELINE_RETRY_AFTER = timedelta(hours=12)
+NEW_NETWORK_GRACE = timedelta(hours=1)  # leave time for the admin to start the first scan themselves
 
 
 def _due_today(cfg: ScheduleSettings, now: datetime) -> datetime:
@@ -56,6 +60,25 @@ def enqueue_scheduled_scans(db) -> list[int]:
     return ids
 
 
+def enqueue_baseline_retries(db, now_utc: datetime | None = None) -> list[int]:
+    now_utc = now_utc or utcnow()
+    ids = []
+    for net in db.scalars(select(Network).where(Network.enabled.is_(True), Network.baseline_scan_id.is_(None))
+                          .order_by(Network.id)).all():
+        if net.created_at and net.created_at > now_utc - NEW_NETWORK_GRACE:
+            continue
+        if network_has_active_scan(db, net.id):
+            continue
+        last = db.scalar(select(func.max(Scan.created_at))
+                         .where(Scan.network_id == net.id, Scan.scan_type == SCAN_STANDARD))
+        if last is not None and last > now_utc - BASELINE_RETRY_AFTER:
+            continue
+        scan = create_scan(db, SCAN_STANDARD, trigger="scheduled", network=net, requested_by="scheduler")
+        log.info("network %s has no baseline yet: queued baseline scan %s", net.name, scan.id)
+        ids.append(scan.id)
+    return ids
+
+
 def tick(now: datetime | None = None) -> None:
     now = now or datetime.now().astimezone()
     today = now.date().isoformat()
@@ -77,6 +100,8 @@ def tick(now: datetime | None = None) -> None:
                 state["last_scan_date"] = today
                 changed = True
                 log.info("scheduled scan triggered (%s): queued scans %s", cfg.time, queued)
+        if cfg.enabled and "initialized" in state:
+            queued += enqueue_baseline_retries(db)
 
         rt = now.replace(hour=RETENTION_TIME[0], minute=RETENTION_TIME[1], second=0, microsecond=0)
         if now >= rt and state.get("last_retention_date") != today:

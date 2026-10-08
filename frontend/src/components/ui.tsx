@@ -78,6 +78,25 @@ export function Loading() {
   return <div className="empty"><span className="spinner" /></div>;
 }
 
+/** Placeholder rows shown while a list table loads, so the page keeps its shape. */
+export function SkeletonRows({ cols, rows = 6 }: { cols: number; rows?: number }) {
+  return (
+    <div className="table-wrap" aria-busy="true" aria-label="Loading">
+      <table className="skeleton">
+        <tbody>
+          {Array.from({ length: rows }, (_, r) => (
+            <tr key={r}>
+              {Array.from({ length: cols }, (_, c) => (
+                <td key={c}><span className="skeleton-bar" style={{ width: `${45 + ((r * 7 + c * 13) % 45)}%` }} /></td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }

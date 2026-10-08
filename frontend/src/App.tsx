@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { get, post } from './api';
 import { Layout } from './components/Layout';
-import { Loading } from './components/ui';
+import { Card, Loading } from './components/ui';
 import { AppContext } from './context';
 import Changes from './pages/Changes';
 import Dashboard from './pages/Dashboard';
 import DeviceDetail from './pages/DeviceDetail';
 import Devices from './pages/Devices';
 import Login from './pages/Login';
+import Ports from './pages/Ports';
 import Scans from './pages/Scans';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
@@ -17,10 +18,18 @@ import WebPreview from './pages/WebPreview';
 import type { SetupStatus, SystemStatus, User } from './types';
 
 export default function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [setup, setSetup] = useState<SetupStatus | null>(null);
   const [user, setUser] = useState<User | null | undefined>(undefined);
   const [system, setSystem] = useState<SystemStatus | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const userRef = useRef(user);
+  const locationRef = useRef(location);
+  const returnToRef = useRef<string | null>(null);
+  userRef.current = user;
+  locationRef.current = location;
 
   const boot = useCallback(async () => {
     try {
@@ -44,7 +53,15 @@ export default function App() {
 
   useEffect(() => {
     boot();
-    const onUnauthorized = () => setUser(null);
+    const onUnauthorized = () => {
+      // Only treat mid-session 401 as expiry (not cold-start /auth/me while user is still undefined).
+      if (userRef.current) {
+        const { pathname, search } = locationRef.current;
+        returnToRef.current = `${pathname}${search}`;
+        setSessionExpired(true);
+      }
+      setUser(null);
+    };
     window.addEventListener('nf:unauthorized', onUnauthorized);
     return () => window.removeEventListener('nf:unauthorized', onUnauthorized);
   }, [boot]);
@@ -66,6 +83,8 @@ export default function App() {
     } catch {
       /* session may already be gone */
     }
+    returnToRef.current = null;
+    setSessionExpired(false);
     setUser(null);
   }, []);
 
@@ -90,10 +109,16 @@ export default function App() {
 
   const onLoggedIn = (u: User) => {
     setUser(u);
+    setSessionExpired(false);
     get<SetupStatus>('/setup/status').then(setSetup);
+    const back = returnToRef.current;
+    returnToRef.current = null;
+    if (back) navigate(back, { replace: true });
   };
 
-  if (!user && !setup.needs_admin) return <Login status={setup} onLogin={onLoggedIn} />;
+  if (!user && !setup.needs_admin) {
+    return <Login status={setup} onLogin={onLoggedIn} sessionExpired={sessionExpired} />;
+  }
 
   // First-run wizard. Always rendered at the same tree position so its step survives the admin login.
   if (setup.needs_admin || (user?.role === 'admin' && !setup.setup_completed)) {
@@ -115,12 +140,25 @@ export default function App() {
           <Route path="/devices/:uuid/web" element={<WebPreview />} />
           <Route path="/web" element={<WebHosts />} />
           <Route path="/changes" element={<Changes />} />
+          <Route path="/ports" element={<Ports />} />
           <Route path="/scans" element={<Scans />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/:tab" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </Layout>
     </AppContext.Provider>
+  );
+}
+
+function NotFound() {
+  const { pathname } = useLocation();
+  return (
+    <Card title="Page not found">
+      <div className="stack">
+        <div>There is no page at <code>{pathname}</code>. The link may be outdated or mistyped.</div>
+        <div><Link className="btn primary" to="/">Go to dashboard</Link></div>
+      </div>
+    </Card>
   );
 }
