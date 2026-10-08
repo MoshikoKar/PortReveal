@@ -74,12 +74,14 @@ def test_email_format_is_categorized_html(db):
     subject, plain, html_body = format_daily_digest([ev], {net.id: net.name})
     assert "Daily summary" in subject and "1 change" in subject
     assert "Ports" in plain and "server01" in plain and "10.20.15.22" in plain
-    assert "TCP/8080" in plain and "http" in plain
-    assert "<table" in html_body and "New port detected" in html_body
-    assert "Ports" in html_body and "server01" in html_body
+    assert "TCP/8080" in plain
+    assert "Ports opened" in html_body and "server01" in html_body
+    assert "MAC " not in html_body and "<thead>" not in html_body
     subject60, plain60, html60 = format_daily_digest([ev] * 60, {net.id: net.name})
     assert "60 changes" in subject60 and "Ports (60)" in plain60
-    assert "<table" in html60
+    # Many identical port events on one host collapse to a single line in the mail.
+    assert "…and" not in plain60 or "server01" in plain60
+    assert "Ports opened" in html60
 
 
 def test_notifications_sent_once_as_daily_digest(db, monkeypatch):

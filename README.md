@@ -281,8 +281,8 @@ kept for the retention period (default **365 days**). Raw nmap XML is not stored
 for troubleshooting.
 
 **Email.** Uses an internal SMTP relay (port 25, no auth by default; STARTTLS/SSL and auth are optional). Once per
-day at a configured local time (default **08:00**), sends one categorized HTML summary of pending changes
-(devices, ports, services) with tables for each event type. Quiet days with no pending changes skip the email.
+day at a configured local time (default **08:00**), sends one short categorized HTML summary of pending changes
+(devices, ports, services) as compact bullet lists. Quiet days with no pending changes skip the email.
 
 **Security.** Argon2 password hashing; server-side sessions (HttpOnly, SameSite=Lax, optional Secure cookie, idle +
 absolute expiry); CSRF token required on every state-changing request; login rate limiting; two roles (admin / viewer);
