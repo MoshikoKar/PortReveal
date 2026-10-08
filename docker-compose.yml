@@ -1,0 +1,59 @@
+# Production deployment:   cp .env.production.example .env  &&  docker compose up -d
+#
+# The app container uses host networking so nmap can see the local LAN directly
+# (ARP discovery, MAC addresses, no NAT). Linux Docker hosts only.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-netfinder}
+      POSTGRES_USER: ${POSTGRES_USER:-netfinder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"   # reachable only from the host (and the host-networked app)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: network-finder:latest
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      APP_ENV: production
+      APP_PORT: ${APP_PORT:-8080}
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-netfinder}
+      POSTGRES_USER: ${POSTGRES_USER:-netfinder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-}
+      SCANNER_MODE: ${SCANNER_MODE:-nmap}
+      NMAP_PRIVILEGED: "true"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-480}
+      SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-24}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - appdata:/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  appdata:

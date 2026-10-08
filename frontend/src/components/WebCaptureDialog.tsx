@@ -1,0 +1,93 @@
+import { useState } from 'react';
+import { post } from '../api';
+import { ErrorBox, Modal } from './ui';
+
+export interface WebCapturePreset {
+  device_uuids?: string[];
+  deviceLabel?: string;
+  lockTargets?: boolean;
+  targets?: string;
+}
+
+export function WebCaptureDialog({ preset, onClose, onStarted }: {
+  preset?: WebCapturePreset;
+  onClose: () => void;
+  onStarted?: () => void;
+}) {
+  const [mode, setMode] = useState<'devices' | 'targets'>(preset?.device_uuids ? 'devices' : 'targets');
+  const [targets, setTargets] = useState(preset?.targets ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = {};
+      if (mode === 'devices' && preset?.device_uuids?.length) {
+        body.device_uuids = preset.device_uuids;
+      } else {
+        body.targets = targets;
+      }
+      await post('/web-captures', body);
+      onStarted?.();
+      onClose();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ready = mode === 'devices' ? !!preset?.device_uuids?.length : targets.trim().length > 0;
+
+  return (
+    <Modal
+      title="Web Capture"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!ready || busy} onClick={submit}>
+            {busy ? 'Starting…' : 'Capture web interfaces'}
+          </button>
+        </>
+      }
+    >
+      <div className="alert">
+        <div className="small">
+          Inventory enrichment only: captures known HTTP(S) services from existing scan data for the selected targets.
+          Does not run a new port scan.
+        </div>
+      </div>
+      <ErrorBox error={error} />
+      <div className="stack">
+        <h3>Targets</h3>
+        {preset?.lockTargets ? (
+          <div>{preset.deviceLabel}</div>
+        ) : (
+          <>
+            {preset?.device_uuids && (
+              <div className="tabs">
+                <button className={mode === 'devices' ? 'active' : ''} onClick={() => setMode('devices')}>
+                  Selected devices ({preset.device_uuids.length})
+                </button>
+                <button className={mode === 'targets' ? 'active' : ''} onClick={() => setMode('targets')}>IP / range / CIDR</button>
+              </div>
+            )}
+            {mode === 'devices' && preset?.device_uuids && (
+              <div className="muted">{preset.deviceLabel ?? `${preset.device_uuids.length} device(s)`}</div>
+            )}
+            {mode === 'targets' && (
+              <label className="field">
+                <textarea rows={3} value={targets} onChange={(e) => setTargets(e.target.value)}
+                  placeholder="10.20.15.22, 10.20.16.0/24, 10.20.17.10-50" />
+                <span className="hint">IPs, CIDRs, or ranges. Exclusions apply. Not arbitrary URLs.</span>
+              </label>
+            )}
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}

@@ -1,0 +1,96 @@
+import { useState } from 'react';
+import { del, post, put } from '../../api';
+import { Card, Empty, ErrorBox, Loading, Modal } from '../../components/ui';
+import { useApp } from '../../context';
+import type { Network } from '../../types';
+import { fmtTime, useApi } from '../../util';
+
+type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean };
+
+export function NetworksSettings({ compact }: { compact?: boolean }) {
+  const { isAdmin } = useApp();
+  const { data, error, loading, reload } = useApi<Network[]>('/networks');
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!draft) return;
+    setSaveError(null);
+    try {
+      const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled };
+      if (draft.id) await put(`/networks/${draft.id}`, body);
+      else await post('/networks', body);
+      setDraft(null);
+      reload();
+    } catch (e: any) {
+      setSaveError(e.message);
+    }
+  };
+
+  const remove = async (n: Network) => {
+    if (!confirm(`Delete network "${n.name}"? Devices are kept; its snapshots are deleted.`)) return;
+    await del(`/networks/${n.id}`);
+    reload();
+  };
+
+  const resetBaseline = async (n: Network) => {
+    if (!confirm(`Reset the baseline of "${n.name}"? The next complete standard scan becomes the new baseline (no alerts).`)) return;
+    await post(`/networks/${n.id}/reset-baseline`);
+    reload();
+  };
+
+  return (
+    <Card
+      title="Network scopes"
+      flush
+      actions={isAdmin && <button className="btn primary sm" onClick={() => setDraft({ name: '', cidr: '', description: '', enabled: true })}>Add network</button>}
+    >
+      {!compact && (
+        <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
+          Reusable scan scopes (up to /16 each). Enabled networks are scanned by the daily schedule. The first complete standard
+          scan of a network is its baseline and never alerts.
+        </div>
+      )}
+      <ErrorBox error={error} />
+      {loading && !data ? <Loading /> : !data?.length ? <Empty>No networks yet.</Empty> : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>CIDR</th><th>Devices</th><th>Baseline</th><th>Schedule</th>{isAdmin && <th />}</tr></thead>
+            <tbody>
+              {data.map((n) => (
+                <tr key={n.id}>
+                  <td><strong>{n.name}</strong>{n.description && <div className="muted small">{n.description}</div>}</td>
+                  <td className="mono">{n.cidr}</td>
+                  <td>{n.active_count ?? 0} active / {n.device_count ?? 0}</td>
+                  <td>{n.baseline_at ? fmtTime(n.baseline_at) : <span className="badge medium">pending</span>}</td>
+                  <td>{n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
+                  {isAdmin && (
+                    <td className="right nowrap">
+                      <button className="btn ghost sm" onClick={() => setDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled })}>Edit</button>
+                      {n.baseline_at && <button className="btn ghost sm" onClick={() => resetBaseline(n)}>Reset baseline</button>}
+                      <button className="btn ghost sm" onClick={() => remove(n)}>Delete</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {draft && (
+        <Modal
+          title={draft.id ? 'Edit network' : 'Add network'}
+          onClose={() => setDraft(null)}
+          footer={<><button className="btn ghost" onClick={() => setDraft(null)}>Cancel</button><button className="btn primary" onClick={save}>Save</button></>}
+        >
+          <label className="field">Name<input type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" /></label>
+          <label className="field">CIDR<input type="text" value={draft.cidr} onChange={(e) => setDraft({ ...draft, cidr: e.target.value })} placeholder="10.0.0.0/24" />
+            <span className="hint">IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline.</span></label>
+          <label className="field">Description<input type="text" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label>
+          <label className="check"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />Include in the scheduled daily scan</label>
+          <ErrorBox error={saveError} />
+        </Modal>
+      )}
+    </Card>
+  );
+}
