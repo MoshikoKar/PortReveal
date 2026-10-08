@@ -1,9 +1,11 @@
 # Production deployment (Linux Docker host only):
-#   docker compose --env-file .env.production up -d --build
-#   (or: cp .env.production.example .env  &&  docker compose up -d --build)
+#   docker compose -f docker-compose.yml --env-file .env.production up -d --build
+#   (or: cp .env.production.example .env  &&  docker compose -f docker-compose.yml up -d --build)
 #
 # Host networking: nmap sees the LAN directly (ARP / MAC on the local segment).
-# Does not work on Docker Desktop for Windows/macOS — use docker-compose.desktop.yml.
+# Docker Desktop (Windows/macOS) cannot do this: docker-compose.override.yml is auto-loaded
+# there and replaces host networking with a bridge + published port (no MACs). On a Linux
+# host run  docker compose -f docker-compose.yml up -d --build  to skip the override.
 #
 # Build-time egress: allow storage.googleapis.com:443 (Playwright Chromium),
 # or set HTTP_PROXY / HTTPS_PROXY in .env.production if builds go through a proxy.
