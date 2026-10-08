@@ -9,6 +9,8 @@ Unreachable sources just leave fields empty.
 Sources: mDNS/DNS-SD (unicast to UDP 5353), SSDP/UPnP (unicast M-SEARCH to UDP 1900, description
 XML only from the same IP), AirPlay /info (only where nmap confirmed AirPlay), IPP
 Get-Printer-Attributes (only where nmap confirmed IPP). Raw printer ports 9100-9107 are never used.
+Packets leave from the local interface on the target's subnet (the same choice nmap is bound to, see
+scanner/nmap_iface.py), so a VPN route for the LAN cannot swallow them.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ import logging
 import plistlib
 import queue
 import random
+import shutil
 import socket
 import struct
 import threading
@@ -28,9 +31,11 @@ import httpx
 from defusedxml import ElementTree as ET
 from sqlalchemy import select
 
+from ..config import get_settings
 from ..db import session_scope, utcnow
 from ..models import Device, DevicePort, ScanHost
 from ..scanner.known_ports import is_raw_print_port
+from ..scanner.nmap_iface import resolve_bind
 from ..settings_store import ScanSettings, get_section
 from .port_profiles import auto_mark
 
@@ -119,11 +124,18 @@ def parse_dns(data: bytes) -> list[tuple[str, int, object]]:
     return out
 
 
-def _mdns_exchange(ip: str, questions: list[tuple[str, int]]) -> list[tuple[str, int, object]]:
+def _udp(src: str | None) -> socket.socket:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(TIMEOUT_S)
+    if src:
+        sock.bind((src, 0))
+    return sock
+
+
+def _mdns_exchange(ip: str, questions: list[tuple[str, int]], src: str | None = None) -> list[tuple[str, int, object]]:
     """One legacy unicast query to ip:5353 (the reply comes back to our source port, unicast)."""
     qid = random.randint(1, 0xFFFF)
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(TIMEOUT_S)
+    with _udp(src) as sock:
         sock.sendto(dns_query(qid, questions), (ip, 5353))
         records: list[tuple[str, int, object]] = []
         try:
@@ -150,7 +162,8 @@ def _txt_map(items) -> dict[str, str]:
     return out
 
 
-def mdns_identity(ip: str, records_for=_mdns_exchange) -> Found:
+def mdns_identity(ip: str, src: str | None = None, records_for=None) -> Found:
+    records_for = records_for or (lambda target, questions: _mdns_exchange(target, questions, src))
     found: Found = {}
     rev = ipaddress.ip_address(ip).reverse_pointer
     recs = records_for(ip, [(rev, _PTR)] + [(f"{s}.local", _PTR) for s in MDNS_SERVICES])
@@ -162,6 +175,10 @@ def mdns_identity(ip: str, records_for=_mdns_exchange) -> Found:
         recs += records_for(ip, [(n, _TXT) for n in missing])
         txt.update({n: v for n, t, v in recs if t == _TXT})
     src = "mDNS"
+    # Samba's fruit module announces a Mac model in _device-info only to pick a Finder icon for the
+    # share (e.g. TrueNAS: "MacPro7,1"); that is not the device's model, so it is ignored there.
+    smb_only = ({i.split("._", 1)[0] for i in instances if "._smb._tcp." in i}
+                - {i.split("._", 1)[0] for i in instances if "._airplay._tcp." in i})
     for n, t, v in recs:
         if t == _PTR and n == rev.lower() and v:
             _put(found, "name", str(v).removesuffix(".local").removesuffix(".local."), src)
@@ -169,7 +186,10 @@ def mdns_identity(ip: str, records_for=_mdns_exchange) -> Found:
         kv = _txt_map(items)
         service = next((s for s in MDNS_SERVICES if f".{s}." in f".{name}."), "")
         tag = f"{src} {service}" if service else src
-        _put(found, "model", kv.get("model") or kv.get("md") or kv.get("usb_mdl"), tag)
+        model = kv.get("model") or kv.get("md") or kv.get("usb_mdl")
+        if service == "_device-info._tcp" and name.split("._", 1)[0] in smb_only:
+            model = None
+        _put(found, "model", model and model.split("@ECOLOR=", 1)[0], tag)
         _put(found, "manufacturer", kv.get("manufacturer") or kv.get("usb_mfg"), tag)
         _put(found, "firmware", kv.get("fv") or kv.get("firmware"), tag)
         _put(found, "name", kv.get("fn"), tag)
@@ -187,9 +207,8 @@ _MSEARCH = (b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:d
             b"MX: 1\r\nST: upnp:rootdevice\r\n\r\n")
 
 
-def _ssdp_location(ip: str) -> str | None:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(TIMEOUT_S)
+def _ssdp_location(ip: str, src: str | None) -> str | None:
+    with _udp(src) as sock:
         sock.sendto(_MSEARCH, (ip, 1900))
         try:
             while True:
@@ -204,9 +223,10 @@ def _ssdp_location(ip: str) -> str | None:
             return None
 
 
-def _get(url: str, **kw) -> httpx.Response | None:
+def _get(url: str, src: str | None = None, **kw) -> httpx.Response | None:
     try:
-        with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False, verify=False) as c:
+        transport = httpx.HTTPTransport(local_address=src, verify=False)
+        with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False, transport=transport) as c:
             with c.stream(kw.pop("method", "GET"), url, **kw) as r:
                 body = b""
                 for chunk in r.iter_bytes():
@@ -234,14 +254,14 @@ def parse_upnp(xml: bytes) -> Found:
     return found
 
 
-def upnp_identity(ip: str) -> Found:
-    loc = _ssdp_location(ip)
+def upnp_identity(ip: str, src: str | None = None) -> Found:
+    loc = _ssdp_location(ip, src)
     if not loc:
         return {}
     u = urlparse(loc)
     if u.scheme not in ("http", "https") or u.hostname != ip or is_raw_print_port(u.port):
         return {}  # only the device's own description, never a third host
-    r = _get(loc)
+    r = _get(loc, src)
     if r is None or r.status_code != 200:
         return {}
     try:
@@ -263,8 +283,8 @@ def parse_airplay_info(body: bytes) -> Found:
     return found
 
 
-def airplay_identity(ip: str, port: int) -> Found:
-    r = _get(f"http://{ip}:{port}/info")
+def airplay_identity(ip: str, port: int, src: str | None = None) -> Found:
+    r = _get(f"http://{ip}:{port}/info", src)
     if r is None or r.status_code != 200:
         return {}
     try:
@@ -319,8 +339,8 @@ def parse_ipp(data: bytes) -> Found:
     return found
 
 
-def ipp_identity(ip: str, port: int) -> Found:
-    r = _get(f"http://{ip}:{port}/ipp/print", method="POST", content=ipp_request(f"ipp://{ip}:{port}/ipp/print"),
+def ipp_identity(ip: str, port: int, src: str | None = None) -> Found:
+    r = _get(f"http://{ip}:{port}/ipp/print", src, method="POST", content=ipp_request(f"ipp://{ip}:{port}/ipp/print"),
              headers={"Content-Type": "application/ipp"})
     if r is None or r.status_code != 200 or len(r.content) < 9:
         return {}
@@ -337,16 +357,16 @@ def _confirmed(p: DevicePort, *words: str) -> bool:
     return p.method == "probed" and any(w in text for w in words)
 
 
-def probe_device(ip: str, ports: list[DevicePort]) -> Found:
+def probe_device(ip: str, ports: list[DevicePort], src: str | None = None) -> Found:
     """All sources for one device, cheapest first; the first source to return a field wins."""
-    steps = [lambda: mdns_identity(ip), lambda: upnp_identity(ip)]
+    steps = [lambda: mdns_identity(ip, src), lambda: upnp_identity(ip, src)]
     for p in ports:
         if is_raw_print_port(p.port):
             continue
         if _confirmed(p, "airplay", "airtunes"):
-            steps.append(lambda port=p.port: airplay_identity(ip, port))
+            steps.append(lambda port=p.port: airplay_identity(ip, port, src))
         elif _confirmed(p, "ipp"):
-            steps.append(lambda port=p.port: ipp_identity(ip, port))
+            steps.append(lambda port=p.port: ipp_identity(ip, port, src))
     found: Found = {}
     for step in steps:
         try:
@@ -382,8 +402,13 @@ def run_self_id(scan_id: int) -> int:
                 db.expunge(p)
     if not todo:
         return 0
+    exe = shutil.which(get_settings().nmap_path)
+
+    def source(ip: str) -> str | None:
+        return resolve_bind(exe, [ip], True).source if exe else None
+
     with ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="selfid") as pool:
-        results = list(pool.map(lambda t: probe_device(t[1], t[2]), todo))
+        results = list(pool.map(lambda t: probe_device(t[1], t[2], source(t[1])), todo))
     with session_scope() as db:
         for (dev_id, _, _), found in zip(todo, results, strict=True):
             dev = db.get(Device, dev_id)

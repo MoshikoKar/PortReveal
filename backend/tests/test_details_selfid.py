@@ -151,6 +151,16 @@ def test_mdns_identity_uses_only_announced_values():
     assert "manufacturer" not in found and "firmware" not in found  # never inferred
 
 
+def test_samba_finder_icon_model_is_not_a_device_model():
+    def fake(ip, questions):
+        if questions[0][1] == _PTR:
+            return [("_smb._tcp.local", _PTR, "nas._smb._tcp.local"),
+                    ("_device-info._tcp.local", _PTR, "nas._device-info._tcp.local")]
+        return [("nas._device-info._tcp.local", _TXT, ["model=MacPro7,1@ECOLOR=226,226,224"])]
+
+    assert "model" not in mdns_identity("10.0.0.5", records_for=fake)
+
+
 def test_upnp_airplay_ipp_parsers():
     xml = b"""<root xmlns="urn:schemas-upnp-org:device-1-0"><device><friendlyName>[LG] webOS TV</friendlyName>
     <manufacturer>LG Electronics</manufacturer><modelName>OLED55C1</modelName><modelNumber>55C1</modelNumber>
@@ -178,10 +188,10 @@ def test_probe_device_skips_unconfirmed_and_raw_print_ports(monkeypatch):
     import app.core.selfid as selfid
 
     calls = []
-    monkeypatch.setattr(selfid, "mdns_identity", lambda ip: {})
-    monkeypatch.setattr(selfid, "upnp_identity", lambda ip: {})
-    monkeypatch.setattr(selfid, "airplay_identity", lambda ip, port: calls.append(("airplay", port)) or {})
-    monkeypatch.setattr(selfid, "ipp_identity", lambda ip, port: calls.append(("ipp", port)) or {})
+    monkeypatch.setattr(selfid, "mdns_identity", lambda ip, src: {})
+    monkeypatch.setattr(selfid, "upnp_identity", lambda ip, src: {})
+    monkeypatch.setattr(selfid, "airplay_identity", lambda ip, port, src: calls.append(("airplay", port)) or {})
+    monkeypatch.setattr(selfid, "ipp_identity", lambda ip, port, src: calls.append(("ipp", port)) or {})
     ports = [DevicePort(port=7000, service="rtsp", product="AirTunes rtspd", method="probed"),
              DevicePort(port=631, service="ipp", method="table"),  # port-number guess: not confirmed
              DevicePort(port=9100, service="ipp", product="ipp", method="probed")]  # raw print port: never

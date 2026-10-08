@@ -13,7 +13,7 @@ KEPT_SCRIPTS = frozenset({
     "ssh-hostkey", "ssh2-enum-algos", "smb-protocols", "smb2-security-mode", "smb-os-discovery", "nbstat",
     "rdp-ntlm-info", "ssl-cert", "socks-auth-info", "vnc-info", "rtsp-methods",
 })
-_DROP_KEYS = frozenset({"pem"})  # ssl-cert: the full certificate is not needed for the facts shown
+_DROP_KEYS = frozenset({"pem", "modulus", "extensions"})  # ssl-cert bulk; the output text keeps the SAN
 _MAX_OUTPUT = 4000
 
 
@@ -47,8 +47,9 @@ def _scripts(parent) -> dict[str, dict]:
     out = {}
     for sc in parent.findall("script"):
         sid = sc.get("id")
-        if sid in KEPT_SCRIPTS:
-            out[sid] = {"output": (sc.get("output") or "").strip()[:_MAX_OUTPUT], "data": _script_value(sc)}
+        output = (sc.get("output") or "").strip()
+        if sid in KEPT_SCRIPTS and not output.startswith("ERROR:"):  # a failed script states no fact
+            out[sid] = {"output": output[:_MAX_OUTPUT], "data": _script_value(sc)}
     return out
 
 
