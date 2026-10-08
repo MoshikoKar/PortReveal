@@ -142,7 +142,7 @@ Requirements:
 - **Build egress:** `storage.googleapis.com:443` must be reachable from the host (Playwright
   Chromium). Also needed: package indexes (Debian/PyPI/npm) or your usual mirrors. If the
   host uses an HTTP proxy, set `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` in `.env`.
-- **Inbound:** TCP `APP_PORT` (default `8080`) open to clients that use the UI.
+- **Inbound:** TCP `APP_PORT` (default `8081`) open to clients that use the UI.
 - Place the host on the LAN segment you want ARP/MAC for (e.g. `10.10.0.0/16`). Routed
   scopes (e.g. `10.0.0.0/16` via a gateway) can be scanned for IP/ports but not MACs.
   CIDRs are set in the first-run wizard, not in Compose.
@@ -156,7 +156,7 @@ docker compose ps            # app should become "healthy"
 docker compose logs -f app
 ```
 
-Open `http://<vm-ip>:8080` and complete the **first-run wizard**: administrator → network scope(s) → exclusions →
+Open `http://<vm-ip>:8081` and complete the **first-run wizard**: administrator → network scope(s) → exclusions →
 schedule → SMTP → optional LDAP → email recipients → baseline scan.
 
 What Compose provides:
@@ -171,7 +171,7 @@ What Compose provides:
 Upgrade: `git pull && docker compose up -d --build` (migrations run automatically).
 
 **HTTPS / reverse proxy.** Put nginx, Caddy or Traefik in front, set `COOKIE_SECURE=true`, and set
-`FORWARDED_ALLOW_IPS` to the proxy IP. Example Caddy: `netfinder.corp.local { reverse_proxy 127.0.0.1:8080 }`.
+`FORWARDED_ALLOW_IPS` to the proxy IP. Example Caddy: `netfinder.corp.local { reverse_proxy 127.0.0.1:8081 }`.
 
 **Secrets.** Keep them in `.env` (never committed). Docker secrets mounted under `/run/secrets/<setting_name>` (e.g.
 `postgres_password`, `app_secret_key`) are also read automatically. SMTP and LDAP passwords entered in the UI are

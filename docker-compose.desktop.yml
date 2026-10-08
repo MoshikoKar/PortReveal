@@ -1,0 +1,25 @@
+# Override for Docker Desktop (Windows/macOS), where network_mode: host attaches to the
+# Docker VM and not to the real LAN, so the UI would be unreachable.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml --env-file .env.production up -d --build
+#
+# Reads APP_PORT / POSTGRES_* / secrets from .env.production (e.g. APP_PORT=8081,
+# POSTGRES_PORT=5434 for the host-side DB publish). On the bridge network the app
+# reaches Postgres as hostname "db" on container port 5432 — not the host-mapped port.
+#
+# The app publishes APP_PORT on all host interfaces (clients in 10.10.0.0/16 and
+# 10.0.0.0/16 can open the UI). Scans leave through the host via NAT: routed TCP/ICMP
+# discovery works for both CIDRs, but MAC addresses are not visible (ARP does not
+# cross NAT). Use a Linux host (compose without this override) for MAC data.
+# Windows Firewall must allow inbound TCP on APP_PORT.
+
+services:
+  app:
+    network_mode: !reset null
+    ports:
+      - "${APP_PORT:-8081}:${APP_PORT:-8081}"
+    environment:
+      POSTGRES_HOST: db
+      # Container-internal Postgres port. POSTGRES_PORT in .env.production only
+      # controls the host mapping on the db service (e.g. 127.0.0.1:5434:5432).
+      POSTGRES_PORT: "5432"

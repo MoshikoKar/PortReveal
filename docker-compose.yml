@@ -1,24 +1,30 @@
 # Production deployment (Linux Docker host only):
-#   cp .env.production.example .env
-#   # edit .env (POSTGRES_PASSWORD, APP_SECRET_KEY, TZ, APP_PORT, …)
-#   docker compose up -d --build
+#   docker compose --env-file .env.production up -d --build
+#   (or: cp .env.production.example .env  &&  docker compose up -d --build)
 #
 # Host networking: nmap sees the LAN directly (ARP / MAC on the local segment).
-# Does not work on Docker Desktop for Windows/macOS.
+# Does not work on Docker Desktop for Windows/macOS — use docker-compose.desktop.yml.
 #
 # Build-time egress: allow storage.googleapis.com:443 (Playwright Chromium),
-# or set HTTP_PROXY / HTTPS_PROXY in .env if builds go through a proxy.
+# or set HTTP_PROXY / HTTPS_PROXY in .env.production if builds go through a proxy.
+#
+# APP_PORT and POSTGRES_PORT come from the env file (e.g. 8081 / 5434).
 
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
+      - path: .env
+        required: false
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-netfinder}
       POSTGRES_USER: ${POSTGRES_USER:-netfinder}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production (or .env)}
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"   # reachable only from the host (and the host-networked app)
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"   # host mapping; container always listens on 5432
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -44,14 +50,19 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
+    env_file:
+      - path: .env.production
+        required: false
+      - path: .env
+        required: false
     environment:
       APP_ENV: production
-      APP_PORT: ${APP_PORT:-8080}
+      APP_PORT: ${APP_PORT:-8081}
       POSTGRES_HOST: 127.0.0.1
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5434}
       POSTGRES_DB: ${POSTGRES_DB:-netfinder}
       POSTGRES_USER: ${POSTGRES_USER:-netfinder}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production (or .env)}
       APP_SECRET_KEY: ${APP_SECRET_KEY:-}
       SCANNER_MODE: ${SCANNER_MODE:-nmap}
       NMAP_PRIVILEGED: "true"
