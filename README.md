@@ -215,7 +215,7 @@ must be on the same database schema revision (normal after `git pull` / migrate)
 
 ```
 backend/app/
-  scanner/          NmapScanner + MockScanner (same interface), nmap XML parser, scanner status
+  scanner/          NmapScanner + MockScanner (same interface), nmap XML parser, auto NIC bind (-e), scanner status
   core/runner.py    orchestration: targets -> discovery chunks -> service-scan batches -> compare -> snapshot
   core/compare.py   the single change-detection engine
   core/identity.py  device identity matching
@@ -299,6 +299,7 @@ IPs, CIDRs, ranges and hostnames; nmap always runs with a fixed argument list (`
 |---|---|
 | **nmap missing** - banner *Scanner unavailable* / *nmap not detected* | Install nmap and restart, or use `SCANNER_MODE=mock`. The app itself keeps working. In Docker it is preinstalled. |
 | Real scans find hosts but no MAC addresses / ping probes | nmap runs unprivileged. In Docker keep `network_mode: host` + `cap_add`. In dev, run as root or use mock mode. |
+| Discovery fails: `"unk0" is not an ethernet device` (VPN/Tailscale) | A tunnel stole the OS route for a LAN subnet. The scanner auto-binds `-e` to the overlapping local ethernet when one exists; restart the backend after updating. If targets only exist on the tunnel, it falls back to unprivileged TCP probes. |
 | **Database migration failure** at startup | Read the error in the log (`data/logs/app.log`). Dev: `npm run db:reset` recreates the SQLite DB. Prod: check `docker compose logs db` and the `POSTGRES_*` values. |
 | **Port already in use** (`8000` / `5173` / `8080`) | Stop the other process, or set `BACKEND_PORT` / `FRONTEND_PORT` in `.env` (dev) or `APP_PORT` (prod). |
 | **Backend unavailable** - UI shows *Backend unavailable* / Vite logs `ECONNREFUSED 127.0.0.1:8000` | The backend crashed or is still starting; check the `[backend]` lines in the `npm run dev` output. Try `npm run dev:backend` alone. `curl localhost:8000/api/health` must return `ok`. |
