@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select
 
 from . import __version__
 from .api import (
@@ -31,11 +33,13 @@ from .config import get_settings
 from .core.manager import manager
 from .core.scheduler import scheduler
 from .core.web_capture import web_capture_manager
-from .db import init_engine
+from .db import init_engine, session_scope
 from .logging_setup import setup_logging
 from .migrate import upgrade
+from .models import Network
 from .netutils import TargetError
 from .scanner import scanner_status
+from .scanner.nmap_iface import off_segment_networks
 from .seed import seed_dev
 
 log = logging.getLogger("app")
@@ -60,6 +64,8 @@ async def lifespan(app: FastAPI):
     if not st.nmap_detected:
         log.warning("nmap executable not found (NMAP_PATH=%s). Real network scans cannot run until nmap is "
                     "installed (e.g. apt-get install nmap). The application keeps working.", s.nmap_path)
+    if st.effective_mode == "nmap":
+        _warn_if_no_mac(s.nmap_path)
     seed_dev()
     if s.background_jobs:
         manager.start()
@@ -69,6 +75,25 @@ async def lifespan(app: FastAPI):
     scheduler.stop()
     web_capture_manager.stop()
     manager.stop()
+
+
+def _warn_if_no_mac(nmap_path: str) -> None:
+    """Say loudly at startup when no configured network is on a local segment: MAC, vendor and
+    MAC-based identity will be missing from every scan (e.g. Docker Desktop bridge networking)."""
+    with session_scope() as db:
+        cidrs = list(db.scalars(select(Network.cidr)))
+    exe = shutil.which(nmap_path)
+    if not cidrs or not exe:
+        return
+    off = off_segment_networks(exe, cidrs)
+    if len(off) < len(cidrs):
+        return
+    hint = (" This process runs in a container: on a Linux Docker host use host networking "
+            "(docker-compose.yml); bridge networking (docker-compose.desktop.yml, Docker Desktop) hides MACs."
+            if Path("/.dockerenv").exists() else "")
+    log.warning("MAC ADDRESSES UNAVAILABLE: none of the configured networks (%s) is on a local network interface, "
+                "so scans cannot report MAC, vendor or MAC-based device identity (expected for routed subnets).%s",
+                ", ".join(off), hint)
 
 
 app = FastAPI(title="Network Finder", version=__version__, lifespan=lifespan,

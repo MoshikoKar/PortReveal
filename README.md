@@ -11,7 +11,7 @@ attempts or intrusive NSE scripts are ever run.
 
 | | Development | Production |
 |---|---|---|
-| Start | `npm install && npm run dev` | `docker compose up -d` |
+| Start | `npm install && npm run dev` | Linux: `docker compose up -d` · Windows/macOS: see [Production](#production-docker-compose) |
 | Database | SQLite `./data/dev.db` (auto-created) | PostgreSQL (container) |
 | Scanner | mock (default) or local nmap | nmap inside the app container |
 | Docker needed | no | yes |
@@ -140,10 +140,17 @@ To try PostgreSQL in development, point `DATABASE_URL` at any PostgreSQL server 
 
 Requirements:
 
-- Docker Engine + Compose plugin. Default stack uses **bridge networking** and publishes
-  `APP_PORT` (works on Docker Desktop and Linux).
-- For **ARP/MAC** discovery, run on a **Linux** VM/host inside the monitored network and
-  load `docker-compose.linux.yml` (host networking). Docker Desktop cannot do that.
+- Docker Engine + Compose plugin. Pick the Compose file for your Docker:
+
+  | Docker | Compose files | Networking | MAC / vendor |
+  |---|---|---|---|
+  | **Linux** Docker Engine (recommended) | `docker-compose.yml` | host | yes, on local segments |
+  | **Docker Desktop** on **Windows** or macOS | `docker-compose.yml` + `docker-compose.desktop.yml` | bridge (NAT) | **no** |
+
+  Docker Desktop runs containers in a VM, so host networking cannot reach your LAN; the desktop
+  overlay switches to bridge networking and publishes `APP_PORT`. IPs and ports are still scanned,
+  but MAC addresses, vendors and MAC-based device identity are unavailable. The app logs
+  `MAC ADDRESSES UNAVAILABLE` at startup and adds a note to every scan when that is the case.
 - **Build egress:** `storage.googleapis.com:443` must be reachable from the host (Playwright
   Chromium). Also needed: package indexes (Debian/PyPI/npm) or your usual mirrors. If the
   host uses an HTTP proxy, set `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` in `.env.production`.
@@ -156,15 +163,15 @@ Requirements:
 git clone <repo> network_finder && cd network_finder
 cp .env.production.example .env.production
 #   edit .env.production: set POSTGRES_PASSWORD (required), APP_SECRET_KEY (openssl rand -hex 32), TZ, APP_PORT
-docker compose -f docker-compose.yml --env-file .env.production up -d --build
-docker compose -f docker-compose.yml --env-file .env.production ps            # app should become "healthy"
-docker compose -f docker-compose.yml --env-file .env.production logs -f app
+docker compose --env-file .env.production up -d --build          # Linux Docker host (host networking)
+docker compose --env-file .env.production ps                       # app should become "healthy"
+docker compose --env-file .env.production logs -f app
 ```
 
-Linux host with real LAN ARP/MAC (optional overlay):
+**Windows (Docker Desktop)** - add the desktop overlay to every `docker compose` command:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.linux.yml --env-file .env.production up -d --build
+docker compose -f docker-compose.yml -f docker-compose.desktop.yml --env-file .env.production up -d --build
 ```
 
 Open `http://<host-ip>:8081` and complete the **first-run wizard**: administrator → network scope(s) → exclusions →
@@ -174,13 +181,14 @@ What Compose provides:
 
 - `db`: PostgreSQL 16, data in the `pgdata` volume, listening on `127.0.0.1` only.
 - `app`: built frontend + FastAPI + **nmap** (installed in the image), data in the `appdata` volume (`/data`).
-  By default it uses a **bridge** network and publishes `APP_PORT`. On bridge, scans leave via NAT
-  (no MACs). On Linux, add `docker-compose.linux.yml` for **host networking** plus `NET_RAW`/`NET_ADMIN`
-  so nmap can do ARP/ICMP/SYN discovery and see MAC addresses on the local segment. The process runs
-  as a non-root user; nmap gets raw-socket access through file capabilities.
+  By default it uses **host networking** plus `NET_RAW`/`NET_ADMIN` so nmap can do ARP/ICMP/SYN
+  discovery and see MAC addresses on the local segment; it listens on `APP_PORT` directly and reaches
+  Postgres on `127.0.0.1:POSTGRES_PORT`. With `docker-compose.desktop.yml` it uses a bridge network and
+  publishes `APP_PORT` instead (no MACs). The process runs as a non-root user; nmap gets raw-socket
+  access through file capabilities.
 - One application process by design: the scan queue and the scheduler live inside it. Do not run several replicas.
 
-Upgrade: `git pull && docker compose -f docker-compose.yml --env-file .env.production up -d --build` (migrations run automatically).
+Upgrade: `git pull && docker compose --env-file .env.production up -d --build` (add `-f docker-compose.yml -f docker-compose.desktop.yml` on Docker Desktop; migrations run automatically).
 
 **HTTPS / reverse proxy.** Put nginx, Caddy or Traefik in front, set `COOKIE_SECURE=true`, and set
 `FORWARDED_ALLOW_IPS` to the proxy IP. Example Caddy: `netfinder.corp.local { reverse_proxy 127.0.0.1:8081 }`.
@@ -314,7 +322,7 @@ IPs, CIDRs, ranges and hostnames; nmap always runs with a fixed argument list (`
 | Symptom | Fix |
 |---|---|
 | **nmap missing** - banner *Scanner unavailable* / *nmap not detected* | Install nmap and restart, or use `SCANNER_MODE=mock`. The app itself keeps working. In Docker it is preinstalled. |
-| Real scans find hosts but no MAC addresses / ping probes | nmap runs unprivileged. In Docker keep `network_mode: host` + `cap_add`. In dev, run as root or use mock mode. |
+| Real scans find hosts but no MAC addresses / ping probes | The scan note and the `MAC ADDRESSES UNAVAILABLE` startup warning say why: the hosts are not on a segment local to the scanner (routed subnet, VPN, Docker Desktop bridge) or nmap runs unprivileged. On a Linux Docker host use `docker-compose.yml` alone (host networking + `cap_add`). In dev, run as root or use mock mode. |
 | Discovery fails: `"unk0" is not an ethernet device` (VPN/Tailscale) | A tunnel stole the OS route for a LAN subnet. The scanner auto-binds `-e` to the overlapping local ethernet when one exists; restart the backend after updating. If targets only exist on the tunnel, it falls back to unprivileged TCP probes. |
 | **Database migration failure** at startup | Read the error in the log (`data/logs/app.log`). Dev: `npm run db:reset` recreates the SQLite DB. Prod: check `docker compose logs db` and the `POSTGRES_*` values. |
 | **Port already in use** (`8000` / `5173` / `8080`) | Stop the other process, or set `BACKEND_PORT` / `FRONTEND_PORT` in `.env` (dev) or `APP_PORT` (prod). |

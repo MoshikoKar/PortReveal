@@ -1,0 +1,18 @@
+# Docker Desktop (Windows / macOS) overlay: bridge networking with a published APP_PORT.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml --env-file .env.production up -d --build
+#
+# Docker Desktop runs containers in a VM, so host networking cannot reach the LAN. On bridge, scans
+# leave through NAT: routed TCP/ICMP works, but MAC addresses and vendors are NOT visible (the app logs
+# a "MAC ADDRESSES UNAVAILABLE" warning at startup and adds a note to each scan). On a Linux Docker
+# host use docker-compose.yml alone (host networking). Windows Firewall must allow inbound TCP on APP_PORT.
+
+services:
+  app:
+    network_mode: !reset null
+    ports:
+      - "${APP_PORT:-8081}:${APP_PORT:-8081}"
+    environment:
+      # Bridge network: reach Postgres by service name on the container port.
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"

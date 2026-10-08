@@ -1,10 +1,10 @@
-# Default Compose stack (bridge network + published APP_PORT).
-# Works on Docker Desktop (Windows/macOS) and any Linux host:
-#   docker compose -f docker-compose.yml --env-file .env.production up -d --build
-#   (or: docker compose --env-file .env.production up -d --build)
+# Default Compose stack for a Linux Docker host: the app uses HOST networking so nmap sees the real
+# LAN (ARP discovery, MAC addresses, vendors - device identity depends on them).
+#   docker compose --env-file .env.production up -d --build
 #
-# For real LAN ARP/MAC discovery on a Linux Docker host, also load the linux overlay:
-#   docker compose -f docker-compose.yml -f docker-compose.linux.yml --env-file .env.production up -d --build
+# Docker Desktop (Windows/macOS) cannot share the host's LAN interfaces. Use the bridge overlay there
+# (scans go out through NAT: IPs and ports work, MAC addresses and vendors are unavailable):
+#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml --env-file .env.production up -d --build
 #
 # Build-time egress: allow storage.googleapis.com:443 (Playwright Chromium),
 # or set HTTP_PROXY / HTTPS_PROXY in .env.production if builds go through a proxy.
@@ -47,8 +47,7 @@ services:
         no_proxy: ${NO_PROXY:-}
     image: network-finder:latest
     restart: unless-stopped
-    ports:
-      - "${APP_PORT:-8081}:${APP_PORT:-8081}"
+    network_mode: host  # listens on APP_PORT directly on the host
     cap_add:
       - NET_RAW
       - NET_ADMIN
@@ -60,9 +59,9 @@ services:
     environment:
       APP_ENV: production
       APP_PORT: ${APP_PORT:-8081}
-      # Bridge network: reach Postgres by service name on the container port.
-      POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
+      # Host network: reach Postgres through its host-published port (127.0.0.1 only).
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: ${POSTGRES_PORT:-5434}
       POSTGRES_DB: ${POSTGRES_DB:-netfinder}
       POSTGRES_USER: ${POSTGRES_USER:-netfinder}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production (or .env)}

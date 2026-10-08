@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import BigInteger, Integer, cast, func, literal, or_, select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
@@ -8,8 +9,11 @@ from sqlalchemy.sql.elements import ColumnElement
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
 from ..core.mockdata import device_visible, event_visible, scan_visible
+from ..core.port_profiles import PROFILE_NONE, SOURCE_MANUAL
+from ..core.services import shown_service_sql
 from ..db import get_db
 from ..models import Device, DeviceIP, DevicePort, Event, Network, Scan, ScanHost, User
+from ..scanner.known_ports import PORT_PROFILES
 from .common import Paging, device_summary, event_out, like_pattern, paged, port_out
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
@@ -30,7 +34,7 @@ def search_conditions(q: str):
         Device.os_name.ilike(like, escape="\\"),
         Device.mac.ilike(like_pattern(q.replace("-", ":").upper()), escape="\\"),
         Device.id.in_(select(DeviceIP.device_id).where(DeviceIP.ip.like(like, escape="\\"))),
-        Device.id.in_(open_ports.where(or_(DevicePort.service.ilike(like, escape="\\"),
+        Device.id.in_(open_ports.where(or_(shown_service_sql().ilike(like, escape="\\"),
                                            DevicePort.product.ilike(like, escape="\\")))),
     ]
     port_txt = q.lower().removeprefix("tcp/").removeprefix("port:")
@@ -60,7 +64,7 @@ def _device_filter_conds(
                                                                       DevicePort.port == port)))
     if service:
         conds.append(Device.id.in_(select(DevicePort.device_id).where(DevicePort.is_open.is_(True),
-                                                                      DevicePort.service == service)))
+                                                                      shown_service_sql() == service)))
     return conds
 
 
@@ -187,6 +191,9 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "missed_scans": d.missed_scans,
         "last_port_scan_at": d.last_port_scan_at,
         "full_scanned_at": d.full_scanned_at,
+        "port_profile": d.port_profile,
+        "port_profile_source": d.port_profile_source,
+        "port_profiles": sorted(PORT_PROFILES),
         "ports": [port_out(p) for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
         "ips": [{"ip": i.ip, "first_seen": i.first_seen, "last_seen": i.last_seen} for i in d.ips],
         "previous_ips": [i.ip for i in d.ips if i.ip != d.current_ip],
@@ -220,6 +227,25 @@ def device_scans(uuid: str, paging: Paging = Depends(), db: Session = Depends(ge
         "created_at": sh.created_at, "ip": sh.ip, "status": sh.status, "open_ports": sh.open_ports,
     } for sh, s in rows]
     return paged(items, total, paging)
+
+
+class DevicePatch(BaseModel):
+    # A PORT_PROFILES key, "none" (never apply extra ports), or null (back to automatic detection).
+    port_profile: str | None
+
+
+@router.patch("/{uuid}")
+def update_device(uuid: str, body: DevicePatch, request: Request, db: Session = Depends(get_db),
+                  user: User = Depends(require_admin)):
+    if body.port_profile is not None and body.port_profile not in (*PORT_PROFILES, PROFILE_NONE):
+        raise HTTPException(422, f"Unknown port profile: {body.port_profile}")
+    d = _get(db, uuid)
+    d.port_profile = body.port_profile
+    d.port_profile_source = SOURCE_MANUAL if body.port_profile else None
+    audit(db, user.username, "device.port_profile", d.hostname or d.current_ip,
+          {"uuid": d.uuid, "port_profile": body.port_profile}, client_ip(request))
+    db.commit()
+    return {"ok": True}
 
 
 @router.delete("/{uuid}")

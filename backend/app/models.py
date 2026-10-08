@@ -158,6 +158,14 @@ class Device(Base):
     last_port_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     full_scanned_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     port_scan_failed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Why the latest port scan of this device failed, and in which scan (cleared by the next good one).
+    scan_failure: Mapped[str | None] = mapped_column(Text)
+    scan_failure_scan_id: Mapped[int | None] = mapped_column(Integer)
+    # Extra port profile (known_ports.PORT_PROFILES key, or "none" = disabled by an admin), what
+    # verified it, and the last port scan that covered the profile's ports.
+    port_profile: Mapped[str | None] = mapped_column(String(20))
+    port_profile_source: Mapped[str | None] = mapped_column(String(40))
+    port_profile_scan_id: Mapped[int | None] = mapped_column(Integer)
     # Correlated absence: local days on which the night scan and every presence scan missed it.
     absence_days: Mapped[int] = mapped_column(Integer, default=0)
     absence_counted_on: Mapped[date | None] = mapped_column(Date)
