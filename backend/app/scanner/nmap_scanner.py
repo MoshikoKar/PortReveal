@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..netutils import PortScope
 from .known_ports import AI_LLM_DISCOVERY_TCP_PORTS, STANDARD_EXTRA_TCP_PORTS, merge_port_scope
+from .nmap_iface import resolve_bind
 from .nmap_parser import parse_nmap_xml
 from .types import (
     HostObservation,
@@ -164,22 +165,26 @@ class NmapScanner:
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
     def discover(self, targets: list[str], ctx: ScanContext) -> StageResult:
-        args = build_discovery_args(self.privileged, self.timing)
-        run = self._run(args, targets, discovery_timeout(targets, self.timing), ctx, "discovery")
+        bind = resolve_bind(self.exe, targets, self.privileged)
+        args = build_discovery_args(bind.privileged, self.timing)
+        run = self._run(args, targets, discovery_timeout(targets, self.timing), ctx, "discovery",
+                        device=bind.device)
         return StageResult(hosts=run.hosts)
 
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:
-        args = build_port_args(self.privileged, profile)
+        bind = resolve_bind(self.exe, ips, self.privileged)
+        args = build_port_args(bind.privileged, profile)
         timeout = profile.host_timeout_minutes * 60 + 15 * 60
-        run = self._run(args, ips, timeout, ctx, "full" if profile.full else "ports")
+        run = self._run(args, ips, timeout, ctx, "full" if profile.full else "ports",
+                        device=bind.device)
         by_ip = {h.ip: h for h in run.hosts}
         port_scope = run.port_scope or ("1-65535" if profile.full else None)
 
         # --top-ports misses uncommon local AI/LLM API and web-app dev-server ports; scan them too.
         if not profile.full and STANDARD_EXTRA_TCP_PORTS:
-            extra_args = build_fixed_port_args(self.privileged, profile, STANDARD_EXTRA_TCP_PORTS)
+            extra_args = build_fixed_port_args(bind.privileged, profile, STANDARD_EXTRA_TCP_PORTS)
             extra_timeout = min(timeout, EXTRA_PORTS_TIMEOUT_S)
-            extra = self._run(extra_args, ips, extra_timeout, ctx, "ports-extra")
+            extra = self._run(extra_args, ips, extra_timeout, ctx, "ports-extra", device=bind.device)
             for h in extra.hosts:
                 if h.ip in by_ip:
                     _merge_host_ports(by_ip[h.ip], h)
@@ -197,12 +202,17 @@ class NmapScanner:
                 h.port_scan_failed = True
             hosts.append(h)
         return StageResult(hosts=hosts, port_scope=port_scope)
-    def _run(self, args: list[str], targets: list[str], timeout: float, ctx: ScanContext, label: str):
+
+    def _run(self, args: list[str], targets: list[str], timeout: float, ctx: ScanContext, label: str,
+             device: str | None = None):
         ctx.check_cancelled()
         fd, target_file = tempfile.mkstemp(prefix=f"scan{ctx.scan_id}_", suffix=".txt", dir=self.tmp_dir)
         with os.fdopen(fd, "w") as fh:
             fh.write("\n".join(targets) + "\n")
-        cmd = [self.exe, *args, "-iL", target_file, "-oX", "-"]
+        bind = ["-e", device] if device else []
+        if device:
+            log.info("scan %s: binding nmap %s to interface %s", ctx.scan_id, label, device)
+        cmd = [self.exe, *args, *bind, "-iL", target_file, "-oX", "-"]
         log.debug("scan %s: running %s", ctx.scan_id, " ".join(cmd))
         started = time.monotonic()
         try:
