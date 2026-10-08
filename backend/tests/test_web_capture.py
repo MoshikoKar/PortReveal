@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.retention import run_retention
 from app.core.web_capture.classify import (
@@ -534,3 +534,47 @@ def test_web_hosts_lists_every_usable_service(db, client):
     assert set(svcs) == {443, 8080}
     assert svcs[443]["ports"] == [80, 443]
     assert svcs[8080]["page_count"] == 2 and svcs[8080]["has_login"]
+
+
+def test_auto_web_capture_after_scan_for_new_web_host(db):
+    put_section(db, WebCaptureSettings(enabled=True, auto_after_scan=True, auto_only_new_or_changed=True,
+                                       force_mock=True))
+    db.commit()
+    net = make_network(db, "10.0.0.0/24", name="AutoCap")
+    s = scan(ScriptedScanner([host("10.0.0.50", [port(443, "https")])]), network_id=net.id)
+    assert s.status == "completed"
+    jobs = list(db.scalars(select(WebCapture).order_by(WebCapture.id)).all())
+    assert len(jobs) == 1
+    assert jobs[0].requested_by == "auto-scan"
+    assert "10.0.0.50" in jobs[0].targets
+
+
+def test_auto_web_capture_skips_when_disabled(db):
+    put_section(db, WebCaptureSettings(enabled=True, auto_after_scan=False, force_mock=True))
+    db.commit()
+    net = make_network(db, "10.0.0.0/24", name="NoAuto")
+    scan(ScriptedScanner([host("10.0.0.51", [port(80, "http")])]), network_id=net.id)
+    assert db.scalar(select(func.count(WebCapture.id))) == 0
+
+
+def test_auto_web_capture_skips_unchanged_hosts(db):
+    put_section(db, WebCaptureSettings(enabled=True, auto_after_scan=True, auto_only_new_or_changed=True,
+                                       force_mock=True))
+    db.commit()
+    net = make_network(db, "10.0.0.0/24", name="StableWeb")
+    hosts = [host("10.0.0.52", [port(443, "https")])]
+    scan(ScriptedScanner(hosts), network_id=net.id)
+    assert db.scalar(select(func.count(WebCapture.id))) == 1
+    # Simulate a finished capture so the endpoint is no longer "never captured"
+    job = db.scalar(select(WebCapture))
+    job.status = WEB_CAPTURE_COMPLETED
+    dev = db.scalar(select(Device).where(Device.current_ip == "10.0.0.52"))
+    port_id = next(p.id for p in dev.ports if p.port == 443)
+    db.add(WebPage(
+        capture_id=job.id, device_id=dev.id, device_port_id=port_id, ip="10.0.0.52", port=443,
+        scheme="https", host_used="10.0.0.52", kind="home", url="https://10.0.0.52/",
+        screenshot_status="captured",
+    ))
+    db.commit()
+    scan(ScriptedScanner(hosts), network_id=net.id)
+    assert db.scalar(select(func.count(WebCapture.id))) == 1  # unchanged inventory: no second job

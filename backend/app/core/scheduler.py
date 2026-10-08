@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 
 from ..db import session_scope, utcnow
-from ..models import SCAN_STANDARD, Network, Scan
+from ..models import SCAN_DISCOVERY, SCAN_STANDARD, Network, Scan
 from ..settings_store import RetentionSettings, ScanSettings, ScheduleSettings, get_section, get_value, set_value
 from .manager import create_scan, manager, network_has_active_scan
 from .retention import run_retention
@@ -49,19 +49,33 @@ def next_run(cfg: ScheduleSettings, now: datetime | None = None, last_run_date: 
     return None
 
 
-def enqueue_scheduled_scans(db) -> list[int]:
+def _enqueue_network_scans(db, net: Network, *, discovery_before: bool) -> list[int]:
+    """Queue discovery (optional) then standard for one network. Discovery is queued first so
+    the serial scan worker registers new hosts before the longer service scan."""
+    ids: list[int] = []
+    if discovery_before:
+        disc = create_scan(db, SCAN_DISCOVERY, trigger="scheduled", network=net, requested_by="scheduler")
+        ids.append(disc.id)
+    scan = create_scan(db, SCAN_STANDARD, trigger="scheduled", network=net, requested_by="scheduler")
+    ids.append(scan.id)
+    return ids
+
+
+def enqueue_scheduled_scans(db, cfg: ScheduleSettings | None = None) -> list[int]:
+    cfg = cfg or get_section(db, ScheduleSettings)
     ids = []
     for net in db.scalars(select(Network).where(Network.enabled.is_(True)).order_by(Network.id)).all():
         if network_has_active_scan(db, net.id):
             log.info("scheduled scan for %s skipped: a scan is already queued/running", net.name)
             continue
-        scan = create_scan(db, SCAN_STANDARD, trigger="scheduled", network=net, requested_by="scheduler")
-        ids.append(scan.id)
+        ids.extend(_enqueue_network_scans(db, net, discovery_before=cfg.discovery_before_standard))
     return ids
 
 
-def enqueue_baseline_retries(db, now_utc: datetime | None = None) -> list[int]:
+def enqueue_baseline_retries(db, now_utc: datetime | None = None,
+                             cfg: ScheduleSettings | None = None) -> list[int]:
     now_utc = now_utc or utcnow()
+    cfg = cfg or get_section(db, ScheduleSettings)
     ids = []
     for net in db.scalars(select(Network).where(Network.enabled.is_(True), Network.baseline_scan_id.is_(None))
                           .order_by(Network.id)).all():
@@ -73,9 +87,9 @@ def enqueue_baseline_retries(db, now_utc: datetime | None = None) -> list[int]:
                          .where(Scan.network_id == net.id, Scan.scan_type == SCAN_STANDARD))
         if last is not None and last > now_utc - BASELINE_RETRY_AFTER:
             continue
-        scan = create_scan(db, SCAN_STANDARD, trigger="scheduled", network=net, requested_by="scheduler")
-        log.info("network %s has no baseline yet: queued baseline scan %s", net.name, scan.id)
-        ids.append(scan.id)
+        queued = _enqueue_network_scans(db, net, discovery_before=cfg.discovery_before_standard)
+        log.info("network %s has no baseline yet: queued scans %s", net.name, queued)
+        ids.extend(queued)
     return ids
 
 
@@ -96,12 +110,12 @@ def tick(now: datetime | None = None) -> None:
         elif cfg.enabled and now.weekday() in cfg.days and state.get("last_scan_date") != today:
             due = _due_today(cfg, now)
             if due <= now < due + CATCH_UP_WINDOW:
-                queued = enqueue_scheduled_scans(db)
+                queued = enqueue_scheduled_scans(db, cfg)
                 state["last_scan_date"] = today
                 changed = True
                 log.info("scheduled scan triggered (%s): queued scans %s", cfg.time, queued)
         if cfg.enabled and "initialized" in state:
-            queued += enqueue_baseline_retries(db)
+            queued += enqueue_baseline_retries(db, cfg=cfg)
 
         rt = now.replace(hour=RETENTION_TIME[0], minute=RETENTION_TIME[1], second=0, microsecond=0)
         if now >= rt and state.get("last_retention_date") != today:

@@ -113,7 +113,8 @@ def test_notifications_sent_once_per_event(db, monkeypatch):
 
 
 def test_schedule_next_run_and_tick(db):
-    cfg = ScheduleSettings(enabled=True, time="02:00", days=[0, 1, 2, 3, 4, 5, 6])
+    cfg = ScheduleSettings(enabled=True, time="02:00", days=[0, 1, 2, 3, 4, 5, 6],
+                           discovery_before_standard=True)
     now = datetime(2026, 10, 5, 1, 0).astimezone()
     assert next_run(cfg, now).hour == 2 and next_run(cfg, now).date() == now.date()
     later = now.replace(hour=3)
@@ -125,10 +126,22 @@ def test_schedule_next_run_and_tick(db):
     db.commit()
     tick(now)  # first tick initializes state without catching up
     tick(now.replace(hour=2, minute=1))
-    assert db.scalar(select(func.count(Scan.id))) == 1
+    scans = list(db.scalars(select(Scan).order_by(Scan.id)).all())
+    assert [(s.scan_type, s.trigger) for s in scans] == [("discovery", "scheduled"), ("standard", "scheduled")]
     tick(now.replace(hour=2, minute=5))  # same day: no duplicate
-    assert db.scalar(select(func.count(Scan.id))) == 1
+    assert db.scalar(select(func.count(Scan.id))) == 2
     assert enqueue_scheduled_scans(db) == []  # already queued for that network
+
+
+def test_schedule_skips_discovery_when_disabled(db):
+    cfg = ScheduleSettings(enabled=True, time="02:00", days=[0, 1, 2, 3, 4, 5, 6],
+                           discovery_before_standard=False)
+    put_section(db, cfg)
+    make_network(db)
+    db.commit()
+    ids = enqueue_scheduled_scans(db, cfg)
+    assert len(ids) == 1
+    assert db.get(Scan, ids[0]).scan_type == "standard"
 
 
 def test_network_without_baseline_is_rescanned_until_baseline_exists(db):
@@ -141,16 +154,18 @@ def test_network_without_baseline_is_rescanned_until_baseline_exists(db):
     net.created_at = now - timedelta(days=2)
     db.commit()
     first = enqueue_baseline_retries(db, now)
-    assert len(first) == 1
+    assert len(first) == 2  # discovery then standard
+    assert [db.get(Scan, i).scan_type for i in first] == ["discovery", "standard"]
     assert enqueue_baseline_retries(db, now) == []  # already queued: never stack a second one
 
-    s = db.get(Scan, first[0])
-    s.status = "partial"
+    for sid in first:
+        db.get(Scan, sid).status = "completed" if db.get(Scan, sid).scan_type == "discovery" else "partial"
     db.commit()
     assert enqueue_baseline_retries(db, now + timedelta(hours=1)) == []  # too soon after the last attempt
-    assert len(enqueue_baseline_retries(db, now + timedelta(hours=13))) == 1
+    assert len(enqueue_baseline_retries(db, now + timedelta(hours=13))) == 2
 
     db.query(Scan).update({Scan.status: "completed"})
+    s = db.get(Scan, first[-1])
     net.baseline_scan_id, net.baseline_at = s.id, now
     db.commit()
     assert enqueue_baseline_retries(db, now + timedelta(days=5)) == []  # baseline done: no more retries

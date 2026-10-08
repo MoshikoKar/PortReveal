@@ -250,6 +250,8 @@ export interface WebCapture {
 
 export interface WebCaptureSettings {
   enabled: boolean;
+  auto_after_scan: boolean;
+  auto_only_new_or_changed: boolean;
   max_addresses: number;
   max_endpoints: number;
   max_pages_per_endpoint: number;
@@ -326,6 +328,7 @@ export interface ScheduleSettings {
   enabled: boolean;
   time: string;
   days: number[];
+  discovery_before_standard: boolean;
   next_run?: string | null;
 }
 

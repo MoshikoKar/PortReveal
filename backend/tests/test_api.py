@@ -168,10 +168,13 @@ def test_secrets_are_write_only(client):
 
 def test_schedule_update_applies_without_restart(client):
     setup_admin(client)
-    r = client.put("/api/settings/schedule", json={"enabled": True, "time": "23:59", "days": [0, 1, 2, 3, 4, 5, 6]},
+    r = client.put("/api/settings/schedule",
+                   json={"enabled": True, "time": "23:59", "days": [0, 1, 2, 3, 4, 5, 6],
+                         "discovery_before_standard": True},
                    headers=csrf(client))
     assert r.status_code == 200 and r.json()["next_run"]
-    assert client.get("/api/system/status").json()["scans"]["schedule"]["time"] == "23:59"
+    sched = client.get("/api/system/status").json()["scans"]["schedule"]
+    assert sched["time"] == "23:59" and sched["discovery_before_standard"] is True
     assert client.put("/api/settings/schedule", json={"time": "25:00"}, headers=csrf(client)).status_code == 422
 
 
