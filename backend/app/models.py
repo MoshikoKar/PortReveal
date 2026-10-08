@@ -104,7 +104,7 @@ class UserSession(Base):
     csrf_token: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-    expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)  # retention purge
     ip: Mapped[str | None] = mapped_column(String(64))
     user: Mapped[User] = relationship(lazy="joined")
 
@@ -152,7 +152,7 @@ class Device(Base):
     os_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(20), default=DEVICE_ACTIVE, index=True)
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
-    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)  # retention purge
     missed_scans: Mapped[int] = mapped_column(Integer, default=0)
     last_port_scan_id: Mapped[int | None] = mapped_column(Integer)
     last_port_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
@@ -345,7 +345,7 @@ class WebCapture(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     mock_mode: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    pages: Mapped[list["WebPage"]] = relationship(
+    pages: Mapped[list[WebPage]] = relationship(
         back_populates="capture", cascade="all, delete-orphan", order_by="WebPage.id"
     )
 

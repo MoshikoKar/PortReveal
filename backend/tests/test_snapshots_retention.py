@@ -184,3 +184,11 @@ def test_network_without_baseline_is_rescanned_until_baseline_exists(db):
     net.baseline_scan_id, net.baseline_at = s.id, now
     db.commit()
     assert enqueue_baseline_retries(db, now + timedelta(days=5)) == []  # baseline done: no more retries
+
+
+def test_retention_filter_columns_are_indexed(db):
+    from sqlalchemy import inspect
+
+    insp = inspect(db.get_bind())
+    assert "ix_devices_last_seen" in {i["name"] for i in insp.get_indexes("devices")}
+    assert "ix_sessions_expires_at" in {i["name"] for i in insp.get_indexes("sessions")}

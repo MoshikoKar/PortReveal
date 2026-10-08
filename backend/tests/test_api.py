@@ -209,3 +209,32 @@ def test_mock_data_can_be_hidden(client):
     client.put("/api/mock-data", json={"hidden": False}, headers=h)
     assert client.get("/api/devices").json()["total"] == 15
     assert client.get("/api/scans").json()["total"] == 1
+
+
+def test_exposed_ports_cap_and_uuid_cap(client, monkeypatch):
+    import app.api.devices as devices_api
+
+    setup_admin(client)
+    h = csrf(client)
+    net = client.post("/api/networks", json={"name": "Mock Lab", "cidr": "10.99.0.0/24"}, headers=h).json()
+    scan_id = client.post("/api/scans", json={"scan_type": "standard", "network_ids": [net["id"]]},
+                          headers=h).json()["scans"][0]["id"]
+    assert run_scan(scan_id) == "completed"
+
+    full = client.get("/api/exposed-ports").json()
+    assert full["truncated"] is False and full["total"] == len(full["ports"]) > 3
+    dash = client.get("/api/dashboard").json()
+    assert dash["exposed_ports_total"] == full["total"]
+    assert dash["top_ports"] == [{k: r[k] for k in ("protocol", "port", "count", "service")}
+                                 for r in full["ports"][:12]]
+    capped = client.get("/api/exposed-ports", params={"limit": 3, "network_id": net["id"]}).json()
+    assert capped == {"ports": full["ports"][:3], "total": full["total"], "truncated": True}
+    assert client.get("/api/exposed-ports", params={"limit": 0}).status_code == 422
+    assert client.get("/api/exposed-ports", params={"limit": 5001}).status_code == 422
+
+    listed = client.get("/api/devices", params={"sort": "hostname", "order": "desc", "page_size": 500}).json()
+    uuids = client.get("/api/devices/uuids", params={"sort": "hostname", "order": "desc"}).json()
+    assert uuids == {"uuids": [d["uuid"] for d in listed["items"]], "total": listed["total"]}
+    monkeypatch.setattr(devices_api, "MAX_UUIDS", listed["total"] - 1)
+    r = client.get("/api/devices/uuids")
+    assert r.status_code == 422 and f"({listed['total']})" in r.json()["detail"]

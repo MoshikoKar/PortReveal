@@ -39,19 +39,60 @@ def _event_counts(db: Session, since) -> dict[str, int]:
     return {t: n for t, n in rows}
 
 
-def exposed_ports(db: Session, network_id: int | None = None) -> list[dict]:
-    """Open ports ranked by host count, labelled with the service most hosts report for them."""
-    svc = func.coalesce(DevicePort.service, "unknown")
+EXPOSED_PORTS_DEFAULT_LIMIT = 1000
+EXPOSED_PORTS_MAX_LIMIT = 5000
+
+
+def _open_port_conds(db: Session, network_id: int | None) -> list:
+    conds = [DevicePort.is_open.is_(True), device_visible(db)]
+    if network_id is not None:
+        conds.append(Device.network_id == network_id)
+    return conds
+
+
+def count_exposed_ports(db: Session, network_id: int | None = None) -> int:
+    """Distinct open protocol/port pairs (the size of the uncapped exposed_ports() list)."""
+    distinct_ports = (
+        select(DevicePort.protocol, DevicePort.port)
+        .join(Device, Device.id == DevicePort.device_id)
+        .where(*_open_port_conds(db, network_id))
+        .group_by(DevicePort.protocol, DevicePort.port)
+        .subquery()
+    )
+    return db.scalar(select(func.count()).select_from(distinct_ports)) or 0
+
+
+def exposed_ports(db: Session, network_id: int | None = None, limit: int | None = None) -> list[dict]:
+    """Open ports ranked by host count, labelled with the service most hosts report for them.
+    With `limit`, only the top-ranked ports are aggregated per service (ranking done in SQL)."""
+    conds = _open_port_conds(db, network_id)
+    # literal_column: keeps the SELECT and GROUP BY coalesce() identical on PostgreSQL (see dashboard)
+    svc = func.coalesce(DevicePort.service, literal_column("'unknown'"))
     q = (
         select(DevicePort.protocol, DevicePort.port, svc, func.count(DevicePort.id))
         .join(Device, Device.id == DevicePort.device_id)
-        .where(DevicePort.is_open.is_(True), device_visible(db))
+        .where(*conds)
         .group_by(DevicePort.protocol, DevicePort.port, svc)
     )
-    if network_id is not None:
-        q = q.where(Device.network_id == network_id)
+    top: set[tuple[str, int]] | None = None
+    if limit is not None:
+        # Rank in its own query, then aggregate only those ports. Joining the ranked subquery instead
+        # made SQLite re-run it per row (~15 s on a few thousand ports).
+        top = set(db.execute(
+            select(DevicePort.protocol, DevicePort.port)
+            .join(Device, Device.id == DevicePort.device_id)
+            .where(*conds)
+            .group_by(DevicePort.protocol, DevicePort.port)
+            .order_by(func.count(DevicePort.id).desc(), DevicePort.protocol, DevicePort.port)
+            .limit(limit)
+        ).tuples().all())
+        if not top:
+            return []
+        q = q.where(DevicePort.port.in_({port for _, port in top}))
     by_port: dict[tuple[str, int], dict] = {}
     for proto, port, service, n in db.execute(q).all():
+        if top is not None and (proto, port) not in top:
+            continue  # same port number, other protocol, outside the top set
         # one row per device/protocol/port, so per-service counts add up to the host count
         row = by_port.setdefault((proto, port), {"protocol": proto, "port": port, "count": 0, "services": []})
         row["services"].append({"service": service, "count": n})
@@ -64,9 +105,13 @@ def exposed_ports(db: Session, network_id: int | None = None) -> list[dict]:
 
 
 @router.get("/exposed-ports")
-def list_exposed_ports(network_id: int | None = Query(None), db: Session = Depends(get_db),
-                       user: User = Depends(current_user)):
-    return {"ports": exposed_ports(db, network_id)}
+def list_exposed_ports(network_id: int | None = Query(None),
+                       limit: int = Query(EXPOSED_PORTS_DEFAULT_LIMIT, ge=1, le=EXPOSED_PORTS_MAX_LIMIT),
+                       db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Top `limit` ports by host count; `total` counts every distinct open port, `truncated` flags the cut."""
+    ports = exposed_ports(db, network_id, limit=limit)
+    total = count_exposed_ports(db, network_id) if len(ports) >= limit else len(ports)
+    return {"ports": ports, "total": total, "truncated": total > len(ports)}
 
 
 @router.get("/dashboard")
@@ -103,7 +148,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
         .order_by(func.count(DevicePort.id).desc())
         .limit(10)
     ).all()
-    all_ports = exposed_ports(db)
+    top_ports = exposed_ports(db, limit=12)
 
     since_day = (now - timedelta(days=30)).date()
     trend_rows = db.execute(
@@ -154,8 +199,8 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
         },
         "recent_events": [event_out(e) for e in recent],
         "top_services": [{"service": s, "count": n} for s, n in top_services],
-        "top_ports": [{k: r[k] for k in ("protocol", "port", "count", "service")} for r in all_ports[:12]],
-        "exposed_ports_total": len(all_ports),
+        "top_ports": [{k: r[k] for k in ("protocol", "port", "count", "service")} for r in top_ports],
+        "exposed_ports_total": count_exposed_ports(db),
         "trend": [{"date": d.isoformat(), "hosts_active": int(a or 0), "open_ports": int(o or 0)} for d, a, o in trend_rows],
         "networks": networks,
         "scans": scan_summary(db),

@@ -1,21 +1,32 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { del, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal } from '../../components/ui';
+import { Card, Empty, ErrorBox, Loading, Modal, confirmDiscard } from '../../components/ui';
 import { useApp } from '../../context';
 import type { Network } from '../../types';
 import { fmtTime, useApi } from '../../util';
 
 type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean };
 
-export function NetworksSettings({ compact }: { compact?: boolean }) {
+/** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it). */
+export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCount?: (n: number) => void }) {
   const { isAdmin } = useApp();
   const { data, error, loading, reload } = useApi<Network[]>('/networks');
+  useEffect(() => {
+    if (data) onCount?.(data.length);
+  }, [data, onCount]);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [initial, setInitial] = useState<Draft | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+
+  const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
+  const closeDraft = () => confirmDiscard(dirty) && setDraft(null);
 
   const save = async () => {
-    if (!draft) return;
+    if (!draft || saving) return;
     setSaveError(null);
+    setSaving(true);
     try {
       const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled };
       if (draft.id) await put(`/networks/${draft.id}`, body);
@@ -24,6 +35,8 @@ export function NetworksSettings({ compact }: { compact?: boolean }) {
       reload();
     } catch (e: any) {
       setSaveError(e.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -43,7 +56,7 @@ export function NetworksSettings({ compact }: { compact?: boolean }) {
     <Card
       title="Network scopes"
       flush
-      actions={isAdmin && <button className="btn primary sm" onClick={() => setDraft({ name: '', cidr: '', description: '', enabled: true })}>Add network</button>}
+      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ name: '', cidr: '', description: '', enabled: true })}>Add network</button>}
     >
       {!compact && (
         <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -66,7 +79,7 @@ export function NetworksSettings({ compact }: { compact?: boolean }) {
                   <td>{n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
                   {isAdmin && (
                     <td className="right nowrap">
-                      <button className="btn ghost sm" onClick={() => setDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled })}>Edit</button>
+                      <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled })}>Edit</button>
                       {n.baseline_at && <button className="btn ghost sm" onClick={() => resetBaseline(n)}>Reset baseline</button>}
                       <button className="btn ghost sm" onClick={() => remove(n)}>Delete</button>
                     </td>
@@ -81,7 +94,11 @@ export function NetworksSettings({ compact }: { compact?: boolean }) {
         <Modal
           title={draft.id ? 'Edit network' : 'Add network'}
           onClose={() => setDraft(null)}
-          footer={<><button className="btn ghost" onClick={() => setDraft(null)}>Cancel</button><button className="btn primary" onClick={save}>Save</button></>}
+          dirty={dirty}
+          footer={<>
+            <button className="btn ghost" onClick={closeDraft}>Cancel</button>
+            <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          </>}
         >
           <label className="field">Name<input type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Israel Office" /></label>
           <label className="field">CIDR<input type="text" value={draft.cidr} onChange={(e) => setDraft({ ...draft, cidr: e.target.value })} placeholder="10.10.0.0/16" />

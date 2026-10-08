@@ -21,10 +21,10 @@ from app.core.web_capture.classify import (
 from app.core.web_capture.inventory import find_web_endpoints, is_rtsp_service, is_web_service
 from app.core.web_capture.mock import mock_probe_endpoint, mock_rtsp_endpoint
 from app.core.web_capture.screenshot import meta_refresh_target
-from app.core.web_storage import captures_root, delete_capture_files
+from app.core.web_storage import captures_root
 from app.db import utcnow
 from app.main import app
-from app.models import Device, Exclusion, WEB_CAPTURE_COMPLETED, WEB_PAGE_STREAM, WebCapture, WebPage
+from app.models import WEB_CAPTURE_COMPLETED, WEB_PAGE_STREAM, Device, Exclusion, WebCapture, WebPage
 from app.settings_store import WebCaptureSettings, put_section
 from tests.helpers import ScriptedScanner, host, make_network, port, scan
 from tests.test_api import csrf, setup_admin
@@ -296,6 +296,72 @@ def test_retention_removes_captures(db, client):
     db.expire_all()
     assert db.get(WebCapture, cap_id) is None
     assert not (captures_root() / cap_uuid).exists()
+
+
+def test_scheduler_retention_removes_capture_files(db, client):
+    from datetime import datetime
+
+    from app.core.scheduler import tick
+
+    setup_admin(client)
+    _seed_web_host(db, "10.0.0.7", net_name="SchedRetNet")
+    r = client.post("/api/web-captures", json={"targets": "10.0.0.7"}, headers=csrf(client))
+    cap_id = r.json()["capture"]["id"]
+    cap = db.get(WebCapture, cap_id)
+    cap_uuid = cap.uuid
+    cap.status = WEB_CAPTURE_COMPLETED
+    cap.created_at = utcnow() - timedelta(days=400)
+    db.commit()
+    assert (captures_root() / cap_uuid).is_dir()
+    orphan = captures_root() / "00000000-0000-4000-8000-000000000000"
+    orphan.mkdir()
+    tick(datetime(2026, 10, 5, 4, 0).astimezone())  # past 03:15: deletes rows, commits, then cleans files
+    db.expire_all()
+    assert db.get(WebCapture, cap_id) is None
+    assert not (captures_root() / cap_uuid).exists() and not orphan.exists()
+
+
+def test_http_probes_run_in_parallel_in_endpoint_order(db, client, monkeypatch):
+    import threading
+    import time
+
+    from app.core.web_capture import runner
+
+    setup_admin(client)
+    net = make_network(db, "10.0.0.0/24", name="ParNet")
+    ips = [f"10.0.0.{i}" for i in range(20, 26)]
+    scan(ScriptedScanner([host(ip, [port(80, "http")]) for ip in ips]), network_id=net.id)
+    uuids = [d.uuid for d in db.scalars(select(Device).where(Device.current_ip.in_(ips))).all()]
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0}
+    real_probe = runner.mock_probe_endpoint
+
+    def slow_probe(*args, **kwargs):
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        time.sleep(0.05)
+        with lock:
+            state["active"] -= 1
+        return real_probe(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "mock_probe_endpoint", slow_probe)
+
+    def run(concurrency: int):
+        state["peak"] = 0
+        put_section(db, WebCaptureSettings(http_concurrency=concurrency, auto_after_scan=False))
+        db.commit()
+        r = client.post("/api/web-captures", json={"device_uuids": uuids}, headers=csrf(client))
+        assert r.status_code == 200, r.text
+        pages = db.scalars(select(WebPage).where(WebPage.capture_id == r.json()["capture"]["id"])
+                           .order_by(WebPage.id)).all()
+        return state["peak"], [(p.ip, p.port, p.url, p.title) for p in pages]
+
+    peak_seq, pages_seq = run(1)
+    peak_par, pages_par = run(4)
+    assert peak_seq == 1 and 1 < peak_par <= 4
+    assert len({p[0] for p in pages_seq}) == len(ips)
+    assert pages_par == pages_seq  # parallel probing keeps the sequential page order
 
 
 @pytest.mark.parametrize("status,title,is_error", [

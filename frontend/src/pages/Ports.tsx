@@ -11,7 +11,7 @@ const defaultDesc = (key: SortKey) => key === 'count';
 export default function Ports() {
   const [sp, setSp] = useSearchParams();
   const networkId = sp.get('network_id') ?? undefined;
-  const { data, error } = useApi<{ ports: ExposedPort[] }>('/exposed-ports', { network_id: networkId }, 30000);
+  const { data, error } = useApi<{ ports: ExposedPort[]; total: number; truncated: boolean }>('/exposed-ports', { network_id: networkId }, 30000);
   const networks = useApi<Network[]>('/networks');
   const nav = useNavigate();
   const q = sp.get('q') ?? '';
@@ -65,6 +65,11 @@ export default function Ports() {
         </div>
       </div>
       <ErrorBox error={error} />
+      {data?.truncated && (
+        <div className="alert warn">
+          Showing the {data.ports.length.toLocaleString()} most-exposed of {data.total.toLocaleString()} ports. Filtering and sorting apply to these only.
+        </div>
+      )}
       {!data ? <Loading /> : (
         <Card flush title={`${rows.length} port${rows.length === 1 ? '' : 's'} · ${totalHosts} open-port instances`}>
           {rows.length === 0 ? <div className="empty">No open ports match.</div> : (

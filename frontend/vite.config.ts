@@ -12,6 +12,14 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       proxy: { '/api': { target: backend, changeOrigin: false } },
     },
-    build: { outDir: 'dist', sourcemap: false, chunkSizeWarningLimit: 900 },
+    build: {
+      outDir: 'dist',
+      sourcemap: false,
+      chunkSizeWarningLimit: 900,
+      rollupOptions: {
+        // Third-party code changes rarely; a separate vendor chunk stays cached across app releases.
+        output: { manualChunks: (id) => (id.includes('node_modules') ? 'vendor' : undefined) },
+      },
+    },
   };
 });

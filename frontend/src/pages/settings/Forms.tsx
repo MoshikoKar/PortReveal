@@ -1,5 +1,5 @@
 // Schedule, scan profile, notifications, LDAP and retention forms.
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading } from '../../components/ui';
 import type { EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, WebCaptureSettings } from '../../types';
@@ -9,10 +9,15 @@ function useForm<T>(path: string) {
   const res = useApi<T>(path);
   const [form, setForm] = useState<T | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const inFlight = useRef(false); // blocks a second click that lands before `saving` re-renders the button
   useEffect(() => {
     if (res.data) setForm(res.data);
   }, [res.data]);
   const save = async (body: unknown, okText = 'Saved.') => {
+    if (inFlight.current) return false;
+    inFlight.current = true;
+    setSaving(true);
     setMsg(null);
     try {
       const out = await put<T>(path, body);
@@ -22,9 +27,12 @@ function useForm<T>(path: string) {
     } catch (e: any) {
       setMsg({ ok: false, text: e.message });
       return false;
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
     }
   };
-  return { ...res, form, setForm, msg, setMsg, save };
+  return { ...res, form, setForm, msg, setMsg, save, saving };
 }
 
 function Msg({ msg }: { msg: { ok: boolean; text: string } | null }) {
@@ -75,7 +83,7 @@ export function ScheduleForm({ onSaved }: { onSaved?: () => void }) {
         </div>
         <div className="muted small">Next run: {f.data?.next_run ? `${fmtTime(f.data.next_run)} (${relTime(f.data.next_run)})` : 'not scheduled'}</div>
         <Msg msg={f.msg} />
-        <div><button className="btn primary" onClick={async () => { if (await f.save({ enabled: s.enabled, time: s.time, days: s.days, discovery_before_standard: s.discovery_before_standard })) onSaved?.(); }}>Save schedule</button></div>
+        <div><button className="btn primary" disabled={f.saving} onClick={async () => { if (await f.save({ enabled: s.enabled, time: s.time, days: s.days, discovery_before_standard: s.discovery_before_standard })) onSaved?.(); }}>Save schedule</button></div>
       </div>
     </Card>
   );
@@ -114,7 +122,7 @@ export function PresenceForm() {
         </div>
         <div className="muted small">Next presence scan: {f.data?.next_run ? `${fmtTime(f.data.next_run)} (${relTime(f.data.next_run)})` : 'not scheduled'}</div>
         <Msg msg={f.msg} />
-        <div><button className="btn primary" onClick={() => f.save({ enabled: s.enabled, times: s.times, days: s.days, absence_days: s.absence_days })}>Save presence</button></div>
+        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save({ enabled: s.enabled, times: s.times, days: s.days, absence_days: s.absence_days })}>Save presence</button></div>
       </div>
     </Card>
   );
@@ -158,7 +166,7 @@ export function ScanProfileForm() {
           <label className="check"><input type="checkbox" checked={s.keep_raw_xml} onChange={(e) => set({ keep_raw_xml: e.target.checked })} />Keep raw nmap XML temporarily for troubleshooting</label>
         </div>
         <Msg msg={f.msg} />
-        <div><button className="btn primary" onClick={() => f.save(s)}>Save scan settings</button></div>
+        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save(s)}>Save scan settings</button></div>
       </div>
     </Card>
   );
@@ -207,7 +215,7 @@ export function WebCaptureForm() {
           <span className="hint">Optional path to a newline-delimited list of paths (absolute, or relative to the data dir). Leave blank for the built-in list.</span>
         </label>
         <Msg msg={f.msg} />
-        <div><button className="btn primary" onClick={() => f.save(s)}>Save Web Capture settings</button></div>
+        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save(s)}>Save Web Capture settings</button></div>
       </div>
     </Card>
   );
@@ -304,11 +312,11 @@ export function NotificationsForm({ part = 'all', onSaved }: { part?: 'all' | 's
         <Msg msg={f.msg} />
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <div className="row">
-          <button className="btn primary" onClick={save}>Save</button>
+          <button className="btn primary" onClick={save} disabled={f.saving}>Save</button>
           {showSmtp && (
             <>
               <input type="email" placeholder="test recipient (default: all recipients)" value={testTo} onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 260 }} />
-              <button className="btn" onClick={test} disabled={!s.smtp_host}>Save & send test email</button>
+              <button className="btn" onClick={test} disabled={!s.smtp_host || f.saving}>Save & send test email</button>
             </>
           )}
         </div>
@@ -367,7 +375,7 @@ export function LdapForm({ onSaved }: { onSaved?: () => void }) {
         </div>
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <Msg msg={f.msg} />
-        <div><button className="btn primary" onClick={async () => { if (await f.save(body())) { setPassword(null); onSaved?.(); } }}>Save LDAP settings</button></div>
+        <div><button className="btn primary" disabled={f.saving} onClick={async () => { if (await f.save(body())) { setPassword(null); onSaved?.(); } }}>Save LDAP settings</button></div>
       </div>
     </Card>
   );
@@ -391,7 +399,7 @@ export function RetentionForm() {
         <Msg msg={f.msg} />
         {runMsg && <div className="alert ok">{runMsg}</div>}
         <div className="row">
-          <button className="btn primary" onClick={() => f.save(f.form)}>Save</button>
+          <button className="btn primary" disabled={f.saving} onClick={() => f.save(f.form)}>Save</button>
           <button className="btn" onClick={async () => {
             const r = await post<{ deleted: Record<string, number> }>('/settings/retention/run');
             setRunMsg(`Cleanup done: ${Object.entries(r.deleted).map(([k, v]) => `${v} ${k}`).join(', ')}`);

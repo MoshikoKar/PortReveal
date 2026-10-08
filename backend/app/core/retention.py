@@ -30,6 +30,17 @@ log = logging.getLogger(__name__)
 
 
 def run_retention(db: Session, days: int, raw_days: int = 7, now: datetime | None = None) -> dict[str, int]:
+    """DB deletes, commit, then filesystem cleanup (no transaction held open during rmtree)."""
+    counts, stale_uuids = purge_expired(db, days, now)
+    db.commit()
+    counts.update(cleanup_files(stale_uuids, live_capture_uuids(db), raw_days))
+    log.info("Retention cleanup (%s days): %s", days, counts)
+    return counts
+
+
+def purge_expired(db: Session, days: int, now: datetime | None = None) -> tuple[dict[str, int], list[str]]:
+    """Delete expired rows (not committed). Returns counts and the uuids of deleted web captures,
+    whose files the caller removes with cleanup_files() once the deletes are committed."""
     now = now or utcnow()
     cutoff = now - timedelta(days=days)
     counts: dict[str, int] = {}
@@ -55,17 +66,26 @@ def run_retention(db: Session, days: int, raw_days: int = 7, now: datetime | Non
             )
         ).all()
     )
+    stale_uuids = [cap.uuid for cap in stale]
     for cap in stale:
-        delete_capture_files(cap.uuid)
         db.delete(cap)
     counts["web_captures"] = len(stale)
     db.flush()
-    keep = set(db.scalars(select(WebCapture.uuid)).all())
-    counts["web_capture_orphan_dirs"] = cleanup_capture_dirs(keep)
+    return counts, stale_uuids
 
-    counts["raw_dirs"] = cleanup_raw(raw_days)
-    log.info("Retention cleanup (%s days): %s", days, counts)
-    return counts
+
+def live_capture_uuids(db: Session) -> set[str]:
+    return set(db.scalars(select(WebCapture.uuid)).all())
+
+
+def cleanup_files(stale_uuids: list[str], keep_uuids: set[str], raw_days: int) -> dict[str, int]:
+    """Filesystem half of retention; call after the DB deletes are committed."""
+    for uuid in stale_uuids:
+        delete_capture_files(uuid)
+    return {
+        "web_capture_orphan_dirs": cleanup_capture_dirs(keep_uuids),
+        "raw_dirs": cleanup_raw(raw_days),
+    }
 
 
 def cleanup_raw(raw_days: int) -> int:
