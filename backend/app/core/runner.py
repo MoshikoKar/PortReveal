@@ -44,7 +44,6 @@ from ..scanner.types import (
 )
 from ..settings_store import ScanSettings, get_section, get_value, set_value
 from .compare import ScanOutcome, apply_outcome
-from .notify import notify_events
 from .snapshots import create_snapshot
 from .web_capture.auto import maybe_enqueue_auto_web_capture
 from .web_capture.manager import web_capture_manager
@@ -283,7 +282,6 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
             scan_id, status, time.monotonic() - started, len(live), len(event_ids),
             " (baseline created)" if res.baseline_created else "",
         )
-        notify_events(event_ids)
         if auto_capture_id is not None:
             web_capture_manager.wake()
         return status
