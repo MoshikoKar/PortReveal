@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
@@ -92,11 +92,14 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
 
     recent = db.scalars(select(Event).where(event_visible(db)).order_by(Event.id.desc()).limit(30)).unique().all()
 
+    # literal_column: PostgreSQL rejects GROUP BY when the SELECT and GROUP BY coalesce()
+    # use different bind parameters; a literal keeps both expressions identical.
+    service_name = func.coalesce(DevicePort.service, literal_column("'unknown'"))
     top_services = db.execute(
-        select(func.coalesce(DevicePort.service, "unknown"), func.count(DevicePort.id))
+        select(service_name, func.count(DevicePort.id))
         .join(Device, Device.id == DevicePort.device_id)
         .where(DevicePort.is_open.is_(True), dev_ok)
-        .group_by(func.coalesce(DevicePort.service, "unknown"))
+        .group_by(service_name)
         .order_by(func.count(DevicePort.id).desc())
         .limit(10)
     ).all()

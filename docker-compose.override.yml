@@ -1,7 +1,8 @@
 # Override for Docker Desktop (Windows/macOS), where network_mode: host attaches to the
 # Docker VM and not to the real LAN, so the UI would be unreachable.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml --env-file .env.production up -d --build
+#   docker compose up -d --build        (loaded automatically as the Compose override file)
+#   Linux host (real LAN, MAC addresses):  docker compose -f docker-compose.yml up -d --build
 #
 # Reads APP_PORT / POSTGRES_* / secrets from .env.production (e.g. APP_PORT=8081,
 # POSTGRES_PORT=5434 for the host-side DB publish). On the bridge network the app
