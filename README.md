@@ -1,414 +1,313 @@
 # Network Finder
 
-Lightweight internal web application for **continuous network discovery, service inventory and change detection**.
-It answers one question: *what is on the network, what does each device expose, and what changed since the last scan?*
+Continuous network discovery, service inventory, and change detection for internal
+networks. Nmap does the scanning; this app orchestrates it, stores normalized
+results, compares scans, shows a dashboard, and can email a daily change summary.
 
-Nmap does the scanning. This application orchestrates it, stores normalized results, compares scans, shows a
-SOC-style dashboard and sends a daily categorized HTML email summary of state changes.
-
-It is **not** a vulnerability scanner, EDR, SIEM, CMDB or performance monitor. No exploits, brute force, authentication
-attempts or intrusive NSE scripts are ever run.
+It is **not** a vulnerability scanner, EDR, SIEM, CMDB, or performance monitor.
+No exploits, brute force, authentication attempts, or intrusive NSE scripts are run.
 
 | | Development | Production (Windows host) | Production (Linux Docker) |
 |---|---|---|---|
 | Start | `npm install && npm run dev` | `.\scripts\run.ps1 -Mode production -Background` | `docker compose up -d` |
-| Database | SQLite `./data/dev.db` (auto-created) | PostgreSQL (Docker `db` only) | PostgreSQL (container) |
-| Scanner | mock (default) or local nmap | host nmap + Npcap | nmap inside the app container |
-| Docker needed | no | Postgres only | yes (app + db) |
+| Database | SQLite `./data/dev.db` | PostgreSQL (Compose `db` only) | PostgreSQL (container) |
+| Scanner | mock (default) or local nmap | host nmap + Npcap | nmap in the app image |
+| Docker | not required | Postgres only | app + db |
 
----
+## Description
 
-## Development
+Network Finder is for operators who need a clear answer to: *what is on the
+network, what does each device expose, and what changed since the last scan?*
 
-Requirements: **Node.js 20.19+** and **Python 3.10+** on PATH. Nmap is optional (only for real scans).
+Use it on a machine that can see the LAN you care about. Development defaults to
+a safe mock scanner (no network traffic). Production uses real nmap with fixed
+argument profiles — the UI and API never accept raw nmap options.
+
+## Installation
+
+Requirements: **Node.js 20.19+** and **Python 3.10+** on `PATH`. Nmap is optional
+in development (required for real scans).
 
 ```bash
-git clone https://github.com/MoshikoKar/network_finder.git && cd network_finder
-npm install          # Node dependencies (root + frontend workspace)
-npm run dev          # first run also creates .env, backend/.venv, installs Python deps, migrates the DB
+git clone https://github.com/MoshikoKar/network_finder.git
+cd network_finder
+npm install
+npm run dev
 ```
 
-Open **http://localhost:5173** and log in with **admin / admin** (development seed). The seed also creates the
-network *Mock Lab* (`10.99.0.0/24`) and queues a baseline scan, so the dashboard fills within seconds.
+The first `npm run dev` creates `.env` from `.env.example`, sets up
+`backend/.venv`, installs Python dependencies, and migrates the database.
+
+Open **http://localhost:5173** and sign in with **admin / admin** (development
+seed). The seed also creates the network *Mock Lab* (`10.99.0.0/24`) and queues a
+baseline scan so the dashboard fills within seconds.
 
 | Task | Command |
 |---|---|
-| Install | `npm install` (optionally `npm run setup` to prepare Python/DB explicitly) |
-| Configure | edit `.env` (created from `.env.example`; every value has a safe default) |
-| Start everything (hot reload) | `npm run dev` |
-| Start one side | `npm run dev:backend` / `npm run dev:frontend` |
-| Stop | `Ctrl+C` in the `npm run dev` terminal (stops backend and frontend) |
+| Install | `npm install` (or `npm run setup` for Python/DB only) |
+| Configure | edit `.env` (safe defaults; created from `.env.example`) |
+| Start both sides | `npm run dev` |
+| Backend / frontend only | `npm run dev:backend` / `npm run dev:frontend` |
 | Tests | `npm test` |
-| Lint / type-check | `npm run lint` (ruff + tsc + eslint) |
+| Lint / type-check | `npm run lint` |
 | Production frontend build | `npm run build` |
-| Reset the dev database | stop the app, then `npm run db:reset` (deletes `data/dev.db`; the seed runs again on next start) |
-| Run migrations | `npm run db:migrate` (also runs automatically on every start) |
-| Reset the mock scenario | `npm run mock:reset` |
+| Reset SQLite DB | stop the app, then `npm run db:reset` |
+| Migrations | `npm run db:migrate` (also runs on every start) |
+| Reset mock scenario | `npm run mock:reset` |
 
-- Backend: FastAPI on `127.0.0.1:8000` with auto-reload (`uvicorn --reload`). API docs: http://localhost:8000/api/docs
-- Frontend: Vite on `:5173` with hot module reload; `/api` is proxied to the backend.
-- Logs: printed to the terminal and written to `data/logs/app.log`.
-- Setup is idempotent and non-interactive. Python requirements are reinstalled only when `backend/requirements*.txt` change.
+- Backend: FastAPI on `127.0.0.1:8000` (`uvicorn --reload`). Docs:
+  http://localhost:8000/api/docs
+- Frontend: Vite on `:5173`; `/api` is proxied to the backend
+- Logs: terminal and `data/logs/app.log`
 
-### Headless / AI-agent usage
+## Usage
 
-Everything is scriptable; no prompts, no GUI, no Docker:
+### CLI and headless checks
 
 ```bash
-npm install && npm test                      # full test suite, no network or nmap needed
-npm run cli -- status                        # env, database, scanner mode, nmap detection (JSON)
-npm run cli -- scan --type standard --network "Mock Lab"   # run a scan synchronously, prints a JSON summary
+npm install && npm test
+npm run cli -- status
+npm run cli -- scan --type standard --network "Mock Lab"
 npm run cli -- scan --type full --targets 10.99.0.10
 npm run cli -- create-user alice 'S3cret-pass' --role viewer
 curl -s localhost:8000/api/health
 ```
 
-To exercise the first-run wizard instead of the seed: `DEV_SEED=false npm run dev` with a fresh DB (`npm run db:reset`).
+To walk the first-run wizard instead of the seed:
+`DEV_SEED=false npm run dev` with a fresh DB (`npm run db:reset`).
 
----
-
-## Scanner modes
+### Scanner modes
 
 Set `SCANNER_MODE` in `.env`:
 
 | Value | Behaviour |
 |---|---|
-| `mock` | **Development default.** Simulated, Nmap-like results. No network traffic. The UI shows a permanent *SIMULATED DATA* banner and every mock scan is labelled. |
-| `nmap` | Real scans with the `nmap` executable (`NMAP_PATH`, default `nmap`). If nmap is missing the app still runs and shows the scanner as *unavailable*. |
-| `auto` | nmap when found, otherwise mock (clearly labelled). |
+| `mock` | Development default. Simulated results; no network traffic. UI shows a *SIMULATED DATA* banner. |
+| `nmap` | Real scans via `NMAP_PATH` (default `nmap`). App still runs if nmap is missing (scanner *unavailable*). |
+| `auto` | nmap when found, otherwise labelled mock. |
 
-**Enable real scanning in development:** install nmap (`sudo apt-get install nmap`, `brew install nmap`, or the Windows
-installer), set `SCANNER_MODE=nmap`, restart `npm run dev`. Without root/raw-socket privileges nmap uses TCP connect
-probes (no ARP/ICMP, no MAC addresses). Running the backend as root, or setting `NMAP_PRIVILEGED=true` with the
-appropriate capabilities, enables full discovery.
+For real scans in development: install nmap, set `SCANNER_MODE=nmap`, restart
+`npm run dev`. Without raw-socket privileges, nmap uses TCP connect probes (no
+ARP/ICMP, no MACs). `NMAP_PRIVILEGED=true` (or root) enables full discovery.
 
-**Mock scenario.** Mock results flow through the *same* orchestration, identity matching, comparison, alerting and
-snapshot code as real results; only the data source differs. Each completed network scan advances a deterministic scenario:
+**Mock scenario.** Mock results use the same orchestration and change pipeline as
+real scans. Each completed network scan advances a fixed scenario (baseline →
+port/service/IP/absence changes → quiet steps). Reset with `npm run mock:reset`.
 
-| Step | Change |
-|---|---|
-| 0 | baseline (13 hosts) - no alerts |
-| 1 | srv-web01 opens TCP/8080; ws-finance07 closes TCP/3389; new host ws-temp25 (TCP/445) |
-| 2 | srv-intranet Apache → nginx; srv-db01 OpenSSH 8.9p1 → 9.6p1; ws-dev12 changes IP (same MAC); cam-lobby missing (1st miss) |
-| 3 | srv-web01 opens TCP/9000; cam-lobby confirmed *not detected* |
-| 4 | cam-lobby reappears; TCP/9000 closes |
-| 5 | TCP/9000 opens again (new alert, by design) |
-| 6+ | no changes - verifies no duplicate events |
+### Web capture (optional)
 
-Full-port mock scans additionally reveal a few high ports (e.g. 49664/msrpc).
+Enrichment for known HTTP(S) and RTSP services (not part of nmap). Auto-queue
+after standard/full scans is toggled under **Settings → Web capture**. Manual jobs
+from Device details, Devices multi-select, or **Scans → Web captures**.
 
-### Web Capture (optional)
-
-Inventory enrichment for known HTTP(S) and RTSP services on selected devices/IPs. Not part of nmap scans.
-By default, a capture job is queued automatically after a standard/full scan for new/changed or never-captured
-web hosts (toggle under **Settings → Web capture**). Manual jobs remain available from Device details, Devices
-multi-select, or **Scans → Web captures**.
-Requires Chromium for HTTP screenshots and **ffmpeg** for RTSP still frames / live MJPEG viewing:
+Needs Chromium (Playwright) for HTTP screenshots and **ffmpeg** for RTSP stills /
+live MJPEG:
 
 ```bash
 cd backend
 .\.venv\Scripts\playwright.exe install chromium   # Windows
 # or: playwright install chromium
-
-# ffmpeg (RTSP capture + live Watch)
-# Windows: install from https://ffmpeg.org and ensure ffmpeg is on PATH
-# macOS: brew install ffmpeg
-# Linux: sudo apt-get install ffmpeg
 ```
 
-Any inventory port whose service is identified as **rtsp** (any port number, not only 554) is captured as a stream page. Open the host’s web preview and click **Watch live** to view the feed in the browser (server-side RTSP→MJPEG proxy).
+Any inventory port identified as **rtsp** is treated as a stream page; use
+**Watch live** on the host preview for the server-side RTSP→MJPEG proxy.
 
-Toggle, auto-after-scan, and limits: **Settings → Web capture**.
+### Database
 
----
+One SQLAlchemy model and one Alembic history for both engines.
 
-## Database
+- **SQLite (dev):** `DATABASE_URL=sqlite:///./data/dev.db` (repo-root relative).
+  Disposable via `npm run db:reset`.
+- **PostgreSQL (prod):** `DATABASE_URL=postgresql+psycopg://…` or
+  `POSTGRES_HOST` / `PORT` / `DB` / `USER` / `PASSWORD` (Compose-friendly).
 
-One SQLAlchemy model and one Alembic migration history serve both engines; there is no engine-specific business logic.
+Migrations run automatically at startup.
 
-- **SQLite (development):** `DATABASE_URL=sqlite:///./data/dev.db`. Relative paths resolve from the repo root. Created
-  and migrated automatically. Disposable - `npm run db:reset`.
-- **PostgreSQL (production):** `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/db` (`postgresql://` is accepted),
-  or the `POSTGRES_HOST/PORT/DB/USER/PASSWORD` variables (used by Docker Compose; avoids URL-escaping passwords).
-  Migrations run automatically at startup.
+### Production on Windows (host nmap)
 
-To try PostgreSQL in development, point `DATABASE_URL` at any PostgreSQL server and restart `npm run dev`.
+Recommended when the scanner is a **Windows PC on the LAN** (Npc + Npcap).
+Docker Desktop runs **Postgres only**; the app and nmap stay on the host.
 
----
+Requirements: Node.js 20.19+, Python 3.10+, nmap+Npc, Docker Desktop, ffmpeg
+on `PATH`. Copy `.env.production.example` → `.env.production` and set at least
+`POSTGRES_PASSWORD` and `APP_SECRET_KEY`.
 
-## Production on Windows (host nmap)
-
-Recommended when the scanner machine is a **Windows PC on the LAN** (Npc + Npcap for ARP/MAC).
-Docker Desktop is used **only for PostgreSQL**; the app and nmap run on the host so scans leave the real ethernet NIC.
-
-Requirements:
-
-- **Node.js 20.19+**, **Python 3.10+**, **nmap** with **Npc** on PATH
-- **Docker Desktop** running (Compose `db` service only)
-- **ffmpeg** on PATH (RTSP still frames + **Watch live**), e.g. `choco install ffmpeg` or `winget install Gyan.FFmpeg`
-- Copy `.env.production.example` → `.env.production` and set at least `POSTGRES_PASSWORD` and `APP_SECRET_KEY`
-
-Before the first production start (and after every Python dependency update), download the Chromium build that
-matches the installed Playwright version. `npm run setup` / pip install only the Python package, **not** the browser;
-without this step Web Capture shows *Browser unavailable at capture time*:
+Install Chromium for the same user that runs the app (Playwright pip package
+does not download the browser):
 
 ```powershell
-npm run setup                                                   # creates backend\.venv (skip if it exists)
+npm run setup
 backend\.venv\Scripts\python.exe -m playwright install chromium
 ```
 
-Run it as the same Windows user that runs the app (browsers are stored per user in
-`%LOCALAPPDATA%\ms-playwright`), including the Task Scheduler account.
-
 | Task | Command |
 |---|---|
-| Start (foreground — terminal stays open) | `.\scripts\run.ps1 -Mode production` or `npm start` |
-| Start (background — returns when ready) | `.\scripts\run.ps1 -Mode production -Background` |
-| Skip frontend rebuild | add `-SkipBuild` (rebuilds automatically if `frontend/dist` is missing) |
-| Force restart if port is busy | add `-ForceRestart` |
-| Stop app (Postgres keeps running) | `.\scripts\run.ps1 -Stop` or `npm run stop` |
+| Start (foreground) | `.\scripts\run.ps1 -Mode production` or `npm start` |
+| Start (background) | `.\scripts\run.ps1 -Mode production -Background` |
+| Skip frontend rebuild | add `-SkipBuild` |
+| Force restart | add `-ForceRestart` |
+| Stop app | `.\scripts\run.ps1 -Stop` or `npm run stop` |
 | Stop app + Postgres | `.\scripts\run.ps1 -Stop -StopDb` |
-| Dev via the same script | `.\scripts\run.ps1 -Mode dev` or `npm run start:dev` |
+| Dev via same script | `.\scripts\run.ps1 -Mode dev` or `npm run start:dev` |
 
-What the production start does:
+Production start loads `.env.production`, starts Compose `db` only, builds the
+frontend, migrates, and serves on `APP_PORT` (default **8081**). Background mode
+logs to `data/logs/production.log`.
 
-1. Loads `.env.production` and points the app at Docker Postgres on `127.0.0.1:5434`
-2. Starts Compose service `db` only (`docker compose up -d --wait db`)
-3. Builds the frontend (`npm run build`), migrates the DB, then runs uvicorn on `APP_PORT` (default **8081**)
+Open `http://localhost:8081` and complete the first-run wizard (admin → networks →
+exclusions → schedule → SMTP → optional LDAP → recipients → baseline scan).
 
-`-Background` launches that flow in a **hidden** PowerShell window, waits until the listen port is up, prints one
-status line, and returns the prompt. You can close the terminal afterward. Logs go to
-`data/logs/production.log`. Without `-Background`, build/migrate/app output stays in the terminal (also appended to
-the same log file).
+Upgrade: `git pull`, `npm run setup`, reinstall Chromium, then
+`.\scripts\run.ps1 -Mode production -ForceRestart`.
 
-Open `http://localhost:8081` (or `http://<host-ip>:8081`) and complete the **first-run wizard**: administrator →
-network scope(s) → exclusions → schedule → SMTP → optional LDAP → email recipients → baseline scan.
+**Task Scheduler** (same Windows user as Docker Desktop / Npcap):
 
-Upgrade: `git pull`, `npm run setup`, `backend\.venv\Scripts\python.exe -m playwright install chromium`, then
-`.\scripts\run.ps1 -Mode production -ForceRestart` (or `-Background -ForceRestart`). Migrations run automatically.
+1. Create Task → **Run only when user is logged on**
+2. Trigger: At log on (optional 1–2 minute delay)
+3. Action: `powershell.exe` with arguments:
 
-### Windows Task Scheduler (start after login / reboot)
-
-Use this so production comes back up without an open console. Run the task as the same Windows user that has Docker
-Desktop and Npcap access.
-
-1. Open **Task Scheduler** → **Create Task…** (not “Create Basic Task”).
-2. **General**
-   - Name: `Network Finder`
-   - Select **Run only when user is logged on** (Docker Desktop and Npcap need an interactive session on most setups)
-   - Optionally check **Run with highest privileges** if nmap/Npc needs elevation on your machine
-3. **Triggers** → **New…**
-   - Begin the task: **At log on** (this user), or **At startup** if you prefer
-   - Optional: delay 1–2 minutes so Docker Desktop finishes starting
-4. **Actions** → **New…**
-   - Action: **Start a program**
-   - Program/script: `powershell.exe`
-   - Add arguments (adjust the path):
-
-     ```text
-     -NoProfile -ExecutionPolicy Bypass -File "<repo-root>\scripts\run.ps1" -Mode production -Background -SkipBuild
-     ```
-
-   - Start in (optional but recommended): `<repo-root>`
-5. **Conditions**
-   - Uncheck **Start the task only if the computer is on AC power** if this is a laptop that should scan on battery
-6. **Settings**
-   - Check **Allow task to be run on demand**
-   - If the task is already running: **Do not start a new instance** (the script exits cleanly when the port is already listening)
-7. Click **OK**, then **Run** the task once and open `http://localhost:8081`. If it fails, check
-   `data\logs\production.log`.
-
-Stop from an elevated or normal PowerShell when needed:
-
-```powershell
-.\scripts\run.ps1 -Stop
+```text
+-NoProfile -ExecutionPolicy Bypass -File "<repo-root>\scripts\run.ps1" -Mode production -Background -SkipBuild
 ```
 
----
+Set **Start in** to `<repo-root>`. Prefer **Do not start a new instance** if already
+running.
 
-## Production (Linux Docker Compose)
+### Production (Linux Docker Compose)
 
-Requirements:
-
-- A **Linux** VM/host inside the monitored network with Docker Engine + Compose plugin
-  (host networking; not Docker Desktop on Windows/macOS).
-- **Build egress:** `storage.googleapis.com:443` must be reachable from the host (Playwright
-  Chromium). Also needed: package indexes (Debian/PyPI/npm) or your usual mirrors. If the
-  host uses an HTTP proxy, set `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` in `.env`.
-- **Inbound:** TCP `APP_PORT` (default `8081`) open to clients that use the UI.
-- Place the host on the LAN segment you want ARP/MAC for (e.g. `10.10.0.0/16`). Routed
-  scopes (e.g. `10.0.0.0/16` via a gateway) can be scanned for IP/ports but not MACs.
-  CIDRs are set in the first-run wizard, not in Compose.
+Linux Docker host with host networking (not Docker Desktop on Windows/macOS).
+Allow build egress to `storage.googleapis.com:443` (Playwright Chromium) plus the
+usual package indexes. Inbound TCP `APP_PORT` (default `8081`).
 
 ```bash
-git clone <repo> network_finder && cd network_finder
+git clone https://github.com/MoshikoKar/network_finder.git
+cd network_finder
 cp .env.production.example .env
-#   edit .env: set POSTGRES_PASSWORD (required), APP_SECRET_KEY (openssl rand -hex 32), TZ, APP_PORT
+# Set POSTGRES_PASSWORD, APP_SECRET_KEY (openssl rand -hex 32), TZ, APP_PORT
 docker compose up -d --build
-docker compose ps            # app should become "healthy"
+docker compose ps
 docker compose logs -f app
 ```
 
-Open `http://<vm-ip>:8081` and complete the **first-run wizard**: administrator → network scope(s) → exclusions →
-schedule → SMTP → optional LDAP → email recipients → baseline scan.
+Compose provides PostgreSQL 16 (`pgdata`) and the app image (frontend + FastAPI +
+nmap + Playwright Chromium + ffmpeg) with host networking and `NET_RAW` /
+`NET_ADMIN`. One app process only (queue + scheduler live inside it).
 
-What Compose provides:
+Upgrade: `git pull && docker compose up -d --build`.
 
-- `db`: PostgreSQL 16, data in the `pgdata` volume, listening on `127.0.0.1` only.
-- `app`: built frontend + FastAPI + **nmap** (installed in the image), data in the `appdata` volume (`/data`).
-  It uses **host networking** and the `NET_RAW`/`NET_ADMIN` capabilities so nmap can do ARP/ICMP/SYN discovery and see
-  MAC addresses on the local segment. The process runs as a non-root user; nmap gets raw-socket access through file
-  capabilities. Host networking requires a Linux Docker host (not Docker Desktop on Windows or macOS).
-- One application process by design: the scan queue and the scheduler live inside it. Do not run several replicas.
+**HTTPS:** reverse-proxy to the app, set `COOKIE_SECURE=true` and
+`FORWARDED_ALLOW_IPS` to the proxy IP.
 
-Upgrade: `git pull && docker compose up -d --build` (migrations run automatically).
+**Secrets:** keep them in `.env` / `.env.production` (never commit). Docker secrets
+under `/run/secrets/<setting_name>` are also read. SMTP/LDAP passwords from the UI
+are encrypted with `APP_SECRET_KEY` and never returned by the API.
 
-**HTTPS / reverse proxy.** Put nginx, Caddy or Traefik in front, set `COOKIE_SECURE=true`, and set
-`FORWARDED_ALLOW_IPS` to the proxy IP. Example Caddy: `netfinder.corp.local { reverse_proxy 127.0.0.1:8081 }`.
-
-**Secrets.** Keep them in `.env` / `.env.production` (never committed). Docker secrets mounted under
-`/run/secrets/<setting_name>` (e.g. `postgres_password`, `app_secret_key`) are also read automatically. SMTP and LDAP
-passwords entered in the UI are stored encrypted with `APP_SECRET_KEY` and are never returned by the API.
-
-**Backup.** Back up PostgreSQL and the configuration:
+**Backup:**
 
 ```bash
 docker compose exec -T db pg_dump -U netfinder netfinder | gzip > netfinder-$(date +%F).sql.gz
 cp .env /secure/backup/location/
 ```
 
-On Windows host production (Postgres-only Compose), dump from the published port instead:
+Windows host production (Postgres-only Compose):
 
 ```powershell
 docker compose --env-file .env.production exec -T db pg_dump -U netfinder netfinder | Out-File -Encoding utf8 netfinder-backup.sql
 ```
 
-Restore: `gunzip -c backup.sql.gz | docker compose exec -T db psql -U netfinder netfinder`. If `APP_SECRET_KEY` was
-empty, also back up `/data/.secret_key` from the `appdata` volume (otherwise re-enter SMTP/LDAP passwords). Temporary
-scan files need no backup.
-
-**Migrate inventory from dev to production.** To copy scan results (networks, devices, ports, scans, events,
-snapshots, exclusions) without re-running nmap, use the portable ZIP export. Users, app settings, and web-capture
-screenshots are not included — re-run web captures on production after import.
+**Migrate inventory from dev to production** (ZIP export; users/settings/web-capture
+screenshots are not included):
 
 ```bash
-# On the development machine (SQLite):
 npm run cli -- export-data .\inventory.zip
-
-# Copy inventory.zip to the production host, then (Linux Docker app container):
+# Linux Docker:
 docker compose cp inventory.zip app:/tmp/inventory.zip
 docker compose exec app python -m app.cli import-data /tmp/inventory.zip --yes
-
-# Windows host production (app on host, not in Compose):
+# Windows host production:
 npm run cli -- import-data .\inventory.zip --yes
 ```
 
-The same actions are available in the UI under **Settings → Data** (admin only). Import **replaces** inventory on
-the target; production admin users and SMTP/LDAP settings are kept. Oversized packages are refused before wipe
-(`IMPORT_MAX_UPLOAD_MB` / `IMPORT_MAX_UNCOMPRESSED_MB` / `IMPORT_MAX_ROWS` in `.env.example`). Both environments
-must be on the same database schema revision (normal after `git pull` / migrate).
+Also available under **Settings → Data** (admin). Import **replaces** inventory on
+the target; keep environments on the same schema revision.
 
----
+### Behaviour notes
 
-## How it works
+**Scan profiles** (fixed argument lists):
+
+| Profile | Role |
+|---|---|
+| Discovery | Host discovery (`-sn` + common probes; ARP on local segments) |
+| Standard | Discovery, then `-Pn -sV --top-ports N` (default 3000) on live hosts |
+| Full port | Discovery, then `-Pn -sV -p 1-65535` on live hosts (manual) |
+
+Daily schedule (optional discovery then standard), daytime presence scans, and
+correlated absence thresholds are configured under **Settings → Schedule**.
+Large CIDRs are chunked with bounded parallelism; failed/partial scans never
+remove inventory. Device identity prefers unique MAC, then IP/hostname rules.
+History and compressed daily snapshots are retained (default 365 days).
+
+Layout overview:
 
 ```
 backend/app/
-  scanner/          NmapScanner + MockScanner (same interface), nmap XML parser, auto NIC bind (-e/-S), scanner status
-  core/runner.py    orchestration: targets -> discovery chunks -> service-scan batches -> compare -> snapshot
-  core/compare.py   the single change-detection engine
-  core/identity.py  device identity matching
-  core/manager.py   persistent scan queue (one scan at a time)
-  core/scheduler.py daily schedule, presence scans + retention (re-reads settings every tick)
-  core/presence.py  correlated absence (night scan + daytime presence scans)
-  api/              REST endpoints;  auth/  sessions, CSRF, LDAP;  alembic/  migrations
-frontend/src/       React UI (Dashboard, Devices, Device details, Changes, Scans, Settings, first-run wizard)
-scripts/            npm helpers (setup, dev runner, venv python launcher)
+  scanner/          NmapScanner + MockScanner, XML parser, NIC bind, status
+  core/             runner, compare, identity, queue, scheduler, presence, web_capture
+  api/              REST; auth/ sessions, CSRF, LDAP; alembic/ migrations
+frontend/src/       React UI (Dashboard, Devices, Ports, Changes, Web, Scans, Settings)
+scripts/            setup, dev runner, Windows production runner
 docker/Dockerfile, docker-compose.yml
 ```
 
-**Scan profiles** (fixed argument lists; no raw nmap options are accepted from the UI or API):
+## Features
 
-| Profile | nmap | When |
-|---|---|---|
-| Discovery | `-sn -PE -PP -PS<22 common ports> -PA80,443,3389` (+ ARP on local segments) | alone, or queued before the daily standard scan (default) |
-| Standard | discovery, then `-Pn -sV --top-ports N` (default 3000) on live hosts only | daily schedule / manual |
-| Full port | discovery, then `-Pn -sV -p 1-65535` on live hosts | manual only, for hosts/ranges/networks |
+- Continuous discovery and service inventory via nmap (or labelled mock data)
+- Change detection for devices, ports, services, versions, and IP moves
+- SOC-style dashboard with devices, ports, changes, scans, and settings
+- Daily categorized HTML email summary of pending changes
+- Optional web capture (HTTP screenshots + RTSP stills / live Watch)
+- Scheduled night scans plus daytime presence / correlated absence
+- Admin / viewer roles, sessions, CSRF, optional LDAP, audit log
+- CLI for status, scans, users, DB reset, and inventory import/export
+- SQLite in development; PostgreSQL in production
 
-**Daily schedule.** At the configured time, each enabled network gets an optional discovery-only pass (default on)
-followed by a standard scan, so new hosts are registered before the longer service scan. Toggle under
-*Settings → Schedule*.
+## Tech Stack
 
-**Daytime presence + correlated absence.** Laptops taken home at night are missed by the night scan, so a second
-schedule runs quick discovery-only presence scans (no port stage, no web capture, no snapshot/baseline) at
-**10:00 and 15:00, Sunday-Friday** by default (*Settings → Schedule → Daytime presence*). A device accumulates one
-*absence day* only when, on that local day, the network's night standard scan **and** every presence scan completed
-and none of them saw it. Any sighting (any scan) resets the count. Disappeared / reappeared **emails** are sent only
-when the count reaches **5 days** (configurable): the *disappeared* email when the threshold is reached, the
-*reappeared* email on the next sighting after that. Per-scan disappear/reappear events (below) are still recorded in
-*Changes* but without email while presence is enabled; disabling presence restores per-scan emails. Days without a
-presence schedule (Saturday by default), or with a failed/partial night or presence scan, never count. Schedules use
-server-local time: set `TZ=Asia/Jerusalem` (or your zone) for the container. Retention should exceed the absence window,
-otherwise a long-absent device that was deleted returns as a *new device*.
-
-**/16 networks.** Exclusions are subtracted *before* nmap runs. The remaining addresses are split into discovery
-chunks (default 1,024 addresses = 64 chunks for a /16) that run with bounded parallelism (default 4 nmap processes),
-each with a hard timeout. Only live hosts get the service scan, in batches (default 32 hosts) with `--host-timeout`
-(default 15 min). One unresponsive host or chunk can never block the scan. Rough expectation for a /16 with 2,000 live
-hosts at default settings: discovery 15-30 min, service scan 1-2 h. Tune it under *Settings → Scan profiles*.
-
-**Device identity.** Each device has a permanent `uuid`. Matching order: MAC (if unique in the scan) → same IP
-without contradicting MAC or hostname → unique non-generic hostname (detects IP changes without MAC) → otherwise a
-**new** device. When in doubt, the engine creates a new device rather than merging two machines.
-
-**Change rules.**
-- The first complete standard scan of a network is its **baseline**: no events, no alerts.
-- Only *transitions* create events: port opened/closed (re-opening alerts again), service/version changed, device
-  discovered/disappeared/reappeared, IP changed. Unchanged state never creates duplicates.
-- Ports are reported as *opened* only if a previous port scan covered that port. A new device's ports go into its
-  *new device* event, and a device's first full-port scan records high ports silently. Standard scans never close
-  ports that only a full scan can see.
-- A device is *not detected* only after N consecutive **complete** scans missed it (default 2; *Unconfirmed* in
-  between). A failed host ping alone never means offline. With daytime presence enabled these per-scan transitions
-  are not emailed; see *Daytime presence + correlated absence*.
-- **Failed or partial scans never remove anything.** A failed scan changes nothing. A partial scan (a chunk or
-  batch failed) may add or refresh, but never closes ports or marks devices gone, and it creates no snapshot or
-  baseline. A **mass-change guard** skips removals when an implausible share of devices or ports vanishes at once.
-- Devices outside every configured network (ad-hoc target scans) are recorded but never emailed.
-
-**History.** Per-scan host observations, all events, and one compressed daily snapshot per network (a few KB) are
-kept for the retention period (default **365 days**). Raw nmap XML is not stored, except optionally for N days
-for troubleshooting.
-
-**Email.** Uses an internal SMTP relay (port 25, no auth by default; STARTTLS/SSL and auth are optional). Once per
-day at a configured local time (default **08:00**), sends one short categorized HTML summary of pending changes
-(devices, ports, services) as compact bullet lists. Quiet days with no pending changes skip the email.
-
-**Security.** Argon2 password hashing; server-side sessions (HttpOnly, SameSite=Lax, optional Secure cookie, idle +
-absolute expiry); CSRF token required on every state-changing request; login rate limiting; two roles (admin / viewer);
-admin-only scans and configuration; local admin fallback is always kept when LDAP is enabled; strict validation of
-IPs, CIDRs, ranges and hostnames; nmap always runs with a fixed argument list (`subprocess`, no shell; targets via
-`-iL`); audit log for user, network, exclusion, scan, SMTP and LDAP changes.
-
----
+- **Frontend:** React 19, React Router, TypeScript, Vite 7
+- **Backend:** Python 3.10+, FastAPI, Uvicorn, SQLAlchemy 2, Alembic, Pydantic
+- **Database:** SQLite (dev) or PostgreSQL 16 (prod)
+- **Scanner:** Nmap (production); MockScanner (development default)
+- **Enrichment:** Playwright (Chromium), ffmpeg (RTSP)
+- **Auth:** Argon2, server-side sessions, optional LDAP (`ldap3`)
+- **Tooling:** Node.js 20.19+ workspaces, Ruff, pytest, Docker Compose
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| **nmap missing** - banner *Scanner unavailable* / *nmap not detected* | Install nmap and restart, or use `SCANNER_MODE=mock`. The app itself keeps working. In Docker it is preinstalled. |
-| Real scans find hosts but no MAC addresses / ping probes | nmap runs unprivileged. In Docker keep `network_mode: host` + `cap_add`. In dev, run as root or use mock mode. |
-| Discovery fails: `"unk0" is not an ethernet device` (VPN/Tailscale) | A tunnel stole the OS route for a LAN subnet. The scanner auto-binds `-e` to the overlapping local ethernet when one exists; restart the backend after updating. If targets only exist on the tunnel, it falls back to unprivileged TCP probes. |
-| Discovery finds hosts but **standard/full scans report 0 open ports** (VPN/Tailscale on Windows) | Binding `-e eth0` alone is not enough: nmap may still source SYN packets from the tunnel IP (e.g. `100.x`). The scanner also passes `-S <LAN address>` of the chosen ethernet NIC. Restart production (`.\scripts\run.ps1 -Stop` then start again) and re-run a Standard scan. |
-| Background start printed success but UI is down | Check `data/logs/production.log`. Confirm Docker Desktop is running and port `APP_PORT` (default 8081) is free. Re-run with `-ForceRestart` or without `-Background` to see startup errors in the terminal. |
-| **Database migration failure** at startup | Read the error in the log (`data/logs/app.log`). Dev: `npm run db:reset` recreates the SQLite DB. Prod: check `docker compose logs db` and the `POSTGRES_*` values. |
-| **Port already in use** (`8000` / `5173` / `8080`) | Stop the other process, or set `BACKEND_PORT` / `FRONTEND_PORT` in `.env` (dev) or `APP_PORT` (prod). |
-| **Backend unavailable** - UI shows *Backend unavailable* / Vite logs `ECONNREFUSED 127.0.0.1:8000` | The backend crashed or is still starting; check the `[backend]` lines in the `npm run dev` output. Try `npm run dev:backend` alone. `curl localhost:8000/api/health` must return `ok`. |
-| **Frontend unavailable** - `localhost:5173` does not load | Check the `[frontend]` output; run `npm install` (Node 20.19+ required). Production serves the UI from the app on `APP_PORT`. |
+| Scanner unavailable / nmap missing | Install nmap or use `SCANNER_MODE=mock`. Preinstalled in the Docker app image. |
+| Hosts found but no MACs | Unprivileged nmap. Docker: keep host networking + caps. Dev: root or mock. |
+| `"unk0" is not an ethernet device` | Tunnel stole the LAN route; scanner auto-binds `-e` when a local ethernet overlaps. Restart after updates. |
+| Standard/full scans report 0 ports (VPN on Windows) | Scanner passes `-e` and `-S` for the LAN NIC. Restart production and re-run Standard. |
+| Background start OK but UI down | Check `data/logs/production.log`, Docker Desktop, and `APP_PORT`. Use `-ForceRestart` or foreground mode. |
+| Migration failure | Read `data/logs/app.log`. Dev: `npm run db:reset`. Prod: `docker compose logs db` and `POSTGRES_*`. |
+| Port in use | Free it, or set `BACKEND_PORT` / `FRONTEND_PORT` (dev) or `APP_PORT` (prod). |
+| Backend unavailable in Vite | Check `[backend]` output; `curl localhost:8000/api/health` should return `ok`. |
+| Frontend not loading | `npm install` (Node 20.19+). Production serves UI on `APP_PORT`. |
 | `python -m venv` fails (Debian/Ubuntu) | `sudo apt-get install -y python3-venv`, then `npm run setup`. |
-| Python deps out of date | `npm run setup -- --force` |
-| Web Capture cards show **Browser unavailable at capture time** (host / Windows production) | Playwright was installed or upgraded without its matching Chromium build. Run `backend\.venv\Scripts\python.exe -m playwright install chromium` as the user that runs the app, then restart with `-ForceRestart`. In Docker the image installs it. |
-| RTSP shows **ffmpeg unavailable** | Install ffmpeg and make sure `ffmpeg -version` works in a new terminal, then restart the app. In Docker it is preinstalled. |
-| Scan stuck after a restart | Scans running during a restart are marked *failed* automatically (state preserved); start a new one. |
-| Login blocked (HTTP 429) | Too many failed attempts; wait 15 minutes (`LOGIN_WINDOW_MINUTES`). |
-| Lost admin password | `npm run cli -- create-user rescue 'New-pass-123' --role admin` (prod: `docker compose exec app python -m app.cli create-user ...`). |
+| Stale Python deps | `npm run setup -- --force` |
+| Browser unavailable at capture time | `backend\.venv\Scripts\python.exe -m playwright install chromium` as the app user, then restart. |
+| ffmpeg unavailable | Install ffmpeg; confirm `ffmpeg -version`, then restart. Preinstalled in Docker. |
+| Scan stuck after restart | In-flight scans are marked failed; start a new one. |
+| Login HTTP 429 | Wait out the login window (`LOGIN_WINDOW_MINUTES`, default 15). |
+| Lost admin password | `npm run cli -- create-user rescue 'New-pass-123' --role admin` (Docker: `docker compose exec app python -m app.cli create-user …`). |
+
+## Contributing
+
+Pull requests are welcome. For substantial changes, open an issue first to discuss
+the approach. Prefer matching existing patterns; run `npm test` and `npm run lint`
+before submitting.
+
+## License
+
+No `LICENSE` file is present in this repository. Treat the project as proprietary
+unless the owner publishes license terms.
