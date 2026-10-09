@@ -122,7 +122,7 @@ def test_scan_flow_through_api(client):
     s = client.get(f"/api/scans/{scan_id}").json()
     assert s["status"] == "completed" and s["is_baseline"] and s["scanner_mode"] == "mock"
     dash = client.get("/api/dashboard").json()
-    assert dash["devices"]["active"] == 15 and dash["open_ports_total"] > 0
+    assert dash["devices"]["active"] == 16 and dash["open_ports_total"] > 0
     assert dash["last_7d"]["changes"] == 0
 
     devs = client.get("/api/devices", params={"q": "5432"}).json()
@@ -193,10 +193,10 @@ def test_mock_data_can_be_hidden(client):
                           headers=h).json()["scans"][0]["id"]
     assert run_scan(scan_id) == "completed"
     state = client.get("/api/mock-data").json()
-    assert state == {"hidden": False, "scans": 1, "devices": 15, "events": 0}
+    assert state == {"hidden": False, "scans": 1, "devices": 16, "events": 0}
 
     r = client.put("/api/mock-data", json={"hidden": True}, headers=h)
-    assert r.status_code == 200 and r.json()["hidden"] and r.json()["devices"] == 15  # nothing deleted
+    assert r.status_code == 200 and r.json()["hidden"] and r.json()["devices"] == 16  # nothing deleted
     assert client.get("/api/system/status").json()["app"]["mock_data_hidden"] is True
     dash = client.get("/api/dashboard").json()
     assert dash["devices"]["total"] == 0 and dash["open_ports_total"] == 0 and not dash["top_ports"]
@@ -207,7 +207,7 @@ def test_mock_data_can_be_hidden(client):
     assert client.get("/api/networks").json()[0]["device_count"] == 0
 
     client.put("/api/mock-data", json={"hidden": False}, headers=h)
-    assert client.get("/api/devices").json()["total"] == 15
+    assert client.get("/api/devices").json()["total"] == 16
     assert client.get("/api/scans").json()["total"] == 1
 
 

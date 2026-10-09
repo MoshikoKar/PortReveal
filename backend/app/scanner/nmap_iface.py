@@ -29,6 +29,7 @@ _cache: tuple[float, str, tuple["NmapIface", ...]] | None = None
 @dataclass(frozen=True)
 class NmapIface:
     dev: str
+    address: ipaddress.IPv4Address
     network: ipaddress.IPv4Network
     type: str  # ethernet | other | loopback | ...
     up: bool
@@ -52,6 +53,9 @@ class BindChoice:
 
     device: str | None
     privileged: bool
+    # Raw-packet source address (nmap -S). With -e alone nmap still takes the source IP
+    # from the OS route (e.g. a Tailscale 100.x address), so LAN replies never come back.
+    source: str | None = None
 
 
 def parse_nmap_iflist(text: str) -> list[NmapIface]:
@@ -78,18 +82,20 @@ def parse_nmap_iflist(text: str) -> list[NmapIface]:
         if ipmask in (".", "none", "(none)") or ":" in ipmask:
             continue  # skip IPv6 / empty
         try:
-            # Host bits may be set (e.g. 192.168.69.102/24); strict=False accepts that.
-            network = ipaddress.ip_network(ipmask, strict=False)
+            # Host bits are the interface's own address (e.g. 192.168.69.102/24).
+            iface = ipaddress.ip_interface(ipmask)
         except ValueError:
             continue
-        if network.version != 4:
+        if iface.version != 4:
             continue
+        network = iface.network
         dev = m.group("dev")
         if not _DEV_RE.match(dev):
             continue
         out.append(
             NmapIface(
                 dev=dev,
+                address=iface.ip,
                 network=network,
                 type=m.group("type").lower(),
                 up=m.group("up").lower() == "up",
@@ -143,7 +149,8 @@ def choose_bind(targets: list[str], ifaces: list[NmapIface], privileged: bool) -
     overlapping.sort(key=_score, reverse=True)
     best = overlapping[0]
     if best.is_ethernet:
-        return BindChoice(device=best.dev, privileged=privileged)
+        source = str(best.address) if privileged else None
+        return BindChoice(device=best.dev, privileged=privileged, source=source)
     # Overlap only via tunnel/VPN ("other"): ARP/raw ethernet probes cannot work.
     if privileged:
         log.info(

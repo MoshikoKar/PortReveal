@@ -35,9 +35,14 @@ class HostObservation:
     vendor: str | None = None
     hostname: str | None = None
     os_name: str | None = None
+    # nmap <status reason="..."> from host discovery (e.g. arp-response, reset)
+    reason: str | None = None
     # None = no port data for this host in this stage/scan
     ports: list[PortObservation] | None = None
     port_scan_failed: bool = False
+    # TCP ports probed only on this host (e.g. TrueNAS Apps catalog). Not part of
+    # the scan-wide port_scope — compare uses these for per-host closure coverage.
+    extra_tcp_ports: tuple[int, ...] | None = None
 
     def merge(self, other: HostObservation) -> None:
         """Merge information from another stage of the same scan."""
@@ -45,6 +50,11 @@ class HostObservation:
         self.vendor = self.vendor or other.vendor
         self.hostname = self.hostname or other.hostname
         self.os_name = other.os_name or self.os_name
+        self.reason = self.reason or other.reason
+        if other.extra_tcp_ports:
+            merged = set(self.extra_tcp_ports or ())
+            merged.update(other.extra_tcp_ports)
+            self.extra_tcp_ports = tuple(sorted(merged))
         if other.ports is not None:
             self.ports = other.ports
             self.port_scan_failed = False
@@ -87,6 +97,8 @@ class ScanContext:
         self.cancel_event = threading.Event()
         self._procs: set[subprocess.Popen] = set()
         self._lock = threading.Lock()
+        # Current IPs of inventory devices already identified as TrueNAS / FreeNAS.
+        self.known_truenas_ips: set[str] = set()
 
     @property
     def cancelled(self) -> bool:

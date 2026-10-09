@@ -17,9 +17,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _SECRETS_DIR = "/run/secrets" if Path("/run/secrets").is_dir() else None
 
 
+def _settings_env_file() -> str:
+    """Env file for boot settings. `NETWORK_FINDER_ENV_FILE` overrides (used by scripts/run.ps1)."""
+    override = (os.environ.get("NETWORK_FINDER_ENV_FILE") or "").strip()
+    if override:
+        return override
+    return str(PROJECT_ROOT / ".env")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(PROJECT_ROOT / ".env"),
+        env_file=_settings_env_file(),
         env_file_encoding="utf-8",
         extra="ignore",
         secrets_dir=_SECRETS_DIR,

@@ -23,7 +23,8 @@ import ipaddress
 from dataclasses import dataclass, field
 
 from ..netutils import AddressSet, PortScope
-from .known_ports import mock_standard_scope
+from .identify_truenas import looks_like_truenas
+from .known_ports import TRUENAS_APPS_TCP_PORTS, mock_standard_scope
 from .types import (
     HostObservation,
     PortObservation,
@@ -92,6 +93,10 @@ def _base_hosts() -> dict[str, MockHost]:
         "G": MockHost(7, 21, "nas01", "Synology", "Linux 4.x",
                       {22: ("ssh", "OpenSSH", "8.2"), 445: ("microsoft-ds", "Samba smbd", "4"), 5000: ("http", "nginx", None)},
                       high_ports={50002: ("unknown", None, None)}),
+        "TN": MockHost(16, 22, "truenas", "iXsystems", "TrueNAS SCALE",
+                       {22: ("ssh", "OpenSSH", "9.2p1"), 80: ("http", "nginx", None), 443: ("https", "nginx", None),
+                        30013: ("http", "Jellyfin", None)},
+                       high_ports={30041: ("http", "Immich", None)}),
         "H": MockHost(8, 30, "sw-core01", "Cisco Systems", "Cisco IOS",
                       {22: ("ssh", "Cisco SSH", "1.25"), 443: ("https", "Cisco IOS http config", None)}),
         "I": MockHost(9, 40, "ws-dev12", "Intel Corporate", "Windows 11",
@@ -176,6 +181,7 @@ class MockScanner:
         scope_text = MOCK_FULL_SCOPE if profile.full else MOCK_STANDARD_SCOPE
         scope = PortScope(scope_text)
         result = StageResult(port_scope=scope_text)
+        known_truenas = ctx.known_truenas_ips or set()
         for ip in ips:
             entry = self._hosts.get(ip)
             if entry is None:
@@ -183,13 +189,30 @@ class MockScanner:
                 continue
             host, net_id = entry
             obs = self._observation(ip, host, net_id)
-            all_ports = {**host.ports, **(host.high_ports if profile.full else {})}
-            obs.ports = [
-                PortObservation(port=p, service=s, product=prod, version=ver, method="probed", confidence=10)
-                for p, (s, prod, ver) in sorted(all_ports.items())
-                if p in scope
-            ]
             if profile.os_detection:
                 obs.os_name = host.os
+            is_truenas = (
+                not profile.full
+                and (
+                    ip in known_truenas
+                    or looks_like_truenas(hostname=obs.hostname, vendor=host.vendor, os_name=host.os)
+                )
+            )
+            all_ports = {**host.ports, **(host.high_ports if profile.full else {})}
+            if is_truenas:
+                obs.os_name = obs.os_name or host.os
+                obs.extra_tcp_ports = TRUENAS_APPS_TCP_PORTS
+                truenas_set = set(TRUENAS_APPS_TCP_PORTS)
+                obs.ports = [
+                    PortObservation(port=p, service=s, product=prod, version=ver, method="probed", confidence=10)
+                    for p, (s, prod, ver) in sorted(all_ports.items())
+                    if p in scope or p in truenas_set
+                ]
+            else:
+                obs.ports = [
+                    PortObservation(port=p, service=s, product=prod, version=ver, method="probed", confidence=10)
+                    for p, (s, prod, ver) in sorted(all_ports.items())
+                    if p in scope
+                ]
             result.hosts.append(obs)
         return result

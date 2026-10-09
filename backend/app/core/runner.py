@@ -26,12 +26,14 @@ from ..models import (
     SCAN_RUNNING,
     SCAN_STANDARD,
     TRIGGER_PRESENCE,
+    Device,
     Exclusion,
     Network,
     Scan,
 )
 from ..netutils import MAX_SCAN_ADDRESSES, AddressSet, TargetError, ip_sort_key
 from ..scanner import scanner_status
+from ..scanner.identify_truenas import looks_like_truenas
 from ..scanner.mock_scanner import LAST_STEP, MockScanner
 from ..scanner.nmap_scanner import NmapScanner, nmap_is_privileged
 from ..scanner.types import (
@@ -161,6 +163,15 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
                 raise ScanStageError(f"too many target addresses ({len(targets)} > {MAX_SCAN_ADDRESSES})")
             scanner = scanner or build_scanner(db, cfg)
             scan_type, network_id, trigger = scan.scan_type, scan.network_id, scan.trigger
+            # Prior inventory: re-scan TrueNAS Apps catalog ports on known TrueNAS hosts.
+            ctx.known_truenas_ips = {
+                d.current_ip
+                for d in db.scalars(select(Device)).all()
+                if d.current_ip in targets
+                and looks_like_truenas(
+                    hostname=d.hostname, dns_name=d.dns_name, os_name=d.os_name, vendor=d.vendor,
+                )
+            }
             scan.status, scan.started_at, scan.scanner_mode = SCAN_RUNNING, utcnow(), scanner.mode
             scan.target_count, scan.stage, scan.progress, scan.error = len(targets), "discovery", 0.0, None
         if cfg.keep_raw_xml and scanner.mode == "nmap":

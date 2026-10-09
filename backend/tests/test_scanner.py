@@ -4,8 +4,14 @@ import pytest
 
 from app.netutils import AddressSet, PortScope, TargetError, validate_network_cidr
 from app.scanner.nmap_parser import parse_nmap_xml
-from app.scanner.nmap_scanner import DISCOVERY_TIMEOUT_S, build_discovery_args, build_port_args, discovery_timeout
-from app.scanner.types import PortProfile, ScanStageError
+from app.scanner.nmap_scanner import (
+    DISCOVERY_TIMEOUT_S,
+    build_discovery_args,
+    build_port_args,
+    discovery_host_is_live,
+    discovery_timeout,
+)
+from app.scanner.types import HostObservation, PortProfile, ScanStageError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -38,6 +44,7 @@ def test_parse_rejects_garbage_and_incomplete_output():
 def test_nmap_arguments_are_fixed_and_safe():
     disc = build_discovery_args(privileged=True, timing="normal")
     assert disc[0] == "-sn" and "-PE" in disc and any(a.startswith("-PS") for a in disc)
+    assert any(a.startswith("-PU") for a in disc)
     unpriv = build_discovery_args(privileged=False, timing="normal")
     assert "-PE" not in unpriv and "--unprivileged" in unpriv
     # a rate floor keeps empty (silent) ranges from crawling past the chunk timeout
@@ -47,6 +54,28 @@ def test_nmap_arguments_are_fixed_and_safe():
     assert "-A" not in std and "--script" not in " ".join(std)
     full = build_port_args(False, PortProfile(full=True, host_timeout_minutes=120))
     assert "1-65535" in full and "-sT" in full
+
+
+def test_discovery_drops_nat_reset_without_mac():
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", reason="reset")) is False
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", reason="conn-refused")) is False
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", reason="admin-prohibited")) is False
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", mac="AA:BB:CC:DD:EE:FF", reason="reset"))
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", reason="echo-reply"))
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", reason="arp-response"))
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", reason="syn-ack"))
+    assert discovery_host_is_live(HostObservation(ip="10.0.0.1", reason="udp-response"))
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up" reason="reset"/>
+    <address addr="10.0.0.9" addrtype="ipv4"/></host>
+    <host><status state="up" reason="syn-ack"/>
+    <address addr="10.0.0.2" addrtype="ipv4"/></host>
+    <host><status state="up" reason="echo-reply"/>
+    <address addr="10.0.0.1" addrtype="ipv4"/></host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    assert [h.ip for h in run.hosts] == ["10.0.0.9", "10.0.0.2", "10.0.0.1"]
+    assert [h.ip for h in run.hosts if discovery_host_is_live(h)] == ["10.0.0.2", "10.0.0.1"]
 
 
 def test_discovery_timeout_scales_with_chunk_size():

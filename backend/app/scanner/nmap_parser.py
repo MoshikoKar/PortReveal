@@ -49,7 +49,7 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
         status = host.find("status")
         if status is None or status.get("state") != "up":
             continue
-        obs = HostObservation(ip="")
+        obs = HostObservation(ip="", reason=_clean(status.get("reason")))
         for addr in host.findall("address"):
             atype = addr.get("addrtype")
             if atype == "ipv4":

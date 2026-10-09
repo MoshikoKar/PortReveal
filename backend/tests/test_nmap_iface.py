@@ -32,9 +32,11 @@ def test_choose_bind_prefers_local_ethernet_over_tunnel():
     # Tailscale (unk0) may own the OS route, but LAN overlap must bind eth0.
     choice = choose_bind(["192.168.69.0/24"], ifaces, privileged=True)
     assert choice.device == "eth0" and choice.privileged is True
+    # Raw packets must carry eth0's address, not the tunnel's 100.x route source.
+    assert choice.source == "192.168.69.102"
 
     single = choose_bind(["192.168.69.50"], ifaces, privileged=True)
-    assert single.device == "eth0"
+    assert single.device == "eth0" and single.source == "192.168.69.102"
 
 
 def test_choose_bind_tunnel_only_drops_privileged():
@@ -53,4 +55,4 @@ def test_choose_bind_no_overlap_keeps_settings():
 def test_choose_bind_ignores_down_and_link_local_when_better_exists():
     ifaces = parse_nmap_iflist(_SAMPLE_IFLIST)
     choice = choose_bind(["172.25.16.0/20"], ifaces, privileged=False)
-    assert choice.device == "eth5"
+    assert choice.device == "eth5" and choice.source is None

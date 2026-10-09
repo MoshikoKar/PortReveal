@@ -10,6 +10,8 @@ from app.core.runner import run_scan
 from app.db import session_scope
 from app.models import Device, Event, Network, Scan
 from app.netutils import AddressSet
+from app.scanner.identify_truenas import looks_like_truenas
+from app.scanner.known_ports import TRUENAS_APPS_TCP_PORTS
 from app.scanner.types import (
     HostObservation,
     PortObservation,
@@ -61,12 +63,22 @@ class ScriptedScanner:
         if self.fail_ports:
             raise ScanStageError("simulated port scan failure")
         scope = "1-65535" if profile.full else STANDARD_SCOPE
+        known_truenas = ctx.known_truenas_ips or set()
         out = []
         for ip in ips:
             h = copy.deepcopy(self.hosts[ip])
             if h.ports is not None:
                 limit = 65535 if profile.full else 10000
-                h.ports = [p for p in h.ports if p.port <= limit]
+                extras = set(h.extra_tcp_ports or ())
+                if not profile.full and (
+                    ip in known_truenas
+                    or looks_like_truenas(
+                        hostname=h.hostname, os_name=h.os_name, vendor=h.vendor, ports=h.ports,
+                    )
+                ):
+                    h.extra_tcp_ports = TRUENAS_APPS_TCP_PORTS
+                    extras.update(TRUENAS_APPS_TCP_PORTS)
+                h.ports = [p for p in h.ports if p.port <= limit or p.port in extras]
             out.append(h)
         return StageResult(hosts=out, port_scope=scope)
 

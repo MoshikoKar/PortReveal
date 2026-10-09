@@ -17,8 +17,14 @@ import time
 from pathlib import Path
 
 from ..netutils import PortScope
-from .known_ports import AI_LLM_DISCOVERY_TCP_PORTS, STANDARD_EXTRA_TCP_PORTS, merge_port_scope
-from .nmap_iface import resolve_bind
+from .identify_truenas import host_looks_like_truenas
+from .known_ports import (
+    AI_LLM_DISCOVERY_TCP_PORTS,
+    STANDARD_EXTRA_TCP_PORTS,
+    TRUENAS_APPS_TCP_PORTS,
+    merge_port_scope,
+)
+from .nmap_iface import BindChoice, resolve_bind
 from .nmap_parser import parse_nmap_xml
 from .types import (
     HostObservation,
@@ -33,8 +39,12 @@ from .types import (
 log = logging.getLogger(__name__)
 
 _TIMING = {"polite": "-T2", "normal": "-T3", "fast": "-T4"}
-# TCP ports used as discovery probes in addition to ICMP/ARP
-_DISCOVERY_BASE_TCP = "21,22,23,25,53,80,110,111,135,139,143,389,443,445,993,995,1723,3306,3389,5900,8080,8443"
+# TCP ports used as discovery probes in addition to ICMP/ARP.
+# Includes common LAN/IoT listeners so Docker/NAT scans (no ARP) still find real hosts via syn-ack.
+_DISCOVERY_BASE_TCP = (
+    "21,22,23,25,53,80,110,111,135,139,143,389,443,445,554,993,995,1723,1883,"
+    "3306,3389,5000,5900,8000,8080,8443,8554,9100,32400"
+)
 _DISCOVERY_TCP = merge_port_scope(_DISCOVERY_BASE_TCP, AI_LLM_DISCOVERY_TCP_PORTS) or _DISCOVERY_BASE_TCP
 DISCOVERY_TIMEOUT_S = 30 * 60
 # Floor for the discovery probe rate. Without it nmap's congestion window never grows on ranges where
@@ -43,6 +53,21 @@ DISCOVERY_TIMEOUT_S = 30 * 60
 _DISCOVERY_MIN_RATE = {"polite": 100, "normal": 300, "fast": 600}
 _DISCOVERY_RETRIES = 2
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
+# UDP ports for -PU discovery (DNS/NetBIOS/SNMP/IKE/mDNS/SSDP). Helps find hosts that
+# ignore ICMP and have no TCP listeners on the SYN-ping list (common for printers / IoT).
+_DISCOVERY_UDP = "53,67,68,137,161,500,4500,5353,1900"
+# Without a MAC, only these nmap "up" reasons count as a real device. TCP "reset" /
+# "conn-refused" are excluded: Docker Desktop NAT often answers that for every IP.
+_TRUSTED_DISCOVERY_REASONS = frozenset({
+    "arp-response",
+    "iodarp-response",
+    "echo-reply",
+    "timestamp-reply",
+    "address-mask-reply",
+    "syn-ack",
+    "udp-response",
+    "localhost-response",
+})
 
 
 def nmap_is_privileged(setting: str) -> bool:
@@ -71,9 +96,14 @@ def nmap_version(nmap_path: str) -> str | None:
 
 def build_discovery_args(privileged: bool, timing: str) -> list[str]:
     # -sn: host discovery only. Reverse DNS stays on (nmap default) for hostnames of live hosts.
+    # TCP/UDP probes stay enabled even behind Docker NAT; discovery_host_is_live() drops
+    # RST/conn-refused false positives that have no MAC.
     args = ["-sn"]
     if privileged:
-        args += ["--privileged", "-PE", "-PP", f"-PS{_DISCOVERY_TCP}", "-PA80,443,3389"]
+        args += [
+            "--privileged", "-PE", "-PP",
+            f"-PS{_DISCOVERY_TCP}", "-PA80,443,3389", f"-PU{_DISCOVERY_UDP}",
+        ]
     else:
         args += ["--unprivileged", f"-PS{_DISCOVERY_TCP}"]
     args += [_TIMING.get(timing, "-T3"), "--max-retries", str(_DISCOVERY_RETRIES),
@@ -85,6 +115,15 @@ def discovery_min_rate(timing: str) -> int:
     return _DISCOVERY_MIN_RATE.get(timing, _DISCOVERY_MIN_RATE["normal"])
 
 
+def discovery_host_is_live(host: HostObservation) -> bool:
+    """True when discovery evidence is a real host, not a NAT/firewall false positive."""
+    if host.mac:
+        return True
+    if not host.reason:
+        return True  # mock scanner / fixtures without nmap reason codes
+    return host.reason in _TRUSTED_DISCOVERY_REASONS
+
+
 def discovery_timeout(targets: list[str], timing: str) -> float:
     """Worst case for a chunk where no address answers (every probe sent with all retries), plus margin."""
     addresses = 0
@@ -93,7 +132,8 @@ def discovery_timeout(targets: list[str], timing: str) -> float:
             addresses += ipaddress.ip_network(t, strict=False).num_addresses
         except ValueError:
             addresses += 1  # hostname
-    probes = len(_DISCOVERY_TCP.split(",")) + 5  # TCP SYN list + echo, timestamp and 3 ACK probes
+    # TCP SYN list + echo/timestamp + 3 ACK + UDP list
+    probes = len(_DISCOVERY_TCP.split(",")) + 5 + len(_DISCOVERY_UDP.split(","))
     worst = addresses * probes * (_DISCOVERY_RETRIES + 1) / discovery_min_rate(timing)
     return max(DISCOVERY_TIMEOUT_S, worst * 1.5)
 
@@ -166,17 +206,29 @@ class NmapScanner:
 
     def discover(self, targets: list[str], ctx: ScanContext) -> StageResult:
         bind = resolve_bind(self.exe, targets, self.privileged)
+        if bind.device is None:
+            log.warning(
+                "scan %s: no local ethernet overlaps targets — ARP/MAC unavailable "
+                "(typical on Docker Desktop bridge). Only hosts that answer ICMP/TCP/UDP "
+                "probes are reported; silent phones/IoT need a LAN/host-network scan.",
+                ctx.scan_id,
+            )
         args = build_discovery_args(bind.privileged, self.timing)
         run = self._run(args, targets, discovery_timeout(targets, self.timing), ctx, "discovery",
-                        device=bind.device)
-        return StageResult(hosts=run.hosts)
+                        bind=bind)
+        hosts = [h for h in run.hosts if discovery_host_is_live(h)]
+        dropped = len(run.hosts) - len(hosts)
+        if dropped:
+            log.info("scan %s: dropped %d discovery false positive(s) (no MAC / untrusted reason)",
+                     ctx.scan_id, dropped)
+        return StageResult(hosts=hosts)
 
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:
         bind = resolve_bind(self.exe, ips, self.privileged)
         args = build_port_args(bind.privileged, profile)
         timeout = profile.host_timeout_minutes * 60 + 15 * 60
         run = self._run(args, ips, timeout, ctx, "full" if profile.full else "ports",
-                        device=bind.device)
+                        bind=bind)
         by_ip = {h.ip: h for h in run.hosts}
         port_scope = run.port_scope or ("1-65535" if profile.full else None)
 
@@ -184,13 +236,35 @@ class NmapScanner:
         if not profile.full and STANDARD_EXTRA_TCP_PORTS:
             extra_args = build_fixed_port_args(bind.privileged, profile, STANDARD_EXTRA_TCP_PORTS)
             extra_timeout = min(timeout, EXTRA_PORTS_TIMEOUT_S)
-            extra = self._run(extra_args, ips, extra_timeout, ctx, "ports-extra", device=bind.device)
+            extra = self._run(extra_args, ips, extra_timeout, ctx, "ports-extra", bind=bind)
             for h in extra.hosts:
                 if h.ip in by_ip:
                     _merge_host_ports(by_ip[h.ip], h)
                 else:
                     by_ip[h.ip] = h
             port_scope = merge_port_scope(port_scope or extra.port_scope, STANDARD_EXTRA_TCP_PORTS)
+
+        # TrueNAS Apps catalog ports (3XXXX) only on hosts identified as TrueNAS / FreeNAS.
+        # Kept out of the scan-wide port_scope so other hosts are not treated as covered.
+        if not profile.full and TRUENAS_APPS_TCP_PORTS:
+            known = ctx.known_truenas_ips or set()
+            truenas_ips = [
+                ip for ip in ips
+                if ip in known or host_looks_like_truenas(by_ip.get(ip))
+            ]
+            if truenas_ips:
+                tn_args = build_fixed_port_args(bind.privileged, profile, TRUENAS_APPS_TCP_PORTS)
+                tn_timeout = min(timeout, EXTRA_PORTS_TIMEOUT_S)
+                tn = self._run(tn_args, truenas_ips, tn_timeout, ctx, "ports-truenas", bind=bind)
+                for h in tn.hosts:
+                    if h.ip in by_ip:
+                        _merge_host_ports(by_ip[h.ip], h)
+                    else:
+                        by_ip[h.ip] = h
+                for ip in truenas_ips:
+                    host = by_ip.get(ip)
+                    if host is not None:
+                        host.extra_tcp_ports = TRUENAS_APPS_TCP_PORTS
 
         hosts = []
         for ip in ips:
@@ -204,15 +278,19 @@ class NmapScanner:
         return StageResult(hosts=hosts, port_scope=port_scope)
 
     def _run(self, args: list[str], targets: list[str], timeout: float, ctx: ScanContext, label: str,
-             device: str | None = None):
+             bind: BindChoice | None = None):
         ctx.check_cancelled()
         fd, target_file = tempfile.mkstemp(prefix=f"scan{ctx.scan_id}_", suffix=".txt", dir=self.tmp_dir)
         with os.fdopen(fd, "w") as fh:
             fh.write("\n".join(targets) + "\n")
-        bind = ["-e", device] if device else []
-        if device:
-            log.info("scan %s: binding nmap %s to interface %s", ctx.scan_id, label, device)
-        cmd = [self.exe, *args, *bind, "-iL", target_file, "-oX", "-"]
+        bind_args: list[str] = []
+        if bind is not None and bind.device:
+            bind_args = ["-e", bind.device]
+            if bind.source:
+                bind_args += ["-S", bind.source]
+            log.info("scan %s: binding nmap %s to interface %s (source %s)",
+                     ctx.scan_id, label, bind.device, bind.source or "auto")
+        cmd = [self.exe, *args, *bind_args, "-iL", target_file, "-oX", "-"]
         log.debug("scan %s: running %s", ctx.scan_id, " ".join(cmd))
         started = time.monotonic()
         try:

@@ -9,12 +9,12 @@ SOC-style dashboard and sends a daily categorized HTML email summary of state ch
 It is **not** a vulnerability scanner, EDR, SIEM, CMDB or performance monitor. No exploits, brute force, authentication
 attempts or intrusive NSE scripts are ever run.
 
-| | Development | Production |
-|---|---|---|
-| Start | `npm install && npm run dev` | `docker compose up -d` |
-| Database | SQLite `./data/dev.db` (auto-created) | PostgreSQL (container) |
-| Scanner | mock (default) or local nmap | nmap inside the app container |
-| Docker needed | no | yes |
+| | Development | Production (Windows host) | Production (Linux Docker) |
+|---|---|---|---|
+| Start | `npm install && npm run dev` | `.\scripts\run.ps1 -Mode production -Background` | `docker compose up -d` |
+| Database | SQLite `./data/dev.db` (auto-created) | PostgreSQL (Docker `db` only) | PostgreSQL (container) |
+| Scanner | mock (default) or local nmap | host nmap + Npcap | nmap inside the app container |
+| Docker needed | no | Postgres only | yes (app + db) |
 
 ---
 
@@ -136,7 +136,97 @@ To try PostgreSQL in development, point `DATABASE_URL` at any PostgreSQL server 
 
 ---
 
-## Production (Docker Compose)
+## Production on Windows (host nmap)
+
+Recommended when the scanner machine is a **Windows PC on the LAN** (Npc + Npcap for ARP/MAC).
+Docker Desktop is used **only for PostgreSQL**; the app and nmap run on the host so scans leave the real ethernet NIC.
+
+Requirements:
+
+- **Node.js 20.19+**, **Python 3.10+**, **nmap** with **Npc** on PATH
+- **Docker Desktop** running (Compose `db` service only)
+- **ffmpeg** on PATH (RTSP still frames + **Watch live**), e.g. `choco install ffmpeg` or `winget install Gyan.FFmpeg`
+- Copy `.env.production.example` → `.env.production` and set at least `POSTGRES_PASSWORD` and `APP_SECRET_KEY`
+
+Before the first production start (and after every Python dependency update), download the Chromium build that
+matches the installed Playwright version. `npm run setup` / pip install only the Python package, **not** the browser;
+without this step Web Capture shows *Browser unavailable at capture time*:
+
+```powershell
+npm run setup                                                   # creates backend\.venv (skip if it exists)
+backend\.venv\Scripts\python.exe -m playwright install chromium
+```
+
+Run it as the same Windows user that runs the app (browsers are stored per user in
+`%LOCALAPPDATA%\ms-playwright`), including the Task Scheduler account.
+
+| Task | Command |
+|---|---|
+| Start (foreground — terminal stays open) | `.\scripts\run.ps1 -Mode production` or `npm start` |
+| Start (background — returns when ready) | `.\scripts\run.ps1 -Mode production -Background` |
+| Skip frontend rebuild | add `-SkipBuild` (rebuilds automatically if `frontend/dist` is missing) |
+| Force restart if port is busy | add `-ForceRestart` |
+| Stop app (Postgres keeps running) | `.\scripts\run.ps1 -Stop` or `npm run stop` |
+| Stop app + Postgres | `.\scripts\run.ps1 -Stop -StopDb` |
+| Dev via the same script | `.\scripts\run.ps1 -Mode dev` or `npm run start:dev` |
+
+What the production start does:
+
+1. Loads `.env.production` and points the app at Docker Postgres on `127.0.0.1:5434`
+2. Starts Compose service `db` only (`docker compose up -d --wait db`)
+3. Builds the frontend (`npm run build`), migrates the DB, then runs uvicorn on `APP_PORT` (default **8081**)
+
+`-Background` launches that flow in a **hidden** PowerShell window, waits until the listen port is up, prints one
+status line, and returns the prompt. You can close the terminal afterward. Logs go to
+`data/logs/production.log`. Without `-Background`, build/migrate/app output stays in the terminal (also appended to
+the same log file).
+
+Open `http://localhost:8081` (or `http://<host-ip>:8081`) and complete the **first-run wizard**: administrator →
+network scope(s) → exclusions → schedule → SMTP → optional LDAP → email recipients → baseline scan.
+
+Upgrade: `git pull`, `npm run setup`, `backend\.venv\Scripts\python.exe -m playwright install chromium`, then
+`.\scripts\run.ps1 -Mode production -ForceRestart` (or `-Background -ForceRestart`). Migrations run automatically.
+
+### Windows Task Scheduler (start after login / reboot)
+
+Use this so production comes back up without an open console. Run the task as the same Windows user that has Docker
+Desktop and Npcap access.
+
+1. Open **Task Scheduler** → **Create Task…** (not “Create Basic Task”).
+2. **General**
+   - Name: `Network Finder`
+   - Select **Run only when user is logged on** (Docker Desktop and Npcap need an interactive session on most setups)
+   - Optionally check **Run with highest privileges** if nmap/Npc needs elevation on your machine
+3. **Triggers** → **New…**
+   - Begin the task: **At log on** (this user), or **At startup** if you prefer
+   - Optional: delay 1–2 minutes so Docker Desktop finishes starting
+4. **Actions** → **New…**
+   - Action: **Start a program**
+   - Program/script: `powershell.exe`
+   - Add arguments (adjust the path):
+
+     ```text
+     -NoProfile -ExecutionPolicy Bypass -File "<repo-root>\scripts\run.ps1" -Mode production -Background -SkipBuild
+     ```
+
+   - Start in (optional but recommended): `<repo-root>`
+5. **Conditions**
+   - Uncheck **Start the task only if the computer is on AC power** if this is a laptop that should scan on battery
+6. **Settings**
+   - Check **Allow task to be run on demand**
+   - If the task is already running: **Do not start a new instance** (the script exits cleanly when the port is already listening)
+7. Click **OK**, then **Run** the task once and open `http://localhost:8081`. If it fails, check
+   `data\logs\production.log`.
+
+Stop from an elevated or normal PowerShell when needed:
+
+```powershell
+.\scripts\run.ps1 -Stop
+```
+
+---
+
+## Production (Linux Docker Compose)
 
 Requirements:
 
@@ -176,15 +266,21 @@ Upgrade: `git pull && docker compose up -d --build` (migrations run automaticall
 **HTTPS / reverse proxy.** Put nginx, Caddy or Traefik in front, set `COOKIE_SECURE=true`, and set
 `FORWARDED_ALLOW_IPS` to the proxy IP. Example Caddy: `netfinder.corp.local { reverse_proxy 127.0.0.1:8081 }`.
 
-**Secrets.** Keep them in `.env` (never committed). Docker secrets mounted under `/run/secrets/<setting_name>` (e.g.
-`postgres_password`, `app_secret_key`) are also read automatically. SMTP and LDAP passwords entered in the UI are
-stored encrypted with `APP_SECRET_KEY` and are never returned by the API.
+**Secrets.** Keep them in `.env` / `.env.production` (never committed). Docker secrets mounted under
+`/run/secrets/<setting_name>` (e.g. `postgres_password`, `app_secret_key`) are also read automatically. SMTP and LDAP
+passwords entered in the UI are stored encrypted with `APP_SECRET_KEY` and are never returned by the API.
 
 **Backup.** Back up PostgreSQL and the configuration:
 
 ```bash
 docker compose exec -T db pg_dump -U netfinder netfinder | gzip > netfinder-$(date +%F).sql.gz
 cp .env /secure/backup/location/
+```
+
+On Windows host production (Postgres-only Compose), dump from the published port instead:
+
+```powershell
+docker compose --env-file .env.production exec -T db pg_dump -U netfinder netfinder | Out-File -Encoding utf8 netfinder-backup.sql
 ```
 
 Restore: `gunzip -c backup.sql.gz | docker compose exec -T db psql -U netfinder netfinder`. If `APP_SECRET_KEY` was
@@ -199,9 +295,12 @@ screenshots are not included — re-run web captures on production after import.
 # On the development machine (SQLite):
 npm run cli -- export-data .\inventory.zip
 
-# Copy inventory.zip to the production host, then:
+# Copy inventory.zip to the production host, then (Linux Docker app container):
 docker compose cp inventory.zip app:/tmp/inventory.zip
 docker compose exec app python -m app.cli import-data /tmp/inventory.zip --yes
+
+# Windows host production (app on host, not in Compose):
+npm run cli -- import-data .\inventory.zip --yes
 ```
 
 The same actions are available in the UI under **Settings → Data** (admin only). Import **replaces** inventory on
@@ -215,7 +314,7 @@ must be on the same database schema revision (normal after `git pull` / migrate)
 
 ```
 backend/app/
-  scanner/          NmapScanner + MockScanner (same interface), nmap XML parser, auto NIC bind (-e), scanner status
+  scanner/          NmapScanner + MockScanner (same interface), nmap XML parser, auto NIC bind (-e/-S), scanner status
   core/runner.py    orchestration: targets -> discovery chunks -> service-scan batches -> compare -> snapshot
   core/compare.py   the single change-detection engine
   core/identity.py  device identity matching
@@ -300,12 +399,16 @@ IPs, CIDRs, ranges and hostnames; nmap always runs with a fixed argument list (`
 | **nmap missing** - banner *Scanner unavailable* / *nmap not detected* | Install nmap and restart, or use `SCANNER_MODE=mock`. The app itself keeps working. In Docker it is preinstalled. |
 | Real scans find hosts but no MAC addresses / ping probes | nmap runs unprivileged. In Docker keep `network_mode: host` + `cap_add`. In dev, run as root or use mock mode. |
 | Discovery fails: `"unk0" is not an ethernet device` (VPN/Tailscale) | A tunnel stole the OS route for a LAN subnet. The scanner auto-binds `-e` to the overlapping local ethernet when one exists; restart the backend after updating. If targets only exist on the tunnel, it falls back to unprivileged TCP probes. |
+| Discovery finds hosts but **standard/full scans report 0 open ports** (VPN/Tailscale on Windows) | Binding `-e eth0` alone is not enough: nmap may still source SYN packets from the tunnel IP (e.g. `100.x`). The scanner also passes `-S <LAN address>` of the chosen ethernet NIC. Restart production (`.\scripts\run.ps1 -Stop` then start again) and re-run a Standard scan. |
+| Background start printed success but UI is down | Check `data/logs/production.log`. Confirm Docker Desktop is running and port `APP_PORT` (default 8081) is free. Re-run with `-ForceRestart` or without `-Background` to see startup errors in the terminal. |
 | **Database migration failure** at startup | Read the error in the log (`data/logs/app.log`). Dev: `npm run db:reset` recreates the SQLite DB. Prod: check `docker compose logs db` and the `POSTGRES_*` values. |
 | **Port already in use** (`8000` / `5173` / `8080`) | Stop the other process, or set `BACKEND_PORT` / `FRONTEND_PORT` in `.env` (dev) or `APP_PORT` (prod). |
 | **Backend unavailable** - UI shows *Backend unavailable* / Vite logs `ECONNREFUSED 127.0.0.1:8000` | The backend crashed or is still starting; check the `[backend]` lines in the `npm run dev` output. Try `npm run dev:backend` alone. `curl localhost:8000/api/health` must return `ok`. |
 | **Frontend unavailable** - `localhost:5173` does not load | Check the `[frontend]` output; run `npm install` (Node 20.19+ required). Production serves the UI from the app on `APP_PORT`. |
 | `python -m venv` fails (Debian/Ubuntu) | `sudo apt-get install -y python3-venv`, then `npm run setup`. |
 | Python deps out of date | `npm run setup -- --force` |
+| Web Capture cards show **Browser unavailable at capture time** (host / Windows production) | Playwright was installed or upgraded without its matching Chromium build. Run `backend\.venv\Scripts\python.exe -m playwright install chromium` as the user that runs the app, then restart with `-ForceRestart`. In Docker the image installs it. |
+| RTSP shows **ffmpeg unavailable** | Install ffmpeg and make sure `ffmpeg -version` works in a new terminal, then restart the app. In Docker it is preinstalled. |
 | Scan stuck after a restart | Scans running during a restart are marked *failed* automatically (state preserved); start a new one. |
 | Login blocked (HTTP 429) | Too many failed attempts; wait 15 minutes (`LOGIN_WINDOW_MINUTES`). |
 | Lost admin password | `npm run cli -- create-user rescue 'New-pass-123' --role admin` (prod: `docker compose exec app python -m app.cli create-user ...`). |

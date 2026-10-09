@@ -58,6 +58,7 @@ from ..models import (
     ScanHost,
 )
 from ..netutils import AddressSet, PortScope, ip_sort_key
+from ..scanner.known_ports import merge_port_scope
 from ..scanner.types import HostObservation, PortObservation
 from ..settings_store import PresenceSettings, ScanSettings, get_section
 from .identity import match_hosts, normalize_hostname, normalize_mac
@@ -166,6 +167,15 @@ class _Applier:
             text = self.db.scalar(select(Scan.port_scope).where(Scan.id == scan_id))
             self._scope_cache[scan_id] = PortScope(text) if text else None
         return self._scope_cache[scan_id]
+
+    def host_scope(self, host: HostObservation) -> PortScope | None:
+        """Scan-wide scope plus any ports probed only on this host (e.g. TrueNAS apps)."""
+        if self.scope is None:
+            return None
+        if not host.extra_tcp_ports:
+            return self.scope
+        text = merge_port_scope(self.outcome.port_scope, host.extra_tcp_ports)
+        return PortScope(text) if text else self.scope
 
     def emit(self, device: Device, etype: str, mode: str, message: str, *, ip: str | None = None,
              protocol: str | None = None, port: int | None = None, old: str | None = None,
@@ -279,11 +289,12 @@ class _Applier:
                     ip_row.last_seen = now
             seen_devices[h.ip] = dev
 
-            if h.ports is not None and self.scope is not None:
+            host_scope = self.host_scope(h)
+            if h.ports is not None and host_scope is not None:
                 open_ports_scanned += sum(
-                    1 for p in dev.ports if p.is_open and p.protocol == "tcp" and p.port in self.scope
+                    1 for p in dev.ports if p.is_open and p.protocol == "tcp" and p.port in host_scope
                 )
-                pending_closures += self._process_ports(dev, h.ports, is_new, mode)
+                pending_closures += self._process_ports(dev, h.ports, is_new, mode, host_scope)
                 dev.port_scan_failed = False
                 dev.last_port_scan_id = self.scan.id
                 dev.last_port_scan_at = now
@@ -316,9 +327,10 @@ class _Applier:
         self._maybe_baseline()
         return self.result
 
-    def _process_ports(self, dev: Device, observed: list[PortObservation], is_new: bool, mode: str):
-        now, scope = self.now, self.scope
-        assert scope is not None
+    def _process_ports(
+        self, dev: Device, observed: list[PortObservation], is_new: bool, mode: str, scope: PortScope,
+    ):
+        now = self.now
         rows = {(r.protocol, r.port): r for r in dev.ports}
         label = device_label(dev)
         last_scope = self.prior_scope(dev.last_port_scan_id)
