@@ -4,6 +4,7 @@
   hash is stored. Idle timeout + absolute lifetime.
 * CSRF: per-session token, readable by the SPA from a non-HttpOnly cookie and
   required in the X-CSRF-Token header for every state-changing request.
+* API tokens: `Authorization: Bearer nf_...`, read-only (GET/HEAD), stored as SHA-256 hashes.
 """
 from __future__ import annotations
 
@@ -16,13 +17,16 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db, utcnow
-from ..models import ROLE_ADMIN, User, UserSession
+from ..models import ROLE_ADMIN, ApiToken, User, UserSession
 from ..security import hash_token, new_token
 
 SESSION_COOKIE = "nf_session"
 CSRF_COOKIE = "nf_csrf"
 CSRF_HEADER = "X-CSRF-Token"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+API_TOKEN_PREFIX = "nf_"
+TOKEN_METHODS = {"GET", "HEAD"}
+TOKEN_TOUCH_SECONDS = 60
 
 
 def client_ip(request: Request) -> str | None:
@@ -91,7 +95,37 @@ def get_session_record(request: Request, db: Session = Depends(get_db)) -> UserS
     return sess
 
 
-def current_user(sess: UserSession = Depends(get_session_record)) -> User:
+def _api_token_user(request: Request, db: Session) -> User | None:
+    """User of a valid `Authorization: Bearer nf_...` token, None when no bearer token is sent."""
+    header = request.headers.get("Authorization", "")
+    scheme, _, raw = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    raw = raw.strip()
+    tok = db.scalar(select(ApiToken).where(ApiToken.token_hash == hash_token(raw))) \
+        if raw.startswith(API_TOKEN_PREFIX) else None
+    now = utcnow()
+    if tok is None or tok.revoked or (tok.expires_at is not None and tok.expires_at < now) or not tok.user.is_active:
+        raise HTTPException(401, "Invalid, revoked or expired API token")
+    if request.method not in TOKEN_METHODS:
+        raise HTTPException(403, "API tokens are read-only")
+    if tok.last_used_at is None or (now - tok.last_used_at).total_seconds() > TOKEN_TOUCH_SECONDS:
+        tok.last_used_at = now
+        db.commit()
+    request.state.api_token = tok
+    return tok.user
+
+
+def current_user(request: Request, db: Session = Depends(get_db)) -> User:
+    """Cookie session, or a read-only API token for scripts."""
+    user = _api_token_user(request, db)
+    if user is not None:
+        return user
+    return get_session_record(request, db).user
+
+
+def session_user(sess: UserSession = Depends(get_session_record)) -> User:
+    """Cookie session only (API tokens cannot manage API tokens)."""
     return sess.user
 
 

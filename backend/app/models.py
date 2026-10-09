@@ -55,6 +55,11 @@ EV_PORT_CLOSED = "port_closed"
 EV_SERVICE_DETECTED = "service_detected"
 EV_SERVICE_CHANGED = "service_changed"
 EV_VERSION_CHANGED = "version_changed"
+# Inventory intelligence
+EV_TAG_ADDED = "tag_added"
+EV_TAG_REMOVED = "tag_removed"
+EV_WATCH_MATCH = "watch_match"
+EV_POLICY_VIOLATION = "policy_violation"
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -65,10 +70,18 @@ EVENT_TYPES = (
     EV_SERVICE_DETECTED,
     EV_SERVICE_CHANGED,
     EV_VERSION_CHANGED,
+    EV_TAG_ADDED,
+    EV_TAG_REMOVED,
+    EV_WATCH_MATCH,
+    EV_POLICY_VIOLATION,
 )
+# Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
+ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION)
 EVENT_SEVERITY = {
     EV_DEVICE_DISCOVERED: "high",
     EV_PORT_OPENED: "high",
+    EV_WATCH_MATCH: "high",
+    EV_POLICY_VIOLATION: "high",
     EV_SERVICE_CHANGED: "medium",
     EV_DEVICE_DISAPPEARED: "medium",
     EV_PORT_CLOSED: "medium",
@@ -76,7 +89,17 @@ EVENT_SEVERITY = {
     EV_VERSION_CHANGED: "low",
     EV_DEVICE_REAPPEARED: "low",
     EV_SERVICE_DETECTED: "info",
+    EV_TAG_ADDED: "info",
+    EV_TAG_REMOVED: "info",
 }
+
+NETWORK_ZONES = ("servers", "users", "iot", "dmz", "management", "guest", "lab")
+CRITICALITY_LEVELS = ("low", "medium", "high", "critical")
+TAG_SOURCE_RULE = "rule"
+TAG_SOURCE_MANUAL = "manual"
+TAG_SOURCE_SUPPRESSED = "suppressed"
+SEARCH_KIND_WATCH = "watch"
+SEARCH_KIND_POLICY = "policy"
 
 
 def new_uuid() -> str:
@@ -116,6 +139,7 @@ class Network(Base):
     cidr: Mapped[str] = mapped_column(String(64))
     description: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    zone: Mapped[str | None] = mapped_column(String(20))  # NETWORK_ZONES; weights the exposure score
     baseline_scan_id: Mapped[int | None] = mapped_column(Integer)
     baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
@@ -162,12 +186,22 @@ class Device(Base):
     absence_days: Mapped[int] = mapped_column(Integer, default=0)
     absence_counted_on: Mapped[date | None] = mapped_column(Date)
     absence_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Inventory intelligence (recomputed after every scan / web capture that touches the device)
+    device_type: Mapped[str | None] = mapped_column(String(40), index=True)
+    exposure_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     ports: Mapped[list[DevicePort]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DevicePort.port"
     )
     ips: Mapped[list[DeviceIP]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DeviceIP.last_seen.desc()"
+    )
+    tags: Mapped[list[DeviceTag]] = relationship(
+        back_populates="device", cascade="all, delete-orphan", order_by="DeviceTag.tag"
+    )
+    profile: Mapped[DeviceProfile | None] = relationship(
+        back_populates="device", cascade="all, delete-orphan", uselist=False
     )
 
 
@@ -201,11 +235,107 @@ class DevicePort(Base):
     extra_info: Mapped[str | None] = mapped_column(String(255))
     method: Mapped[str | None] = mapped_column(String(20))  # nmap: probed | table
     confidence: Mapped[int | None] = mapped_column(Integer)
+    cpe: Mapped[str | None] = mapped_column(String(500))  # space-separated nmap CPE strings
+    tunnel: Mapped[str | None] = mapped_column(String(10))  # nmap service tunnel ("ssl")
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     opened_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     device: Mapped[Device] = relationship(back_populates="ports")
+    http: Mapped[PortHttp | None] = relationship(cascade="all, delete-orphan", uselist=False,
+                                                 back_populates="port_row")
+
+
+class PortHttp(Base):
+    """HTTP metadata of one port's landing page, kept from the latest web capture (searchable)."""
+
+    __tablename__ = "port_http"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), unique=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    scheme: Mapped[str | None] = mapped_column(String(8))
+    status: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(500))
+    server: Mapped[str | None] = mapped_column(String(255))
+    content_type: Mapped[str | None] = mapped_column(String(255))
+    location: Mapped[str | None] = mapped_column(Text)  # redirect target
+    login: Mapped[bool] = mapped_column(Boolean, default=False)
+    default_page: Mapped[bool] = mapped_column(Boolean, default=False)
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    port_row: Mapped[DevicePort] = relationship(back_populates="http")
+
+
+class DeviceTag(Base):
+    __tablename__ = "device_tags"
+    __table_args__ = (UniqueConstraint("device_id", "tag", name="uq_device_tag"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    tag: Mapped[str] = mapped_column(String(60), index=True)
+    source: Mapped[str] = mapped_column(String(10), default=TAG_SOURCE_RULE)  # rule | manual | suppressed
+    reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    device: Mapped[Device] = relationship(back_populates="tags")
+
+
+class DeviceProfile(Base):
+    """Operator context for a device (1:1) plus the explanation of its exposure score."""
+
+    __tablename__ = "device_profiles"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), unique=True)
+    owner: Mapped[str | None] = mapped_column(String(150))
+    location: Mapped[str | None] = mapped_column(String(200))
+    criticality: Mapped[str | None] = mapped_column(String(10))  # CRITICALITY_LEVELS
+    notes: Mapped[str | None] = mapped_column(Text)
+    exposure_factors: Mapped[list | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    device: Mapped[Device] = relationship(back_populates="profile")
+
+
+class SavedSearch(Base):
+    """A named query. Watches alert on new matches; policies treat every match as a violation."""
+
+    __tablename__ = "saved_searches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    query: Mapped[str] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(10), default=SEARCH_KIND_WATCH)
+    alert: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str | None] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    # False until the first evaluation, which records the current matches silently (its baseline)
+    initialized: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class SavedSearchHit(Base):
+    __tablename__ = "saved_search_hits"
+    __table_args__ = (UniqueConstraint("search_id", "device_id", name="uq_search_hit"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    search_id: Mapped[int] = mapped_column(ForeignKey("saved_searches.id", ondelete="CASCADE"), index=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    first_matched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class ApiToken(Base):
+    """Read-only bearer token for scripts (only its SHA-256 hash is stored)."""
+
+    __tablename__ = "api_tokens"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    prefix: Mapped[str] = mapped_column(String(12))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    user: Mapped[User] = relationship(lazy="joined")
 
 
 class Scan(Base):

@@ -46,15 +46,16 @@ export default function Ports() {
     set({ sort: key === 'count' ? undefined : key, dir: desc === defaultDesc(key) ? undefined : desc ? 'desc' : 'asc' });
   };
   const arrow = (key: SortKey) => (sort.key === key ? (sort.desc ? ' ↓' : ' ↑') : '');
-  const deviceLink = (p: ExposedPort) =>
-    `/devices?port=${p.port}${networkId ? `&network_id=${networkId}` : ''}`;
+  const networkName = networks.data?.find((n) => String(n.id) === networkId)?.name;
+  const portLink = (p: ExposedPort) =>
+    `/ports/${p.protocol}/${p.port}${networkName ? `?network=${encodeURIComponent(networkName)}` : ''}`;
 
   return (
     <>
       <div className="page-head">
         <div>
           <h1>Exposed ports</h1>
-          <p>Every open port known on the network, by number of hosts exposing it. Click a port to see those hosts.</p>
+          <p>Every open port known on the network, by number of hosts exposing it. Click a port for its products, versions, web titles and hosts.</p>
         </div>
         <div className="row" style={{ gap: 8 }}>
           <select value={networkId ?? ''} onChange={(e) => set({ network_id: e.target.value })}>
@@ -84,7 +85,7 @@ export default function Ports() {
               </thead>
               <tbody>
                 {rows.map((p) => (
-                  <tr key={`${p.protocol}${p.port}`} className="clickable" onClick={() => nav(deviceLink(p))}>
+                  <tr key={`${p.protocol}${p.port}`} className="clickable" onClick={() => nav(portLink(p))}>
                     <td className="mono">{p.protocol.toUpperCase()}/{p.port}</td>
                     <td>{p.service}</td>
                     <td className="muted small">

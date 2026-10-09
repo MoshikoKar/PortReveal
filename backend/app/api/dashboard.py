@@ -3,13 +3,15 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import case, func, literal_column, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
+from ..core.exposure import HIGH_THRESHOLD, MEDIUM_THRESHOLD
 from ..core.mockdata import device_visible, event_visible, snapshot_visible
 from ..db import get_db, utcnow
 from ..models import (
+    ALWAYS_NOTIFY_TYPES,
     DEVICE_ACTIVE,
     EV_DEVICE_DISCOVERED,
     EV_PORT_CLOSED,
@@ -29,6 +31,9 @@ from .common import event_out, network_out
 from .system import scan_summary
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
+
+DASHBOARD_TOP_HOSTS = 5
+DASHBOARD_ALERTS = 5
 
 
 def _event_counts(db: Session, since) -> dict[str, int]:
@@ -172,6 +177,23 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
         for n in db.scalars(select(Network).order_by(Network.name)).all()
     ]
 
+    lvl = case((Device.exposure_score >= HIGH_THRESHOLD, "high"),
+               (Device.exposure_score >= MEDIUM_THRESHOLD, "medium"), else_="low")
+    levels = {"high": 0, "medium": 0, "low": 0}
+    levels.update(dict(db.execute(select(lvl, func.count(Device.id)).where(dev_ok).group_by(lvl)).tuples().all()))
+    top_exposed = db.scalars(select(Device).where(dev_ok, Device.exposure_score > 0)
+                             .order_by(Device.exposure_score.desc(), Device.id).limit(DASHBOARD_TOP_HOSTS)).all()
+    net_names = {n["id"]: n["name"] for n in networks}
+    n_type = func.count(Device.id)
+    types = db.execute(select(Device.device_type, n_type).where(dev_ok, Device.device_type.isnot(None))
+                       .group_by(Device.device_type).order_by(n_type.desc())).all()
+    alert_conds = (Event.event_type.in_(ALWAYS_NOTIFY_TYPES), Event.created_at >= now - timedelta(days=7),
+                   event_visible(db))
+    alerts = db.scalars(select(Event).where(*alert_conds).order_by(Event.id.desc())
+                        .limit(DASHBOARD_ALERTS)).unique().all()
+    new_hosts_week = db.scalar(select(func.count(Device.id))
+                               .where(dev_ok, Device.first_seen >= now - timedelta(days=7))) or 0
+
     return {
         "devices": {
             "total": total,
@@ -204,4 +226,15 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
         "trend": [{"date": d.isoformat(), "hosts_active": int(a or 0), "open_ports": int(o or 0)} for d, a, o in trend_rows],
         "networks": networks,
         "scans": scan_summary(db),
+        "exposure": {
+            **levels,
+            "top": [{"uuid": d.uuid, "ip": d.current_ip, "hostname": d.hostname, "type": d.device_type,
+                     "score": d.exposure_score, "network": net_names.get(d.network_id)} for d in top_exposed],
+        },
+        "device_types": [{"type": t, "count": int(n)} for t, n in types],
+        "watch_alerts": {
+            "last_7d": sum(c7.get(t, 0) for t in ALWAYS_NOTIFY_TYPES),
+            "recent": [event_out(e) for e in alerts],
+        },
+        "new_hosts_7d": new_hosts_week,
     }

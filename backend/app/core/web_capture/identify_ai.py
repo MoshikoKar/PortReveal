@@ -34,6 +34,9 @@ _TEXT_SIGNATURES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bSGLang\b", re.I), "SGLang"),
     (re.compile(r"\bMsty\b", re.I), "Msty"),
 )
+GENERIC_LLM_API = "OpenAI-compatible LLM API"
+# Every product name this module can write into DevicePort.product
+AI_PRODUCTS = frozenset({name for _, name in _TEXT_SIGNATURES} | {GENERIC_LLM_API})
 
 
 def _parse_json(text: str | None) -> Any | None:
@@ -86,7 +89,7 @@ def identify_from_openai_models_json(data: Any) -> str | None:
         return "Xinference"
     # Generic OpenAI-compatible list with model ids — content proves an LLM API, not a port.
     if data.get("object") == "list" and rows and any(r.get("id") for r in rows):
-        return "OpenAI-compatible LLM API"
+        return GENERIC_LLM_API
     return None
 
 

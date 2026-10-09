@@ -2,9 +2,12 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Character offset of a search query syntax error (400 responses from /search). */
+  pos?: number;
+  constructor(status: number, message: string, pos?: number) {
     super(message);
     this.status = status;
+    this.pos = pos;
   }
 }
 
@@ -65,7 +68,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   }
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/auth/login')) window.dispatchEvent(new Event('nf:unauthorized'));
-    throw new ApiError(res.status, errorMessage(body, res.status));
+    throw new ApiError(res.status, errorMessage(body, res.status), typeof body?.pos === 'number' ? body.pos : undefined);
   }
   return body as T;
 }

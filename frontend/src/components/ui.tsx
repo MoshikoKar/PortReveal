@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import type { ChangeEvent, DeviceStatus, ScanStatus } from '../types';
-import { EVENT_LABELS } from '../util';
+import { EVENT_LABELS, scoreLevel } from '../util';
 
 export function Card({ title, actions, children, flush, className }: {
   title?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string;
@@ -62,6 +62,14 @@ export function ScanStatusBadge({ status }: { status: ScanStatus }) {
 
 export function SeverityBadge({ ev }: { ev: ChangeEvent }) {
   return <span className={`badge ${ev.severity}`}>{EVENT_LABELS[ev.event_type] ?? ev.event_type}</span>;
+}
+
+const SCORE_CLASS = { high: 'high', medium: 'medium', low: 'ok' } as const;
+
+/** Exposure score 0–100 (computed from stored scan data, not a vulnerability rating). */
+export function ScoreBadge({ score }: { score: number | null | undefined }) {
+  const s = score ?? 0;
+  return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`Exposure score ${s} / 100`}>{s}</span>;
 }
 
 export function MockBadge({ mode }: { mode: string | null }) {

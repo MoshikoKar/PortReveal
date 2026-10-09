@@ -47,6 +47,7 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
         "cidr": n.cidr,
         "description": n.description,
         "enabled": n.enabled,
+        "zone": n.zone,
         "baseline_scan_id": n.baseline_scan_id,
         "baseline_at": n.baseline_at,
         "created_at": n.created_at,

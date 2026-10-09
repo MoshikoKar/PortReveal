@@ -150,7 +150,7 @@ export default function Devices() {
 
       <Card flush title={
         <div className="row wrap" style={{ flex: 1 }}>
-          <input type="search" placeholder="Search IP, hostname, MAC, port, service, vendor…" value={qInput} onChange={(e) => setQInput(e.target.value)} style={{ minWidth: 320, flex: 1 }} />
+          <input type="search" placeholder="Search IP, hostname, MAC, vendor… or a query like port:22 tag:camera" title="Accepts free text or the search query language (field:value). See the Search page for the field reference." value={qInput} onChange={(e) => setQInput(e.target.value)} style={{ minWidth: 320, flex: 1 }} />
           <select value={params.status ?? ''} onChange={(e) => update({ status: e.target.value || undefined })}>
             <option value="">All statuses</option><option value="active">Active</option><option value="unknown">Unconfirmed</option><option value="not_detected">Not detected</option>
           </select>

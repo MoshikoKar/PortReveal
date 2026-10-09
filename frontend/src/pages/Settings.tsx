@@ -5,6 +5,7 @@ import { DataTransferPanel } from './settings/DataTransfer';
 import { ExclusionsSettings } from './settings/Exclusions';
 import { LdapForm, NotificationsForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, WebCaptureForm } from './settings/Forms';
 import { NetworksSettings } from './settings/Networks';
+import { TokensSettings } from './settings/Tokens';
 
 const TABS = [
   { id: 'networks', label: 'Networks', viewer: true },
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'retention', label: 'Retention', viewer: false },
   { id: 'data', label: 'Data', viewer: false },
   { id: 'audit', label: 'Audit log', viewer: false },
+  { id: 'tokens', label: 'API tokens', viewer: true },
   { id: 'health', label: 'System health', viewer: true },
 ];
 
@@ -48,6 +50,7 @@ export default function Settings() {
       {tab === 'retention' && <RetentionForm />}
       {tab === 'data' && <DataTransferPanel />}
       {tab === 'audit' && <AuditSettings />}
+      {tab === 'tokens' && <TokensSettings />}
       {tab === 'health' && <HealthPanel />}
     </>
   );

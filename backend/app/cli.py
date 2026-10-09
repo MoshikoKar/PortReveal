@@ -8,6 +8,7 @@
     python -m app.cli mock-reset
     python -m app.cli retention
     python -m app.cli status
+    python -m app.cli search "port:22 -tag:lab"
     python -m app.cli export-data [PATH]
     python -m app.cli import-data PATH --yes
 """
@@ -145,6 +146,27 @@ def cmd_status(_args) -> int:
     return 0
 
 
+def cmd_search(args) -> int:
+    _boot()
+    from .core.query import QueryError, prepare
+    from .core.query.search import search_hosts
+    from .db import session_scope
+
+    try:
+        node = prepare(args.query)
+    except QueryError as exc:
+        where = f" (at {exc.pos})" if exc.pos is not None else ""
+        print(f"query error{where}: {exc}", file=sys.stderr)
+        return 1
+    with session_scope() as db:
+        res = search_hosts(db, node, page=1, page_size=args.limit)
+        for h in res.items:
+            ports = ",".join(str(s["port"]) for s in h["services"])
+            print(f"{h['ip']:<16} {h['hostname'] or '-':<32} {ports}")
+        print(f"{len(res.items)} of {res.total} hosts", file=sys.stderr)
+    return 0
+
+
 def cmd_export_data(args) -> int:
     _boot()
     from .core.data_transfer import DataTransferError, default_export_path, export_inventory
@@ -198,6 +220,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("mock-reset").set_defaults(fn=cmd_mock_reset)
     sub.add_parser("retention").set_defaults(fn=cmd_retention)
     sub.add_parser("status").set_defaults(fn=cmd_status)
+    se = sub.add_parser("search", help='search the inventory, e.g. search "port:22 -tag:lab"')
+    se.add_argument("query")
+    se.add_argument("--limit", type=int, default=100, help="maximum hosts to print (default 100)")
+    se.set_defaults(fn=cmd_search)
     ex = sub.add_parser("export-data", help="export inventory ZIP (networks, devices, scans, history)")
     ex.add_argument("path", nargs="?", help="output zip path (default: network-finder-inventory-YYYYMMDD.zip)")
     ex.set_defaults(fn=cmd_export_data)

@@ -15,15 +15,20 @@ from sqlalchemy.orm import Session
 
 from ..db import session_scope, utcnow
 from ..models import (
+    ALWAYS_NOTIFY_TYPES,
     EV_DEVICE_DISAPPEARED,
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_REAPPEARED,
     EV_IP_CHANGED,
+    EV_POLICY_VIOLATION,
     EV_PORT_CLOSED,
     EV_PORT_OPENED,
     EV_SERVICE_CHANGED,
     EV_SERVICE_DETECTED,
+    EV_TAG_ADDED,
+    EV_TAG_REMOVED,
     EV_VERSION_CHANGED,
+    EV_WATCH_MATCH,
     Event,
     Network,
 )
@@ -45,13 +50,19 @@ TITLES = {
     EV_SERVICE_DETECTED: "Services identified",
     EV_SERVICE_CHANGED: "Services changed",
     EV_VERSION_CHANGED: "Versions changed",
+    EV_TAG_ADDED: "Tags added",
+    EV_TAG_REMOVED: "Tags removed",
+    EV_WATCH_MATCH: "Watch matches",
+    EV_POLICY_VIOLATION: "Policy violations",
 }
 
 # Ordered categories for the daily summary email.
 CATEGORIES: list[tuple[str, list[str]]] = [
+    ("Watches", [EV_POLICY_VIOLATION, EV_WATCH_MATCH]),
     ("Devices", [EV_DEVICE_DISCOVERED, EV_DEVICE_DISAPPEARED, EV_DEVICE_REAPPEARED, EV_IP_CHANGED]),
     ("Ports", [EV_PORT_OPENED, EV_PORT_CLOSED]),
     ("Services", [EV_SERVICE_DETECTED, EV_SERVICE_CHANGED, EV_VERSION_CHANGED]),
+    ("Tags", [EV_TAG_ADDED, EV_TAG_REMOVED]),
 ]
 
 
@@ -114,6 +125,10 @@ def _line_for(ev: Event) -> str:
         return f"{who} — {port} {_short(ev.new_value, 28)}".rstrip()
     if ev.event_type in (EV_SERVICE_CHANGED, EV_VERSION_CHANGED):
         return f"{who} — {port}: {_short(ev.old_value, 22)} → {_short(ev.new_value, 22)}"
+    if ev.event_type in (EV_WATCH_MATCH, EV_POLICY_VIOLATION):
+        return f"{who} — {_short(ev.new_value, 40)}"
+    if ev.event_type in (EV_TAG_ADDED, EV_TAG_REMOVED):
+        return f"{who} — {_short(ev.new_value or ev.old_value, 30)}"
     return _short(ev.message, 60) or who
 
 
@@ -352,5 +367,5 @@ def _pending_all(db: Session, cfg: NotificationSettings) -> list[Event]:
         select(Event).where(Event.notify.is_(True), Event.notified_at.is_(None))
         .order_by(Event.created_at, Event.id)
     ).unique().all()
-    allowed = set(cfg.event_types)
+    allowed = set(cfg.event_types) | set(ALWAYS_NOTIFY_TYPES)
     return [e for e in rows if e.event_type in allowed]

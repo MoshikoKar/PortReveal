@@ -1,18 +1,39 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { del } from '../api';
+import { ExposureCard, ProfileCard, TagEditor, Timeline } from '../components/DeviceIntel';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, Loading, MockBadge, Pager, ScanStatusBadge } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, Loading, MockBadge, Pager, ScanStatusBadge, ScoreBadge } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
 import { SCAN_TYPE_LABELS, fmtTime, relTime, useApi } from '../util';
 
+const PREVIEW_ROWS = 10;
+
 interface ScanRow {
   scan_id: number; scan_type: 'discovery' | 'standard' | 'full'; scan_status: any; scanner_mode: string | null;
   created_at: string; ip: string; status: string; open_ports: number | null;
+}
+
+function previewRows<T>(items: T[], open: boolean): T[] {
+  return open ? items : items.slice(0, PREVIEW_ROWS);
+}
+
+/** Bottom bar; omitted when the list already fits in the preview. */
+function SeeAllBar({ total, open, onToggle }: { total: number; open: boolean; onToggle: () => void }) {
+  if (total <= PREVIEW_ROWS) return null;
+  return (
+    <button type="button" onClick={onToggle} style={{
+      display: 'block', width: '100%', padding: '10px 16px', background: 'transparent',
+      border: 0, borderTop: '1px solid var(--border)', color: 'var(--accent)',
+      cursor: 'pointer', fontSize: 12, textAlign: 'center',
+    }}>
+      {open ? 'Show less' : `See all ${total} →`}
+    </button>
+  );
 }
 
 export default function DeviceDetail() {
@@ -22,11 +43,13 @@ export default function DeviceDetail() {
   const [scanType, setScanType] = useState<'standard' | 'full' | null>(null);
   const [webCapture, setWebCapture] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
+  const [portsOpen, setPortsOpen] = useState(false);
+  const [scansOpen, setScansOpen] = useState(false);
   const [evPage, setEvPage] = useState(1);
   const [scPage, setScPage] = useState(1);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
-  const { data: d, error } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
+  const { data: d, error, reload } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
   const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 25 }, 15000);
   const scans = useApi<Paged<ScanRow>>(`/devices/${uuid}/scans`, { page: scPage, page_size: 15 });
   const webIf = useApi<DeviceWebInterfaces>(`/devices/${uuid}/web-interfaces`, undefined, 15000);
@@ -34,6 +57,7 @@ export default function DeviceDetail() {
   if (!d) return <>{error ? <ErrorBox error={error} /> : <Loading />}</>;
   const open = d.ports.filter((p) => p.is_open);
   const closed = d.ports.filter((p) => !p.is_open);
+  const portRows = [...open, ...(showClosed ? closed : [])];
 
   const remove = async () => {
     if (removing || !confirm('Delete this device and its history? If it is still on the network it will be re-discovered as a new device.')) return;
@@ -57,6 +81,8 @@ export default function DeviceDetail() {
           <h1 className="row" style={{ gap: 12 }}>
             {d.hostname ?? d.current_ip}
             <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} />
+            <ScoreBadge score={d.score} />
+            {d.type && <Link className="badge accent" to={`/search?q=${encodeURIComponent(`type:${d.type}`)}`}>{d.type}</Link>}
           </h1>
           <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
         </div>
@@ -76,23 +102,40 @@ export default function DeviceDetail() {
           actions={closed.length > 0 && <label className="check small"><input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />show {closed.length} closed</label>}>
           {!d.last_port_scan_at && <div className="card-body muted small">This device has not been port-scanned yet (discovery only).</div>}
           {open.length === 0 && !showClosed ? <Empty>No open ports detected.</Empty> : (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Port</th><th>Service</th><th>Product / version</th><th>Confidence</th><th>Open since</th><th>Last seen</th></tr></thead>
-                <tbody>
-                  {[...open, ...(showClosed ? closed : [])].map((p) => (
-                    <tr key={`${p.protocol}${p.port}`} className={p.is_open ? '' : 'dim'}>
-                      <td className="mono nowrap"><strong>{p.protocol.toUpperCase()}/{p.port}</strong>{!p.is_open && <span className="badge outline" style={{ marginLeft: 6 }}>closed {fmtTime(p.closed_at)}</span>}</td>
-                      <td>{p.service ?? '—'}</td>
-                      <td>{[p.product, p.version].filter(Boolean).join(' ') || <span className="muted">—</span>}{p.extra_info && <div className="muted small">{p.extra_info}</div>}</td>
-                      <td className="small">{p.method === 'probed' ? <span className="badge ok">fingerprinted</span> : <span className="badge outline" title="Guessed from the port number">port guess</span>}{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
-                      <td className="nowrap small">{fmtTime(p.opened_at)}</td>
-                      <td className="nowrap small">{relTime(p.last_seen)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Port</th><th>Service</th><th>Product / version</th><th>HTTP</th><th>Confidence</th><th>Open since</th><th>Last seen</th></tr></thead>
+                  <tbody>
+                    {previewRows(portRows, portsOpen).map((p) => (
+                      <tr key={`${p.protocol}${p.port}`} className={p.is_open ? '' : 'dim'}>
+                        <td className="mono nowrap"><strong>{p.protocol.toUpperCase()}/{p.port}</strong>{!p.is_open && <span className="badge outline" style={{ marginLeft: 6 }}>closed {fmtTime(p.closed_at)}</span>}</td>
+                        <td>{p.service ?? '—'}{p.tunnel && <span className="badge outline" style={{ marginLeft: 6 }}>{p.tunnel}</span>}</td>
+                        <td>
+                          {[p.product, p.version].filter(Boolean).join(' ') || <span className="muted">—</span>}
+                          {p.extra_info && <div className="muted small">{p.extra_info}</div>}
+                          {p.cpe?.map((c) => <div key={c} className="mono muted small">{c}</div>)}
+                        </td>
+                        <td className="small">
+                          {p.http ? (
+                            <>
+                              {p.http.status != null && <span className="badge outline">{p.http.status}</span>} {p.http.title ?? <span className="muted">no title</span>}
+                              {p.http.login && <span className="badge medium" style={{ marginLeft: 6 }}>login</span>}
+                              {p.http.default_page && <span className="badge outline" style={{ marginLeft: 6 }}>default page</span>}
+                              {p.http.server && <div className="muted">{p.http.server}</div>}
+                            </>
+                          ) : <span className="muted">—</span>}
+                        </td>
+                        <td className="small">{p.method === 'probed' ? <span className="badge ok">fingerprinted</span> : <span className="badge outline" title="Guessed from the port number">port guess</span>}{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
+                        <td className="nowrap small">{fmtTime(p.opened_at)}</td>
+                        <td className="nowrap small">{relTime(p.last_seen)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <SeeAllBar total={portRows.length} open={portsOpen} onToggle={() => setPortsOpen((v) => !v)} />
+            </>
           )}
         </Card>
 
@@ -105,7 +148,8 @@ export default function DeviceDetail() {
             <dt>MAC</dt><dd className="mono">{d.mac ?? '— (not on scanner L2 segment)'}</dd>
             <dt>Vendor</dt><dd>{d.vendor ?? '—'}</dd>
             <dt>OS guess</dt><dd>{d.os_name ?? '—'}</dd>
-            <dt>Network</dt><dd>{d.network_name ?? '—'}</dd>
+            <dt>Network</dt><dd>{d.network_name ?? '—'}{d.zone && <span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
+            <dt>Device type</dt><dd>{d.type ?? '—'}{d.classified_at && <span className="muted small"> (classified {relTime(d.classified_at)})</span>}</dd>
             <dt>First seen</dt><dd>{fmtTime(d.first_seen)}</dd>
             <dt>Last seen</dt><dd>{fmtTime(d.last_seen)} <span className="muted">({relTime(d.last_seen)})</span></dd>
             <dt>Last port scan</dt><dd>{fmtTime(d.last_port_scan_at)}</dd>
@@ -114,6 +158,12 @@ export default function DeviceDetail() {
             <dt>Device ID</dt><dd className="mono small">{d.uuid}</dd>
           </dl>
         </Card>
+      </div>
+
+      <div className="grid three">
+        <Card title="Tags"><TagEditor d={d} isAdmin={isAdmin} onChange={reload} /></Card>
+        <ExposureCard d={d} />
+        <ProfileCard d={d} isAdmin={isAdmin} onChange={reload} />
       </div>
 
       <Card title="Web interfaces" flush
@@ -133,7 +183,7 @@ export default function DeviceDetail() {
               </div>
               {live.length > 0 && (
                 <div className="shot-grid" style={{ paddingTop: 0 }}>
-                  {live.slice(0, 4).map((p) => (
+                  {live.slice(0, 5).map((p) => (
                     <ShotTile key={p.id} p={p} onOpen={() => nav(`/devices/${d.uuid}/web`)} />
                   ))}
                 </div>
@@ -160,7 +210,7 @@ export default function DeviceDetail() {
                 <table>
                   <thead><tr><th>Scan</th><th>Type</th><th>Time</th><th>IP</th><th>Result</th></tr></thead>
                   <tbody>
-                    {scans.data.items.map((s) => (
+                    {previewRows(scans.data.items, scansOpen).map((s) => (
                       <tr key={s.scan_id}>
                         <td>#{s.scan_id} <MockBadge mode={s.scanner_mode} /></td>
                         <td>{SCAN_TYPE_LABELS[s.scan_type]}</td>
@@ -171,6 +221,7 @@ export default function DeviceDetail() {
                     ))}
                   </tbody>
                 </table>
+                <SeeAllBar total={scans.data.items.length} open={scansOpen} onToggle={() => setScansOpen((v) => !v)} />
                 <Pager page={scPage} pageSize={15} total={scans.data.total} onPage={setScPage} />
               </>
             )) : <Loading />}
@@ -185,6 +236,7 @@ export default function DeviceDetail() {
           )}
         </div>
       </div>
+      <Timeline uuid={d.uuid} />
       {scanType && (
         <ScanDialog
           preset={{ scan_type: scanType, device_uuids: [d.uuid], deviceLabel: `${d.hostname ?? d.current_ip} (${d.current_ip})`, lockTargets: true }}

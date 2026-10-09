@@ -47,6 +47,7 @@ from ..scanner.types import (
 )
 from ..settings_store import ScanSettings, get_section, get_value, set_value
 from .compare import ScanOutcome, apply_outcome
+from .intel import after_scan, run_watches
 from .snapshots import create_snapshot
 from .web_capture.auto import maybe_enqueue_auto_web_capture
 from .web_capture.manager import web_capture_manager
@@ -261,6 +262,7 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
             scan = db.get(Scan, scan_id)
             res = apply_outcome(db, scan, outcome, cfg)
             db.flush()
+            tag_events = after_scan(db, scan, res.events)
             event_ids = [e.id for e in res.events]
             status = SCAN_COMPLETED if outcome.complete and not res.guard_tripped else SCAN_PARTIAL
             notes = list(res.notes)
@@ -274,7 +276,7 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
             scan.hosts_discovered = len(live)
             scan.hosts_scanned = sum(1 for h in live.values() if h.ports is not None)
             scan.hosts_failed = res.hosts_failed
-            scan.events_count = len(res.events)
+            scan.events_count = len(res.events) + tag_events
             scan.notes = "\n".join(notes) or None
             if status == SCAN_PARTIAL and failures:
                 scan.error = failures[0]
@@ -295,6 +297,7 @@ def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | No
             scan_id, status, time.monotonic() - started, len(live), len(event_ids),
             " (baseline created)" if res.baseline_created else "",
         )
+        run_watches(scan_id=scan_id)
         if auto_capture_id is not None:
             web_capture_manager.wake()
         return status

@@ -15,6 +15,9 @@ const ICONS = {
   changes: 'M3 12h4l3 8 4-16 3 8h4',
   web: 'M3 5h18v14H3zM3 9h18M6.5 7h.01M9 7h.01',
   scans: 'M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12l7-7',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5',
+  watches: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  reports: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
   menu: 'M4 6h16M4 12h16M4 18h16',
   close: 'M6 6l12 12M18 6L6 18',
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
@@ -22,9 +25,12 @@ const ICONS = {
 
 const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean }[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
+  { to: '/search', label: 'Search', icon: 'search' },
   { to: '/devices', label: 'Devices', icon: 'devices' },
   { to: '/ports', label: 'Ports', icon: 'ports' },
   { to: '/changes', label: 'Changes', icon: 'changes' },
+  { to: '/watches', label: 'Watches', icon: 'watches' },
+  { to: '/reports', label: 'Reports', icon: 'reports' },
   { to: '/web', label: 'Web', icon: 'web' },
   { to: '/scans', label: 'Scans', icon: 'scans' },
   { to: '/settings', label: 'Settings', icon: 'settings' },

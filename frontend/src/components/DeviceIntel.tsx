@@ -1,0 +1,243 @@
+import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
+import { del, post, put } from '../api';
+import type { DeviceDetail, DeviceProfile, TimelineItem } from '../types';
+import { CRITICALITY_LEVELS, EVENT_LABELS, SCAN_TYPE_LABELS, fmtTime, useApi } from '../util';
+import { Card, Empty, ErrorBox, Loading, Modal, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
+
+const TIMELINE_LIMIT = 100;
+const TIMELINE_PREVIEW = 10;
+
+function tagTitle(t: { source: string; reason: string | null }) {
+  const kind = t.source === 'manual' ? 'Manual' : t.source === 'suppressed' ? 'Dismissed' : 'Rule';
+  return `${kind} tag${t.reason ? `: ${t.reason}` : ''}`;
+}
+
+function tagChipClass(source: string) {
+  if (source === 'manual') return 'chip on';
+  if (source === 'suppressed') return 'chip suppressed';
+  return 'chip';
+}
+
+function tagActionTitle(source: string) {
+  if (source === 'manual') return 'Remove tag';
+  if (source === 'suppressed') return 'Clear dismiss (auto may return)';
+  return 'Dismiss tag (stays off after rescans)';
+}
+
+/** Rule tags (recomputed each scan), manual pins, and admin-dismissed suppressions. */
+export function TagEditor({ d, isAdmin, onChange }: { d: DeviceDetail; isAdmin: boolean; onChange: () => void }) {
+  const [tag, setTag] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!tag.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/devices/${d.uuid}/tags`, { tag: tag.trim() });
+      setTag('');
+      onChange();
+    } catch (ex: any) {
+      setError(ex.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (t: string) => {
+    setError(null);
+    try {
+      await del(`/devices/${d.uuid}/tags/${encodeURIComponent(t)}`);
+      onChange();
+    } catch (ex: any) {
+      setError(ex.message);
+    }
+  };
+
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="row wrap" style={{ gap: 6 }}>
+        {d.tags.length === 0 && <span className="muted small">No tags.</span>}
+        {d.tags.map((t) => (
+          <span key={t.tag} className={tagChipClass(t.source)} title={tagTitle(t)}>
+            {t.source === 'suppressed' ? (
+              <span>{t.tag}</span>
+            ) : (
+              <Link to={`/search?q=${encodeURIComponent(`tag:${t.tag}`)}`}>{t.tag}</Link>
+            )}
+            {isAdmin && (
+              <button className="chip-x" onClick={() => remove(t.tag)} aria-label={`${tagActionTitle(t.source)} ${t.tag}`} title={tagActionTitle(t.source)}>×</button>
+            )}
+          </span>
+        ))}
+      </div>
+      {isAdmin && (
+        <form className="row" onSubmit={add}>
+          <input type="text" value={tag} onChange={(e) => setTag(e.target.value)} maxLength={60} placeholder="add tag (a-z, 0-9, -)" aria-label="New tag" />
+          <button className="btn sm" type="submit" disabled={busy || !tag.trim()}>Add</button>
+        </form>
+      )}
+      {isAdmin && (
+        <div className="muted small">
+          Rule tags recompute each scan. × dismisses a rule tag so it stays off; × on a dismissed tag clears the dismiss.
+          Adding a rule or dismissed tag pins it as manual.
+        </div>
+      )}
+      <ErrorBox error={error} />
+    </div>
+  );
+}
+
+type ProfileDraft = { owner: string; location: string; criticality: string; notes: string };
+
+function toDraft(p: DeviceProfile): ProfileDraft {
+  return { owner: p.owner ?? '', location: p.location ?? '', criticality: p.criticality ?? '', notes: p.notes ?? '' };
+}
+
+export function ProfileCard({ d, isAdmin, onChange }: { d: DeviceDetail; isAdmin: boolean; onChange: () => void }) {
+  const [draft, setDraft] = useState<ProfileDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const initial = toDraft(d.profile);
+  const dirty = draft !== null && JSON.stringify(draft) !== JSON.stringify(initial);
+  const p = d.profile;
+
+  const save = async () => {
+    if (!draft || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await put(`/devices/${d.uuid}/profile`, {
+        owner: draft.owner || null, location: draft.location || null, criticality: draft.criticality || null, notes: draft.notes || null,
+      });
+      setDraft(null);
+      onChange();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card title="Profile" actions={isAdmin && <button className="btn ghost sm" onClick={() => { setDraft(initial); setError(null); }}>Edit</button>}>
+      <dl className="dl compact">
+        <dt>Owner</dt><dd>{p.owner ?? '—'}</dd>
+        <dt>Location</dt><dd>{p.location ?? '—'}</dd>
+        <dt>Criticality</dt><dd>{p.criticality ? <span className={`badge ${p.criticality === 'critical' || p.criticality === 'high' ? 'high' : p.criticality === 'medium' ? 'medium' : 'outline'}`}>{p.criticality}</span> : '—'}</dd>
+        <dt>Notes</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{p.notes ?? '—'}</dd>
+      </dl>
+      {draft && (
+        <Modal title="Edit profile" onClose={() => setDraft(null)} dirty={dirty} footer={<>
+          <button className="btn ghost" onClick={() => confirmDiscard(dirty) && setDraft(null)}>Cancel</button>
+          <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+        </>}>
+          <label className="field">Owner<input type="text" value={draft.owner} maxLength={150} onChange={(e) => setDraft({ ...draft, owner: e.target.value })} /></label>
+          <label className="field">Location<input type="text" value={draft.location} maxLength={200} onChange={(e) => setDraft({ ...draft, location: e.target.value })} /></label>
+          <label className="field">Criticality
+            <select value={draft.criticality} onChange={(e) => setDraft({ ...draft, criticality: e.target.value })}>
+              <option value="">Not set</option>
+              {CRITICALITY_LEVELS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="field">Notes<textarea rows={4} value={draft.notes} maxLength={5000} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></label>
+          <ErrorBox error={error} />
+        </Modal>
+      )}
+    </Card>
+  );
+}
+
+export function ExposureCard({ d }: { d: DeviceDetail }) {
+  const factors = d.profile.exposure_factors;
+  return (
+    <Card title={<h2 className="row" style={{ gap: 8 }}>Exposure score <ScoreBadge score={d.score} /></h2>} flush>
+      {!d.classified_at ? (
+        <div className="card-body muted small">Not scored yet. The score is computed after the next scan or web capture of this device.</div>
+      ) : !factors.length ? (
+        <div className="card-body muted small">No exposure factors: no risky services, logins or recent first sighting.</div>
+      ) : (
+        <table>
+          <tbody>
+            {factors.map((f, i) => (
+              <tr key={`${f.factor}-${i}`}>
+                <td>{f.detail}</td>
+                <td className="right mono nowrap">+{f.points}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
+function timelineLabel(it: TimelineItem) {
+  if (it.kind === 'event') {
+    return <><span className={`badge ${it.severity}`}>{EVENT_LABELS[it.event_type] ?? it.event_type}</span> <span>{it.message}</span></>;
+  }
+  if (it.kind === 'scan') {
+    return (
+      <>
+        <span className="badge outline">{SCAN_TYPE_LABELS[it.scan_type]} scan</span>{' '}
+        <span>#{it.scan_id} · {it.ip} · {it.status === 'up' ? (it.open_ports != null ? `${it.open_ports} open ports` : 'up') : it.status}</span>{' '}
+        <ScanStatusBadge status={it.scan_status} />
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="badge accent">Web capture</span>{' '}
+      <span>#{it.capture_id} · {it.pages} page{it.pages === 1 ? '' : 's'} · {it.screenshots} screenshot{it.screenshots === 1 ? '' : 's'} · {it.status}</span>
+    </>
+  );
+}
+
+/** Events, scans and web captures of one device, grouped by local day. */
+export function Timeline({ uuid }: { uuid: string }) {
+  const [open, setOpen] = useState(false);
+  const { data, error } = useApi<{ items: TimelineItem[] }>(`/devices/${uuid}/timeline`, { limit: TIMELINE_LIMIT }, 30000);
+  if (!data) return <Card title="Timeline">{error ? <ErrorBox error={error} /> : <Loading />}</Card>;
+  const all = data.items;
+  const shown = open ? all : all.slice(0, TIMELINE_PREVIEW);
+  const days: [string, TimelineItem[]][] = [];
+  for (const it of shown) {
+    const day = new Date(it.at).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+    const last = days[days.length - 1];
+    if (last && last[0] === day) last[1].push(it);
+    else days.push([day, [it]]);
+  }
+  return (
+    <Card title="Timeline" flush>
+      {!all.length ? <Empty>Nothing recorded for this device yet.</Empty> : (
+        <>
+          {days.map(([day, items]) => (
+            <div key={day}>
+              <div className="timeline-day">{day}</div>
+              <ul className="feed">
+                {items.map((it) => (
+                  <li key={`${it.kind}-${it.kind === 'event' ? it.id : it.kind === 'scan' ? it.scan_id : it.capture_id}`}>
+                    <span className="time" title={fmtTime(it.at)}>{new Date(it.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</span>
+                    <span className="msg" style={{ gridColumn: 'span 2' }}>{timelineLabel(it)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          {all.length > TIMELINE_PREVIEW && (
+            <button type="button" onClick={() => setOpen((v) => !v)} style={{
+              display: 'block', width: '100%', padding: '10px 16px', background: 'transparent',
+              border: 0, borderTop: '1px solid var(--border)', color: 'var(--accent)',
+              cursor: 'pointer', fontSize: 12, textAlign: 'center',
+            }}>
+              {open ? 'Show less' : `See all ${all.length} →`}
+            </button>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}

@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
+from ..core.intel import refresh_devices
 from ..core.mockdata import device_visible
 from ..db import get_db
-from ..models import DEVICE_ACTIVE, Device, Network, User
+from ..models import DEVICE_ACTIVE, NETWORK_ZONES, Device, Network, User
 from ..netutils import TargetError, validate_network_cidr
 from .common import network_out
 
@@ -21,6 +22,15 @@ class NetworkIn(BaseModel):
     cidr: str = Field(min_length=7, max_length=64)
     description: str | None = Field(None, max_length=1000)
     enabled: bool = True
+    zone: str | None = None
+
+    @field_validator("zone")
+    @classmethod
+    def _zone(cls, v: str | None) -> str | None:
+        v = (v or "").strip().lower() or None
+        if v is not None and v not in NETWORK_ZONES:
+            raise ValueError(f"zone must be one of: {', '.join(NETWORK_ZONES)}")
+        return v
 
     @field_validator("name")
     @classmethod
@@ -64,7 +74,8 @@ def _check_name(db: Session, name: str, exclude_id: int | None = None) -> None:
 def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
     _check_name(db, body.name)
-    net = Network(name=body.name, cidr=body.cidr, description=body.description, enabled=body.enabled)
+    net = Network(name=body.name, cidr=body.cidr, description=body.description, enabled=body.enabled,
+                  zone=body.zone)
     db.add(net)
     db.flush()
     audit(db, user.username, "network.create", net.name, body.model_dump(), client_ip(request))
@@ -79,14 +90,19 @@ def update_network(network_id: int, body: NetworkIn, request: Request, db: Sessi
     if net is None:
         raise HTTPException(404, "Network not found")
     _check_name(db, body.name, network_id)
-    before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled}
+    before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled, "zone": net.zone}
     if net.cidr != body.cidr:
         # A different scope needs a fresh baseline, otherwise every host in the new range would alert
         net.baseline_scan_id = None
         net.baseline_at = None
     net.name, net.cidr, net.description, net.enabled = body.name, body.cidr, body.description, body.enabled
+    zone_changed = net.zone != body.zone
+    net.zone = body.zone
     audit(db, user.username, "network.update", net.name, {"before": before, "after": body.model_dump()},
           client_ip(request))
+    if zone_changed:
+        db.flush()
+        refresh_devices(db, db.scalars(select(Device.id).where(Device.network_id == net.id)).all())
     db.commit()
     total, active = _counts(db)
     return network_out(net, total.get(net.id, 0), active.get(net.id, 0))

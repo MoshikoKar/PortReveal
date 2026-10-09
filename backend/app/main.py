@@ -20,15 +20,20 @@ from .api import (
     exclusions,
     misc,
     networks,
+    reports,
     scans,
+    search,
     settings,
     setup,
     system,
+    tokens,
     users,
+    watches,
     web_captures,
 )
 from .config import get_settings
 from .core.manager import manager
+from .core.query import QueryError
 from .core.scheduler import scheduler
 from .core.web_capture import web_capture_manager
 from .db import init_engine
@@ -75,13 +80,18 @@ app = FastAPI(title="Network Finder", version=__version__, lifespan=lifespan,
               docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
 
 for r in (auth, setup, system, dashboard, devices, events, scans, networks, exclusions, settings, users, misc,
-          web_captures, data_transfer):
+          web_captures, data_transfer, search, watches, reports, tokens):
     app.include_router(r.router)
 
 
 @app.exception_handler(TargetError)
 async def target_error_handler(request: Request, exc: TargetError):
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(QueryError)
+async def query_error_handler(request: Request, exc: QueryError):
+    return JSONResponse(status_code=400, content={"detail": str(exc), "pos": exc.pos})
 
 
 @app.middleware("http")

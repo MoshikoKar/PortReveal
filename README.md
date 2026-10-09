@@ -112,6 +112,59 @@ cd backend
 Any inventory port identified as **rtsp** is treated as a stream page; use
 **Watch live** on the host preview for the server-side RTSP→MJPEG proxy.
 
+### Search
+
+**Search** queries the stored inventory (nmap results and Web Capture metadata)
+with Shodan-style `field:value` terms. Searching never sends traffic to the
+network. The Devices search box accepts the same syntax.
+
+- Terms separated by spaces must all match; `OR` (or `|`) and parentheses group;
+  a leading `-` or `NOT` negates.
+- Numbers: `port:22`, `port:1-1024`, `port:22,80,443`, `score:>=60`.
+- Text: substring by default, `*` wildcards, `=` for exact, quotes for spaces
+  (`network:"Office LAN"`). Times: `first_seen:<7d`, `last_seen:>30d`.
+- A bare word matches IP, hostname, MAC, vendor, OS, tags, service, product,
+  version and HTTP title.
+- Port terms in one AND group must match the same service:
+  `port:22 product:openssh` means OpenSSH on port 22.
+
+```text
+port:3389 net:10.0.0.0/8          RDP inside 10/8
+tag:camera -zone:iot              cameras outside the IoT zone
+http.login:true http.status:200   web login pages
+product:nginx -version:1.25*      nginx not on 1.25.x
+score:>=60 new:7d                 high-exposure hosts first seen this week
+```
+
+The full field list is under **Search → Show field reference** and
+`GET /api/search/fields`. Pick a past date (**As of**) to search the daily
+snapshots instead of current data.
+
+Rule-based **tags** and a **device type** (printer, camera, nas, hypervisor,
+domain-controller, database, …) are recomputed after every scan and web
+capture; admins can add or pin manual tags. Each device gets an **exposure
+score** (0–100) with the factors behind it, weighted by the network **zone**.
+Save a query as a **watch** (alert when a new host matches) or **policy** (every
+new match is a violation); matches appear in the daily digest.
+
+API (session cookie, or a read-only token from **Settings → API tokens** sent as
+`Authorization: Bearer nf_…`; tokens allow GET only):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/search?q=&view=hosts\|services&sort=&page=&page_size=&at=` | Results |
+| `GET /api/search/facets?q=&facets=port,product,tag` | Value counts |
+| `GET /api/search/count?q=` | Host and service counts |
+| `GET /api/search/export?q=&format=csv\|ndjson` | Streaming export |
+| `GET /api/search/fields` | Field reference |
+| `GET /api/reports/exposure` · `rare-services` · `version-skew` · `subnets` | Reports |
+| `/api/saved-searches` | Watches and policies (CRUD) |
+
+```bash
+npm run cli -- search "port:22 product:openssh"
+curl -H "Authorization: Bearer $NF_TOKEN" "localhost:8000/api/search/export?q=tag:camera&format=csv"
+```
+
 ### Database
 
 One SQLAlchemy model and one Alembic history for both engines.
@@ -262,6 +315,7 @@ docker/Dockerfile, docker-compose.yml
 
 - Continuous discovery and service inventory via nmap (or labelled mock data)
 - Change detection for devices, ports, services, versions, and IP moves
+- Inventory search (`field:value` queries, facets, export), tags, exposure scores, watches and reports
 - SOC-style dashboard with devices, ports, changes, scans, and settings
 - Daily categorized HTML email summary of pending changes
 - Optional web capture (HTTP screenshots + RTSP stills / live Watch)

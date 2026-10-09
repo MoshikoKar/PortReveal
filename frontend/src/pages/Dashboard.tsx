@@ -1,18 +1,39 @@
-import { useState, type MouseEvent } from 'react';
+import { useState, type FormEvent, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { post } from '../api';
 import { useApp } from '../context';
 import { EventFeed } from '../components/EventFeed';
 import { Trend } from '../components/Trend';
-import { Card, ErrorBox, Kpi, Loading, MockBadge, Progress, ScanStatusBadge } from '../components/ui';
+import { Card, ErrorBox, Kpi, Loading, MockBadge, Progress, ScanStatusBadge, ScoreBadge } from '../components/ui';
 import type { Dashboard as DashboardData, EventType, Network } from '../types';
-import { EVENT_LABELS, SCAN_TYPE_LABELS, duration, fmtTime, relTime, useApi } from '../util';
+import { EVENT_LABELS, SCAN_TYPE_LABELS, SCORE_HIGH, SCORE_MEDIUM, duration, fmtTime, quoteValue, relTime, useApi } from '../util';
 
 const TYPE_COLORS: Record<EventType, string> = {
   device_discovered: 'var(--high)', port_opened: 'var(--high)', service_changed: 'var(--medium)',
   device_disappeared: 'var(--medium)', port_closed: 'var(--medium)', ip_changed: 'var(--low)',
   version_changed: 'var(--low)', device_reappeared: 'var(--low)', service_detected: 'var(--info)',
+  tag_added: 'var(--info)', tag_removed: 'var(--info)', watch_match: 'var(--medium)', policy_violation: 'var(--high)',
 };
+
+const LEVEL_COLORS = { high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)' } as const;
+const LEVEL_QUERIES = { high: `score:>=${SCORE_HIGH}`, medium: `score:${SCORE_MEDIUM}-${SCORE_HIGH - 1}`, low: `score:<${SCORE_MEDIUM}` } as const;
+const searchLink = (q: string) => `/search?q=${encodeURIComponent(q)}`;
+
+function SearchBox() {
+  const nav = useNavigate();
+  const [q, setQ] = useState('');
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    nav(q.trim() ? searchLink(q.trim()) : '/search');
+  };
+  return (
+    <form className="search-bar" onSubmit={submit}>
+      <input type="search" value={q} onChange={(e) => setQ(e.target.value)} maxLength={1000} aria-label="Search the inventory"
+        placeholder='Search the inventory: port:3389 · tag:camera · product:openssh · http.title:"login"' />
+      <button className="btn primary" type="submit">Search</button>
+    </form>
+  );
+}
 
 function BaselineCell({ n, onStarted }: { n: Network; onStarted: () => void }) {
   const { isAdmin } = useApp();
@@ -59,7 +80,7 @@ export default function Dashboard() {
   const last = scans.last_completed;
 
   return (
-    <>
+    <div className="dashboard">
       <div className="page-head">
         <div>
           <h1>Network overview</h1>
@@ -67,18 +88,15 @@ export default function Dashboard() {
         </div>
       </div>
       <ErrorBox error={error} />
+      <SearchBox />
 
       <div className="grid kpis">
         <Kpi label="Known hosts" value={devices.total} sub={`${devices.exposed} with open ports`} color="var(--accent)" onClick={() => nav('/devices')} />
-        <Kpi label="Currently detected" value={devices.active} sub={devices.unknown ? `${devices.unknown} unconfirmed` : 'seen in latest scans'} color="var(--ok)" onClick={() => nav('/devices?status=active')} />
-        <Kpi label="Not detected" value={devices.not_detected} sub="missed by consecutive scans" color={devices.not_detected ? 'var(--medium)' : undefined} onClick={() => nav('/devices?status=not_detected')} />
-        <Kpi label="New hosts (7d)" value={d7.new_hosts} sub={`${d1.new_hosts} in last 24h`} color={d7.new_hosts ? 'var(--high)' : undefined} onClick={() => nav('/changes?type=device_discovered&range=7d')} />
-        <Kpi label="Open ports" value={data.open_ports_total} sub="total exposure" color="var(--low)" />
-        <Kpi label="New ports (7d)" value={d7.new_ports} sub={`${d1.new_ports} in last 24h`} color={d7.new_ports ? 'var(--high)' : undefined} onClick={() => nav('/changes?type=port_opened&range=7d')} />
-        <Kpi label="Closed ports (7d)" value={d7.closed_ports} sub={`${d1.closed_ports} in last 24h`} onClick={() => nav('/changes?type=port_closed&range=7d')} />
-        <Kpi label="Service changes (7d)" value={d7.service_changes} sub={`${d1.service_changes} in last 24h`} color={d7.service_changes ? 'var(--medium)' : undefined} onClick={() => nav('/changes?type=service_changed,version_changed&range=7d')} />
-        <Kpi label="Changes 24h" value={d1.changes} sub="all event types" onClick={() => nav('/changes?range=24h')} />
-        <Kpi label="Changes 7d" value={d7.changes} sub="all event types" onClick={() => nav('/changes?range=7d')} />
+        <Kpi label="Currently detected" value={devices.active} sub={devices.not_detected ? `${devices.not_detected} not detected` : devices.unknown ? `${devices.unknown} unconfirmed` : 'seen in latest scans'} color="var(--ok)" onClick={() => nav('/devices?status=active')} />
+        <Kpi label="New hosts (7d)" value={data.new_hosts_7d} sub={`${d1.new_hosts} discovered in last 24h`} color={data.new_hosts_7d ? 'var(--high)' : undefined} onClick={() => nav(searchLink('new:7d'))} />
+        <Kpi label="Open ports" value={data.open_ports_total} sub={`${d7.new_ports} opened in 7d`} color="var(--low)" onClick={() => nav('/ports')} />
+        <Kpi label="High exposure" value={data.exposure.high} sub={`score ≥ ${SCORE_HIGH} · ${data.exposure.medium} medium`} color={data.exposure.high ? 'var(--high)' : undefined} onClick={() => nav(searchLink(LEVEL_QUERIES.high))} />
+        <Kpi label="Alerts (7d)" value={data.watch_alerts.last_7d} sub="watch matches and policy violations" color={data.watch_alerts.last_7d ? 'var(--medium)' : undefined} onClick={() => nav('/changes?type=watch_match,policy_violation&range=7d')} />
       </div>
 
       <div className="grid two">
@@ -139,6 +157,51 @@ export default function Dashboard() {
       </div>
 
       <div className="grid three">
+        <Card title="Exposure scores" actions={<Link to="/reports" className="small">Reports →</Link>}>
+          <div className="stack">
+            <div className="bars">
+              {(['high', 'medium', 'low'] as const).map((lvl) => (
+                <Link key={lvl} to={searchLink(LEVEL_QUERIES[lvl])} className="bar-row" style={{ color: 'var(--text-2)' }}>
+                  <span style={{ textTransform: 'capitalize' }}>{lvl}</span>
+                  <span className="bar-track"><span className="bar-fill" style={{ display: 'block', width: `${(data.exposure[lvl] / Math.max(1, devices.total)) * 100}%`, ['--bar-color' as any]: LEVEL_COLORS[lvl] }} /></span>
+                  <span className="right">{data.exposure[lvl]}</span>
+                </Link>
+              ))}
+            </div>
+            {data.exposure.top.length > 0 && (
+              <table>
+                <tbody>
+                  {data.exposure.top.map((h) => (
+                    <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
+                      <td><span className="mono">{h.ip}</span>{h.hostname && <span className="muted small"> {h.hostname}</span>}</td>
+                      <td className="muted small">{h.type ?? ''}</td>
+                      <td className="right"><ScoreBadge score={h.score} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </Card>
+        <Card title="Device types" actions={<Link to="/search" className="small">Search →</Link>}>
+          {data.device_types.length === 0 ? <div className="muted">No devices classified yet. Types are assigned after a port scan.</div> : (
+            <div className="bars">
+              {data.device_types.map((t) => (
+                <Link key={t.type} to={searchLink(`type:${quoteValue(t.type)}`)} className="bar-row" style={{ color: 'var(--text-2)' }}>
+                  <span>{t.type}</span>
+                  <span className="bar-track"><span className="bar-fill" style={{ display: 'block', width: `${(t.count / Math.max(1, ...data.device_types.map((x) => x.count))) * 100}%` }} /></span>
+                  <span className="right">{t.count}</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </Card>
+        <Card title="Watch alerts (7 days)" flush actions={<Link to="/watches" className="small">Watches →</Link>}>
+          <EventFeed events={data.watch_alerts.recent} empty="No watch matches or policy violations. Save a search as a watch to be alerted when new hosts match." />
+        </Card>
+      </div>
+
+      <div className="grid three">
         <Card title="Exposure trend (30 days)"><Trend points={data.trend} /></Card>
         <Card title="Most exposed ports" flush actions={<Link to="/ports" className="small">See all{data.exposed_ports_total ? ` ${data.exposed_ports_total}` : ''} →</Link>}>
           {data.top_ports.length === 0 ? <div className="empty">No open ports known yet.</div> : (
@@ -187,6 +250,6 @@ export default function Dashboard() {
           </table>
         </Card>
       )}
-    </>
+    </div>
   );
 }

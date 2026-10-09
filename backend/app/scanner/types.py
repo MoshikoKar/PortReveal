@@ -21,6 +21,8 @@ class PortObservation:
     extra_info: str | None = None
     method: str | None = None  # probed | table
     confidence: int | None = None
+    cpe: str | None = None  # space-separated CPE strings nmap matched
+    tunnel: str | None = None  # "ssl" when nmap found the service inside TLS
 
     @property
     def reliable(self) -> bool:

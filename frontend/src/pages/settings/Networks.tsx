@@ -3,9 +3,9 @@ import { del, post, put } from '../../api';
 import { Card, Empty, ErrorBox, Loading, Modal, confirmDiscard } from '../../components/ui';
 import { useApp } from '../../context';
 import type { Network } from '../../types';
-import { fmtTime, useApi } from '../../util';
+import { NETWORK_ZONES, fmtTime, useApi } from '../../util';
 
-type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean };
+type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean; zone: string };
 
 /** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it). */
 export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCount?: (n: number) => void }) {
@@ -29,7 +29,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
     setSaveError(null);
     setSaving(true);
     try {
-      const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled };
+      const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled, zone: draft.zone || null };
       if (draft.id) await put(`/networks/${draft.id}`, body);
       else await post('/networks', body);
       setDraft(null);
@@ -69,7 +69,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
     <Card
       title="Network scopes"
       flush
-      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ name: '', cidr: '', description: '', enabled: true })}>Add network</button>}
+      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ name: '', cidr: '', description: '', enabled: true, zone: '' })}>Add network</button>}
     >
       {!compact && (
         <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -81,18 +81,19 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
       {loading && !data ? <Loading /> : !data?.length ? <Empty>No networks yet.</Empty> : (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Name</th><th>CIDR</th><th>Devices</th><th>Baseline</th><th>Schedule</th>{isAdmin && <th />}</tr></thead>
+            <thead><tr><th>Name</th><th>CIDR</th><th>Zone</th><th>Devices</th><th>Baseline</th><th>Schedule</th>{isAdmin && <th />}</tr></thead>
             <tbody>
               {data.map((n) => (
                 <tr key={n.id}>
                   <td><strong>{n.name}</strong>{n.description && <div className="muted small">{n.description}</div>}</td>
                   <td className="mono">{n.cidr}</td>
+                  <td>{n.zone ?? <span className="muted">—</span>}</td>
                   <td>{n.active_count ?? 0} active / {n.device_count ?? 0}</td>
                   <td>{n.baseline_at ? fmtTime(n.baseline_at) : <span className="badge medium">pending</span>}</td>
                   <td>{n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
                   {isAdmin && (
                     <td className="right nowrap">
-                      <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled })}>Edit</button>
+                      <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '' })}>Edit</button>
                       {n.baseline_at && <button className="btn danger sm" onClick={() => resetBaseline(n)}>Reset baseline</button>}
                       <button className="btn danger sm" onClick={() => remove(n)}>Delete</button>
                     </td>
@@ -117,6 +118,12 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
           <label className="field">CIDR<input type="text" value={draft.cidr} onChange={(e) => setDraft({ ...draft, cidr: e.target.value })} placeholder="10.0.0.0/24" />
             <span className="hint">IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline.</span></label>
           <label className="field">Description<input type="text" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label>
+          <label className="field">Zone
+            <select value={draft.zone} onChange={(e) => setDraft({ ...draft, zone: e.target.value })}>
+              <option value="">None</option>
+              {NETWORK_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+            </select>
+            <span className="hint">Admin services and databases score higher in users, iot and guest zones. Changing it re-scores this network's devices.</span></label>
           <label className="check"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />Include in the scheduled daily scan</label>
           <ErrorBox error={saveError} />
         </Modal>

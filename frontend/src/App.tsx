@@ -13,9 +13,13 @@ const Changes = lazy(() => import('./pages/Changes'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const DeviceDetail = lazy(() => import('./pages/DeviceDetail'));
 const Devices = lazy(() => import('./pages/Devices'));
+const PortDetail = lazy(() => import('./pages/PortDetail'));
 const Ports = lazy(() => import('./pages/Ports'));
+const Reports = lazy(() => import('./pages/Reports'));
 const Scans = lazy(() => import('./pages/Scans'));
+const Search = lazy(() => import('./pages/Search'));
 const Settings = lazy(() => import('./pages/Settings'));
+const Watches = lazy(() => import('./pages/Watches'));
 const WebHosts = lazy(() => import('./pages/WebHosts'));
 const WebPreview = lazy(() => import('./pages/WebPreview'));
 
@@ -144,12 +148,16 @@ export default function App() {
         <Suspense fallback={<Loading />}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/search" element={<Search />} />
+            <Route path="/watches" element={<Watches />} />
+            <Route path="/reports" element={<Reports />} />
             <Route path="/devices" element={<Devices />} />
             <Route path="/devices/:uuid" element={<DeviceDetail />} />
             <Route path="/devices/:uuid/web" element={<WebPreview />} />
             <Route path="/web" element={<WebHosts />} />
             <Route path="/changes" element={<Changes />} />
             <Route path="/ports" element={<Ports />} />
+            <Route path="/ports/:proto/:port" element={<PortDetail />} />
             <Route path="/scans" element={<Scans />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/:tab" element={<Settings />} />

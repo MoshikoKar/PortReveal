@@ -84,4 +84,5 @@ def logout(request: Request, response: Response, sess: UserSession = Depends(get
 
 @router.get("/me")
 def me(request: Request, user: User = Depends(current_user)):
-    return {"user": user_out(user), "csrf_token": request.state.session.csrf_token}
+    sess = getattr(request.state, "session", None)  # absent for API-token requests
+    return {"user": user_out(user), "csrf_token": sess.csrf_token if sess else None}

@@ -50,9 +50,36 @@ export const EVENT_LABELS: Record<EventType, string> = {
   service_detected: 'Service detected',
   service_changed: 'Service changed',
   version_changed: 'Version changed',
+  tag_added: 'Tag added',
+  tag_removed: 'Tag removed',
+  watch_match: 'Watch match',
+  policy_violation: 'Policy violation',
 };
 
 export const SCAN_TYPE_LABELS = { discovery: 'Discovery', standard: 'Standard', full: 'Full port' } as const;
+
+/** Mirrors backend NETWORK_ZONES / CRITICALITY_LEVELS / exposure thresholds. */
+export const NETWORK_ZONES = ['servers', 'users', 'iot', 'dmz', 'management', 'guest', 'lab'] as const;
+export const CRITICALITY_LEVELS = ['low', 'medium', 'high', 'critical'] as const;
+export const SCORE_HIGH = 60;
+export const SCORE_MEDIUM = 30;
+
+export function scoreLevel(score: number): 'high' | 'medium' | 'low' {
+  return score >= SCORE_HIGH ? 'high' : score >= SCORE_MEDIUM ? 'medium' : 'low';
+}
+
+/** Mirrors backend quote_value: quote a query value containing spaces, commas, quotes or parentheses. */
+export function quoteValue(value: string): string {
+  if (value && !/[\s",()|]/.test(value) && !value.startsWith('-')) return value;
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** Append a term to a query, skipping it when already present. */
+export function addTerm(q: string, term: string): string {
+  const cur = q.trim();
+  if (!cur) return term;
+  return cur.includes(term) ? cur : `${cur} ${term}`;
+}
 
 export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 

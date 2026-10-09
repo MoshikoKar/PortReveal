@@ -81,7 +81,8 @@ export interface SystemStatus {
 
 export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
-  | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed';
+  | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
+  | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation';
 
 export interface ChangeEvent {
   id: number;
@@ -134,6 +135,46 @@ export interface DevicePort {
   last_seen: string;
   opened_at: string;
   closed_at: string | null;
+  cpe?: string[];
+  tunnel?: string | null;
+  http?: PortHttp | null;
+}
+
+export type ScoreLevel = 'high' | 'medium' | 'low';
+export type Criticality = 'low' | 'medium' | 'high' | 'critical';
+
+export interface PortHttp {
+  scheme: string | null;
+  status: number | null;
+  title: string | null;
+  server: string | null;
+  content_type: string | null;
+  location: string | null;
+  login: boolean;
+  default_page: boolean;
+  last_seen: string;
+}
+
+export interface DeviceTag {
+  tag: string;
+  source: 'rule' | 'manual' | 'suppressed';
+  reason: string | null;
+  created_at: string;
+}
+
+export interface ExposureFactor {
+  factor: string;
+  points: number;
+  detail: string;
+}
+
+export interface DeviceProfile {
+  owner: string | null;
+  location: string | null;
+  criticality: Criticality | null;
+  notes: string | null;
+  exposure_factors: ExposureFactor[];
+  updated_at: string | null;
 }
 
 export interface DeviceDetail extends DeviceSummary {
@@ -144,6 +185,111 @@ export interface DeviceDetail extends DeviceSummary {
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
   previous_ips: string[];
+  type: string | null;
+  score: number;
+  score_level: ScoreLevel;
+  classified_at: string | null;
+  zone: string | null;
+  tags: DeviceTag[];
+  profile: DeviceProfile;
+}
+
+export type TimelineItem =
+  | ({ kind: 'event'; at: string } & ChangeEvent)
+  | { kind: 'scan'; at: string; scan_id: number; scan_type: ScanType; scan_status: ScanStatus; ip: string; status: string; open_ports: number | null }
+  | { kind: 'web_capture'; at: string; capture_id: number; status: WebCaptureStatus; pages: number; screenshots: number };
+
+// --- inventory search ---------------------------------------------------------------------------
+export interface SearchService {
+  port: number;
+  protocol: string;
+  service: string | null;
+  product: string | null;
+  version: string | null;
+  extra_info: string | null;
+  cpe: string[];
+  tunnel: string | null;
+  http: PortHttp | null;
+}
+
+export interface SearchHost {
+  uuid: string;
+  ip: string;
+  hostname: string | null;
+  mac: string | null;
+  vendor: string | null;
+  os: string | null;
+  status: DeviceStatus;
+  network: string | null;
+  type: string | null;
+  score: number;
+  tags: string[];
+  first_seen: string;
+  last_seen: string;
+  open_ports: { port: number; protocol: string; service: string | null }[];
+  services: SearchService[];
+  matched_services: number;
+  screenshot: { page_id: number; port: number; title: string | null; captured_at: string } | null;
+}
+
+export interface SearchServiceRow extends SearchService {
+  host: { uuid: string; ip: string; hostname: string | null; type: string | null; score: number; network: string | null; status: DeviceStatus };
+}
+
+export interface FacetValue {
+  value: string | number;
+  count: number;
+  term: string;
+}
+
+export type Facets = Record<string, FacetValue[]>;
+
+export interface FieldDoc {
+  name: string;
+  level: 'host' | 'port';
+  kind: string;
+  group: string;
+  help: string;
+  example: string;
+  aliases: string[];
+  historical: boolean;
+}
+
+export interface SavedSearch {
+  id: number;
+  name: string;
+  query: string;
+  description: string | null;
+  kind: 'watch' | 'policy';
+  alert: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  last_run_at: string | null;
+  last_count: number;
+  last_error: string | null;
+  initialized: boolean;
+  can_edit: boolean;
+}
+
+export interface ApiToken {
+  id: number;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked: boolean;
+  token?: string;
+}
+
+export interface ReportHost {
+  uuid: string;
+  ip: string;
+  hostname: string | null;
+  type: string | null;
+  score: number;
+  network: string | null;
 }
 
 export type WebCaptureStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
@@ -275,6 +421,7 @@ export interface Network {
   cidr: string;
   description: string | null;
   enabled: boolean;
+  zone: string | null;
   baseline_scan_id: number | null;
   baseline_at: string | null;
   created_at: string;
@@ -314,6 +461,10 @@ export interface Dashboard {
   trend: { date: string; hosts_active: number; open_ports: number }[];
   networks: Network[];
   scans: ScanSummary;
+  exposure: { high: number; medium: number; low: number; top: ReportHost[] };
+  device_types: { type: string; count: number }[];
+  watch_alerts: { last_7d: number; recent: ChangeEvent[] };
+  new_hosts_7d: number;
 }
 
 export interface ExposedPort {

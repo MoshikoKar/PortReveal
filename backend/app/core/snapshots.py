@@ -15,17 +15,20 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..models import DEVICE_ACTIVE, Device, Network, Scan, Snapshot
 
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2  # v2 appends tags, device type and exposure score to each row
 
 
 def build_state(db: Session, network: Network) -> list[list]:
     devices = db.scalars(
-        select(Device).where(Device.network_id == network.id).options(selectinload(Device.ports))
+        select(Device).where(Device.network_id == network.id)
+        .options(selectinload(Device.ports), selectinload(Device.tags))
     ).all()
     rows = []
     for d in sorted(devices, key=lambda x: x.uuid):
         ports = [[p.port, p.protocol, p.service, p.product, p.version] for p in d.ports if p.is_open]
-        rows.append([d.uuid, d.current_ip, d.mac, d.hostname, d.status, ports])
+        tags = [t.tag for t in d.tags]
+        rows.append([d.uuid, d.current_ip, d.mac, d.hostname, d.status, ports, tags, d.device_type,
+                     d.exposure_score or 0])
     return rows
 
 
@@ -37,7 +40,8 @@ def create_snapshot(db: Session, network: Network, scan: Scan, now: datetime) ->
         "network": {"id": network.id, "name": network.name, "cidr": network.cidr},
         "scan_id": scan.id,
         "taken_at": now.isoformat(),
-        "columns": ["uuid", "ip", "mac", "hostname", "status", "ports[port,proto,service,product,version]"],
+        "columns": ["uuid", "ip", "mac", "hostname", "status", "ports[port,proto,service,product,version]",
+                    "tags", "type", "score"],
         "devices": state,
     }
     blob = zlib.compress(json.dumps(payload, separators=(",", ":")).encode(), 9)

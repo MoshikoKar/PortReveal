@@ -278,7 +278,7 @@ def test_mock_scenario_end_to_end(db):
         per_scan.append(sorted(event_types(db, scan_id)))
     assert per_scan == [
         [],
-        ["device_discovered", "port_closed", "port_opened"],
+        ["device_discovered", "port_closed", "port_opened", "tag_removed"],  # the closed port carried a rule tag
         ["ip_changed", "service_changed", "version_changed"],
         ["device_disappeared", "port_opened"],
         ["device_reappeared", "port_closed"],

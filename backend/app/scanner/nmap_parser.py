@@ -88,6 +88,9 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
                     po.method = _clean(svc.get("method"))
                     conf = svc.get("conf")
                     po.confidence = int(conf) if conf and conf.isdigit() else None
+                    po.tunnel = _clean(svc.get("tunnel"))
+                    cpes = [c.text.strip() for c in svc.findall("cpe") if c.text and c.text.strip()]
+                    po.cpe = " ".join(dict.fromkeys(cpes))[:500] or None
                     if not obs.os_name and svc.get("ostype"):
                         obs.os_name = svc.get("ostype")
                 obs.ports.append(po)

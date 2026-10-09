@@ -491,6 +491,9 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             screenshots_captured=screenshots_done,
             notes="\n".join(notes) or None,
         )
+        from ..intel import after_web_capture  # core.intel imports this package
+
+        after_web_capture(capture_id)
         log.info(
             "web capture %s %s in %.1fs: %d pages, %d screenshots",
             capture_id, status, time.monotonic() - started, pages_done, screenshots_done,

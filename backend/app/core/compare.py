@@ -351,7 +351,7 @@ class _Applier:
                 row = DevicePort(
                     protocol=po.protocol, port=po.port, is_open=True, service=po.service, product=po.product,
                     version=po.version, extra_info=po.extra_info, method=po.method, confidence=po.confidence,
-                    first_seen=now, last_seen=now, opened_at=now,
+                    cpe=po.cpe, tunnel=po.tunnel, first_seen=now, last_seen=now, opened_at=now,
                 )
                 dev.ports.append(row)
                 rows[key] = row
@@ -387,6 +387,9 @@ class _Applier:
             row.extra_info = po.extra_info or row.extra_info
             row.method = po.method
             row.confidence = po.confidence
+            # Identity details only: never compared, so they cannot raise change events
+            row.cpe = po.cpe or row.cpe
+            row.tunnel = po.tunnel or row.tunnel
 
     def _compare_service(self, dev: Device, row: DevicePort, po: PortObservation, mode: str) -> None:
         if not po.reliable:

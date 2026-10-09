@@ -1,42 +1,45 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import BigInteger, Integer, cast, func, literal, or_, select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
+from ..core.exposure import level as exposure_level
 from ..core.mockdata import device_visible, event_visible, scan_visible
-from ..db import get_db
-from ..models import Device, DeviceIP, DevicePort, Event, Network, Scan, ScanHost, User
-from .common import Paging, device_summary, event_out, like_pattern, paged, port_out
+from ..core.query.compile import compile_host
+from ..core.query.search import http_out, make_ctx, prepare
+from ..core.query.sqlfn import ipv4_int_expr
+from ..core.tagging import normalize_tag, reclassify_device
+from ..db import get_db, utcnow
+from ..models import (
+    CRITICALITY_LEVELS,
+    SCREENSHOT_CAPTURED,
+    TAG_SOURCE_MANUAL,
+    TAG_SOURCE_RULE,
+    TAG_SOURCE_SUPPRESSED,
+    Device,
+    DevicePort,
+    DeviceProfile,
+    DeviceTag,
+    Event,
+    Network,
+    PortHttp,
+    Scan,
+    ScanHost,
+    User,
+    WebCapture,
+    WebPage,
+)
+from .common import Paging, device_summary, event_out, paged, port_out
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
 # Soft cap for bulk UUID selection (web capture / scans). Matches settings max_addresses ceiling.
 MAX_UUIDS = 4096
-
-
-def search_conditions(q: str):
-    q = q.strip()
-    like = like_pattern(q)
-    open_ports = select(DevicePort.device_id).where(DevicePort.is_open.is_(True))
-    conds = [
-        Device.current_ip.like(like, escape="\\"),
-        Device.hostname.ilike(like, escape="\\"),
-        Device.dns_name.ilike(like, escape="\\"),
-        Device.vendor.ilike(like, escape="\\"),
-        Device.os_name.ilike(like, escape="\\"),
-        Device.mac.ilike(like_pattern(q.replace("-", ":").upper()), escape="\\"),
-        Device.id.in_(select(DeviceIP.device_id).where(DeviceIP.ip.like(like, escape="\\"))),
-        Device.id.in_(open_ports.where(or_(DevicePort.service.ilike(like, escape="\\"),
-                                           DevicePort.product.ilike(like, escape="\\")))),
-    ]
-    port_txt = q.lower().removeprefix("tcp/").removeprefix("port:")
-    if port_txt.isdigit():
-        conds.append(Device.id.in_(open_ports.where(DevicePort.port == int(port_txt))))
-    return or_(*conds)
 
 
 def _device_filter_conds(
@@ -49,8 +52,8 @@ def _device_filter_conds(
     service: str | None,
 ) -> list:
     conds: list = [device_visible(db)]
-    if q:
-        conds.append(search_conditions(q))
+    if q and q.strip():
+        conds.append(compile_host(prepare(q), make_ctx(db)))
     if status:
         conds.append(Device.status == status)
     if network_id is not None:
@@ -66,23 +69,7 @@ def _device_filter_conds(
 
 def _ipv4_int_expr(db: Session, col) -> ColumnElement:
     """Numeric IPv4 ORDER BY key (matches netutils.ip_sort_key) for SQLite and PostgreSQL."""
-    if db.get_bind().dialect.name == "postgresql":
-        expr = (
-            cast(func.nullif(func.split_part(col, ".", 1), ""), BigInteger) * 16777216
-            + cast(func.nullif(func.split_part(col, ".", 2), ""), BigInteger) * 65536
-            + cast(func.nullif(func.split_part(col, ".", 3), ""), BigInteger) * 256
-            + cast(func.nullif(func.split_part(col, ".", 4), ""), BigInteger)
-        )
-    else:
-        dot = literal(".")
-        o1 = cast(func.substr(col, 1, func.instr(col, dot) - 1), Integer)
-        r1 = func.substr(col, func.instr(col, dot) + 1)
-        o2 = cast(func.substr(r1, 1, func.instr(r1, dot) - 1), Integer)
-        r2 = func.substr(r1, func.instr(r1, dot) + 1)
-        o3 = cast(func.substr(r2, 1, func.instr(r2, dot) - 1), Integer)
-        o4 = cast(func.substr(r2, func.instr(r2, dot) + 1), Integer)
-        expr = o1 * 16777216 + o2 * 65536 + o3 * 256 + o4
-    return func.coalesce(expr, 0)
+    return ipv4_int_expr(db.get_bind().dialect.name, col)
 
 
 def _open_port_count_expr():
@@ -119,7 +106,7 @@ def _device_order_by(db: Session, sort: str, order: str) -> list:
 
 @router.get("")
 def list_devices(
-    q: str | None = Query(None, max_length=200),
+    q: str | None = Query(None, max_length=1000),
     status: str | None = Query(None, pattern="^(active|unknown|not_detected)$"),
     network_id: int | None = None,
     port: int | None = Query(None, ge=1, le=65535),
@@ -146,7 +133,7 @@ def list_devices(
 
 @router.get("/uuids")
 def list_device_uuids(
-    q: str | None = Query(None, max_length=200),
+    q: str | None = Query(None, max_length=1000),
     status: str | None = Query(None, pattern="^(active|unknown|not_detected)$"),
     network_id: int | None = None,
     port: int | None = Query(None, ge=1, le=65535),
@@ -177,21 +164,170 @@ def _get(db: Session, uuid: str) -> Device:
     return d
 
 
+def _tag_out(t: DeviceTag) -> dict:
+    return {"tag": t.tag, "source": t.source, "reason": t.reason, "created_at": t.created_at}
+
+
+def _profile_out(p: DeviceProfile | None) -> dict:
+    return {
+        "owner": p.owner if p else None, "location": p.location if p else None,
+        "criticality": p.criticality if p else None, "notes": p.notes if p else None,
+        "exposure_factors": (p.exposure_factors or []) if p else [], "updated_at": p.updated_at if p else None,
+    }
+
+
 @router.get("/{uuid}")
 def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     d = _get(db, uuid)
     net = db.get(Network, d.network_id) if d.network_id else None
+    http = {h.device_port_id: h for h in db.scalars(select(PortHttp).where(PortHttp.device_id == d.id))}
+    tags = db.scalars(select(DeviceTag).where(DeviceTag.device_id == d.id).order_by(DeviceTag.tag)).all()
+    profile = db.scalar(select(DeviceProfile).where(DeviceProfile.device_id == d.id))
+    score = d.exposure_score or 0
     out = device_summary(d, network_name=net.name if net else None)
     out.update({
         "dns_name": d.dns_name,
         "missed_scans": d.missed_scans,
         "last_port_scan_at": d.last_port_scan_at,
         "full_scanned_at": d.full_scanned_at,
-        "ports": [port_out(p) for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
+        "ports": [{**port_out(p), "cpe": p.cpe.split() if p.cpe else [], "tunnel": p.tunnel,
+                   "http": http_out(http.get(p.id))}
+                  for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
         "ips": [{"ip": i.ip, "first_seen": i.first_seen, "last_seen": i.last_seen} for i in d.ips],
         "previous_ips": [i.ip for i in d.ips if i.ip != d.current_ip],
+        "type": d.device_type,
+        "score": score,
+        "score_level": exposure_level(score),
+        "classified_at": d.classified_at,
+        "zone": net.zone if net else None,
+        "tags": [_tag_out(t) for t in tags],
+        "profile": _profile_out(profile),
     })
     return out
+
+
+class TagIn(BaseModel):
+    tag: str = Field(min_length=1, max_length=120)
+
+
+@router.post("/{uuid}/tags")
+def add_tag(uuid: str, body: TagIn, request: Request, db: Session = Depends(get_db),
+            user: User = Depends(require_admin)):
+    d = _get(db, uuid)
+    try:
+        tag = normalize_tag(body.tag)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    row = db.scalar(select(DeviceTag).where(DeviceTag.device_id == d.id, DeviceTag.tag == tag))
+    if row is None:
+        row = DeviceTag(device_id=d.id, tag=tag, source=TAG_SOURCE_MANUAL, reason=f"added by {user.username}")
+        db.add(row)
+    elif row.source != TAG_SOURCE_MANUAL:
+        # Pin a rule or suppressed tag so it stays even when the rule stops matching.
+        row.source, row.reason = TAG_SOURCE_MANUAL, f"pinned by {user.username}"
+    audit(db, user.username, "device.tag_add", d.hostname or d.current_ip, {"uuid": d.uuid, "tag": tag},
+          client_ip(request))
+    db.flush()
+    reclassify_device(db, d.id, now=utcnow())
+    db.commit()
+    db.refresh(row)
+    return _tag_out(row)
+
+
+@router.delete("/{uuid}/tags/{tag}")
+def remove_tag(uuid: str, tag: str, request: Request, db: Session = Depends(get_db),
+               user: User = Depends(require_admin)):
+    d = _get(db, uuid)
+    try:
+        name = normalize_tag(tag)
+    except ValueError:
+        name = (tag or "").strip().lower()
+    row = db.scalar(select(DeviceTag).where(DeviceTag.device_id == d.id, DeviceTag.tag == name))
+    if row is None:
+        raise HTTPException(404, "Tag not found")
+    action = "device.tag_remove"
+    if row.source == TAG_SOURCE_MANUAL:
+        db.delete(row)
+    elif row.source == TAG_SOURCE_SUPPRESSED:
+        # Clear dismiss so the rule may apply again on reclassify.
+        db.delete(row)
+        action = "device.tag_unsuppress"
+    elif row.source == TAG_SOURCE_RULE:
+        row.source, row.reason = TAG_SOURCE_SUPPRESSED, f"dismissed by {user.username}"
+        action = "device.tag_dismiss"
+    else:
+        raise HTTPException(409, f"Cannot remove tag with source {row.source}")
+    audit(db, user.username, action, d.hostname or d.current_ip, {"uuid": d.uuid, "tag": name},
+          client_ip(request))
+    db.flush()
+    reclassify_device(db, d.id, now=utcnow())
+    db.commit()
+    return {"ok": True}
+
+
+class ProfileIn(BaseModel):
+    owner: str | None = Field(None, max_length=150)
+    location: str | None = Field(None, max_length=200)
+    criticality: str | None = None
+    notes: str | None = Field(None, max_length=5000)
+
+    @field_validator("owner", "location", "notes")
+    @classmethod
+    def _blank(cls, v: str | None) -> str | None:
+        return (v or "").strip() or None
+
+    @field_validator("criticality")
+    @classmethod
+    def _criticality(cls, v: str | None) -> str | None:
+        v = (v or "").strip().lower() or None
+        if v is not None and v not in CRITICALITY_LEVELS:
+            raise ValueError(f"criticality must be one of: {', '.join(CRITICALITY_LEVELS)}")
+        return v
+
+
+@router.put("/{uuid}/profile")
+def update_profile(uuid: str, body: ProfileIn, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
+    d = _get(db, uuid)
+    p = db.scalar(select(DeviceProfile).where(DeviceProfile.device_id == d.id))
+    if p is None:
+        p = DeviceProfile(device_id=d.id)
+        db.add(p)
+    p.owner, p.location, p.criticality, p.notes = body.owner, body.location, body.criticality, body.notes
+    audit(db, user.username, "device.profile_update", d.hostname or d.current_ip,
+          {"uuid": d.uuid, **body.model_dump()}, client_ip(request))
+    db.commit()
+    return _profile_out(p)
+
+
+TIMELINE_MAX_PER_SOURCE = 200
+
+
+@router.get("/{uuid}/timeline")
+def device_timeline(uuid: str, limit: int = Query(100, ge=1, le=TIMELINE_MAX_PER_SOURCE),
+                    db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Events, scans and web captures of one device, newest first (the UI groups them by day)."""
+    d = _get(db, uuid)
+    items: list[dict] = []
+    for e in db.scalars(select(Event).where(Event.device_id == d.id, event_visible(db))
+                        .order_by(Event.id.desc()).limit(limit)).unique():
+        items.append({"kind": "event", "at": e.created_at, **event_out(e)})
+    for sh, s in db.execute(
+        select(ScanHost, Scan).join(Scan, Scan.id == ScanHost.scan_id)
+        .where(ScanHost.device_id == d.id, scan_visible(db)).order_by(ScanHost.id.desc()).limit(limit)
+    ).all():
+        items.append({"kind": "scan", "at": sh.created_at, "scan_id": s.id, "scan_type": s.scan_type,
+                      "scan_status": s.status, "ip": sh.ip, "status": sh.status, "open_ports": sh.open_ports})
+    n_pages = func.count(WebPage.id)
+    n_shots = func.sum(case((WebPage.screenshot_status == SCREENSHOT_CAPTURED, 1), else_=0))
+    for cap, pages, shots in db.execute(
+        select(WebCapture, n_pages, n_shots).join(WebPage, WebPage.capture_id == WebCapture.id)
+        .where(WebPage.device_id == d.id).group_by(WebCapture.id).order_by(WebCapture.id.desc()).limit(limit)
+    ).all():
+        items.append({"kind": "web_capture", "at": cap.finished_at or cap.created_at, "capture_id": cap.id,
+                      "status": cap.status, "pages": int(pages), "screenshots": int(shots or 0)})
+    items.sort(key=lambda x: x["at"], reverse=True)
+    return {"items": items[:limit * 3]}
 
 
 @router.get("/{uuid}/events")

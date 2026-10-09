@@ -22,7 +22,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
 
-from sqlalchemy import Date, DateTime, LargeBinary, delete, func, insert, select, text
+from sqlalchemy import Date, DateTime, LargeBinary, delete, func, insert, select, text, update
 from sqlalchemy.orm import Session
 
 from .. import __version__
@@ -34,9 +34,14 @@ from ..models import (
     Device,
     DeviceIP,
     DevicePort,
+    DeviceProfile,
+    DeviceTag,
     Event,
     Exclusion,
     Network,
+    PortHttp,
+    SavedSearch,
+    SavedSearchHit,
     Scan,
     ScanHost,
     Snapshot,
@@ -58,6 +63,9 @@ INVENTORY_TABLES: tuple[tuple[str, type], ...] = (
     ("devices", Device),
     ("device_ips", DeviceIP),
     ("device_ports", DevicePort),
+    ("device_tags", DeviceTag),
+    ("device_profiles", DeviceProfile),
+    ("port_http", PortHttp),
     ("scans", Scan),
     ("scan_hosts", ScanHost),
     ("events", Event),
@@ -303,6 +311,10 @@ def _wipe_inventory(db: Session) -> dict[str, int]:
         ("events", delete(Event)),
         ("scan_hosts", delete(ScanHost)),
         ("snapshots", delete(Snapshot)),
+        ("saved_search_hits", delete(SavedSearchHit)),
+        ("port_http", delete(PortHttp)),
+        ("device_profiles", delete(DeviceProfile)),
+        ("device_tags", delete(DeviceTag)),
         ("device_ports", delete(DevicePort)),
         ("device_ips", delete(DeviceIP)),
         ("devices", delete(Device)),
@@ -312,6 +324,8 @@ def _wipe_inventory(db: Session) -> dict[str, int]:
     ):
         result = db.execute(stmt)
         deleted[label] = int(result.rowcount or 0)
+    # watches re-baseline against the imported inventory instead of alerting on every device
+    db.execute(update(SavedSearch).values(initialized=False, last_count=0))
     db.flush()
     for uuid in capture_uuids:
         delete_capture_files(uuid)
