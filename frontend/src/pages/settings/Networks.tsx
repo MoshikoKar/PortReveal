@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { del, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../../components/ui';
 import { useApp } from '../../context';
 import type { Network } from '../../types';
-import { NETWORK_ZONES, fmtTime, useApi } from '../../util';
+import { NETWORK_ZONES, fmtTime, useApi, useInFlight } from '../../util';
 
 type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean; zone: string };
 
@@ -19,13 +19,15 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  const canSave = !!draft && !!draft.name.trim() && !!draft.cidr.trim();
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
   const closeDraft = () => confirmDiscard(dirty) && setDraft(null);
 
   const save = async () => {
-    if (!draft || saving) return;
+    if (!draft || saving || !canSave) return;
     setSaveError(null);
     setSaving(true);
     try {
@@ -42,27 +44,33 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
   };
 
   const remove = async (n: Network) => {
+    if (pending(`net-${n.id}`)) return;
     if (!confirm(`Delete network "${n.name}"? Devices are kept; its snapshots are deleted.`)) return;
     setActionError(null);
-    try {
-      await del(`/networks/${n.id}`);
-    } catch (e: any) {
-      setActionError(`Could not delete "${n.name}": ${e.message}`);
-      return;
-    }
-    reload();
+    await track(`net-${n.id}`, async () => {
+      try {
+        await del(`/networks/${n.id}`);
+      } catch (e: any) {
+        setActionError(`Could not delete "${n.name}": ${e.message}`);
+        return;
+      }
+      reload();
+    });
   };
 
   const resetBaseline = async (n: Network) => {
+    if (pending(`net-${n.id}`)) return;
     if (!confirm(`Reset the baseline of "${n.name}"? The next complete standard scan becomes the new baseline (no alerts).`)) return;
     setActionError(null);
-    try {
-      await post(`/networks/${n.id}/reset-baseline`);
-    } catch (e: any) {
-      setActionError(`Could not reset the baseline of "${n.name}": ${e.message}`);
-      return;
-    }
-    reload();
+    await track(`net-${n.id}`, async () => {
+      try {
+        await post(`/networks/${n.id}/reset-baseline`);
+      } catch (e: any) {
+        setActionError(`Could not reset the baseline of "${n.name}": ${e.message}`);
+        return;
+      }
+      reload();
+    });
   };
 
   return (
@@ -78,7 +86,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
         </div>
       )}
       <ErrorBox error={error || actionError} />
-      {loading && !data ? <Loading /> : !data?.length ? <Empty>No networks yet.</Empty> : (
+      {loading && !data ? <SkeletonRows cols={isAdmin ? 7 : 6} /> : !data?.length ? <Empty>No networks yet.</Empty> : (
         <div className="table-wrap">
           <table>
             <thead><tr><th>Name</th><th>CIDR</th><th>Zone</th><th>Devices</th><th>Baseline</th><th>Schedule</th>{isAdmin && <th />}</tr></thead>
@@ -94,8 +102,8 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
                   {isAdmin && (
                     <td className="right nowrap">
                       <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '' })}>Edit</button>
-                      {n.baseline_at && <button className="btn danger sm" onClick={() => resetBaseline(n)}>Reset baseline</button>}
-                      <button className="btn danger sm" onClick={() => remove(n)}>Delete</button>
+                      {n.baseline_at && <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => resetBaseline(n)}>Reset baseline</button>}
+                      <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => remove(n)}>Delete</button>
                     </td>
                   )}
                 </tr>
@@ -111,7 +119,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
           dirty={dirty}
           footer={<>
             <button className="btn ghost" onClick={closeDraft}>Cancel</button>
-            <button className="btn primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            <button className="btn primary" onClick={save} disabled={saving || !canSave} title={canSave ? undefined : 'Enter a name and a CIDR'}>{saving ? 'Saving…' : 'Save'}</button>
           </>}
         >
           <label className="field">Name<input type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" /></label>

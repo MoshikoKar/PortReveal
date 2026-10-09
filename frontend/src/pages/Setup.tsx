@@ -1,5 +1,5 @@
 // First-run wizard: admin -> network -> exclusions -> schedule -> SMTP -> LDAP -> recipients -> baseline.
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { Logo } from '../components/Layout';
@@ -121,13 +121,15 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
   const [formDirty, setFormDirty] = useState(false); // the current step's settings form has unsaved edits
   const needsNetwork = step === 1 && !netCount; // still loading (null) or none yet
 
+  // Each step is its own history entry, so browser Back/Forward move between steps like the footer buttons.
   const goTo = (n: number) => {
     const nextStep = clampRange(n);
     const next = new URLSearchParams(sp);
     next.set(STEP_PARAM, String(nextStep));
-    setSp(next, { replace: true });
-    setFormDirty(false);
+    setSp(next);
   };
+  // A new step mounts a fresh form, whichever way (footer or browser history) the step changed.
+  useEffect(() => setFormDirty(false), [step]);
   const next = () => goTo(step + 1);
   /** Footer Back/Next/Skip: leaving a step with unsaved form edits would silently drop them. */
   const leave = (n: number) => {
@@ -136,6 +138,9 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
   };
   const finish = async () => {
     await post('/setup/complete');
+    const next = new URLSearchParams(sp);
+    next.delete(STEP_PARAM);
+    setSp(next, { replace: true });
     onDone();
   };
   return (

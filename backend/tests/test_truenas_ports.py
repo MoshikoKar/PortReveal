@@ -44,3 +44,18 @@ def test_truenas_catalog_ports_only_on_identified_host(db):
 
     nas = device_by_ip(db, "10.0.0.2")
     assert {p.port for p in nas.ports if p.is_open} == {80, 30013, 30041}
+
+
+def test_truenas_catalog_ports_on_full_scan(db):
+    """Full scans also probe TrueNAS Apps catalog ports (host-timeout often misses 3XXXX)."""
+    net = make_network(db)
+    catalog_port = next(p for p in TRUENAS_APPS_TCP_PORTS if p >= 30000)
+    tn = host(
+        "10.0.0.2",
+        [port(80, "http"), port(catalog_port, "http")],
+        mac=MAC_B,
+        hostname="truenas.lab",
+    )
+    scan(ScriptedScanner([tn]), scan_type="full", targets="10.0.0.2")
+    nas = device_by_ip(db, "10.0.0.2")
+    assert {p.port for p in nas.ports if p.is_open} == {80, catalog_port}

@@ -18,6 +18,7 @@
     "start:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Mode dev",
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Mode production -Stop",
     "test": "node scripts/py.mjs -m pytest -q",
+    "test:e2e": "npm run build && node scripts/py.mjs -m pytest -q -m e2e",
     "lint": "node scripts/py.mjs -m ruff check . && tsc -p frontend && eslint -c frontend/eslint.config.js frontend/src",
     "build": "tsc -p frontend && vite build frontend",
     "db:migrate": "node scripts/py.mjs -m app.cli migrate",

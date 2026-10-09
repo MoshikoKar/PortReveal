@@ -86,7 +86,7 @@ def import_data(
                                  "upload limit (IMPORT_MAX_UPLOAD_MB)")
     file.file.seek(0)
     try:
-        result = import_inventory(db, file.file, confirm=True)
+        result = import_inventory(db, file.file, confirm=True)  # commits, then removes old capture files
     except DataTransferError as exc:
         raise HTTPException(400, str(exc)) from exc
     audit(db, user.username, "data.import", name, {"imported": result.get("imported")}, client_ip(request))

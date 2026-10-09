@@ -8,7 +8,7 @@ import { HttpBadge, KIND_LABELS, isUsefulShot, shotNote, shotUrl } from '../comp
 import { Card, Empty, ErrorBox, Loading, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import type { Paged, Scan, SnapshotInfo, WebCapture } from '../types';
-import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, useApi } from '../util';
+import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, useApi, useInFlight } from '../util';
 
 interface MockState { mock_active: boolean; last_step: number; steps: string[]; networks: { id: number; name: string; step: number }[] }
 
@@ -63,7 +63,18 @@ export default function Scans() {
   const [wcDialog, setWcDialog] = useState(false);
   const [wcPage, setWcPage] = useState(1);
   const [wcDetail, setWcDetail] = useState<WebCapture | null>(null);
-  const [page, setPage] = useState(1);
+  // History page and the open scan's id live in the URL, so reload/Back/shared links keep them.
+  const page = Math.max(1, Number.parseInt(searchParams.get('page') ?? '', 10) || 1);
+  const detailId = Number.parseInt(searchParams.get('scan') ?? '', 10) || null;
+  const setParam = (key: string, value: string | null, replace = false) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value == null) next.delete(key);
+      else next.set(key, value);
+      return next;
+    }, { replace });
+  };
+  const setPage = (p: number) => setParam('page', p > 1 ? String(p) : null);
   const [detail, setDetail] = useState<Scan | null>(null);
   const [snapPage, setSnapPage] = useState(1);
   // Poll fast only while something is running or queued (here or per the app-wide status poll, which
@@ -83,20 +94,25 @@ export default function Scans() {
   const [err, setErr] = useState<string | null>(null);
 
   const [rerunBusy, setRerunBusy] = useState<number | null>(null);
+  // Stop/cancel/delete buttons stay disabled while their request is in flight.
+  const { pending, track } = useInFlight();
   const onStarted = () => { active.reload(); history.reload(); refreshSystem(); };
 
   const stopScan = async (id: number, e?: MouseEvent) => {
     e?.stopPropagation();
+    if (pending(`stop-${id}`)) return;
     if (!confirm(`Stop scan #${id}? Its results so far are discarded and no inventory changes are applied.`)) return;
     setErr(null);
-    try {
-      await post(`/scans/${id}/cancel`);
-      active.reload();
-      history.reload();
-      refreshSystem();
-    } catch (err: any) {
-      setErr(err.message);
-    }
+    await track(`stop-${id}`, async () => {
+      try {
+        await post(`/scans/${id}/cancel`);
+        active.reload();
+        history.reload();
+        refreshSystem();
+      } catch (err: any) {
+        setErr(err.message);
+      }
+    });
   };
 
   const runAgain = async (s: Scan, e?: MouseEvent) => {
@@ -105,6 +121,9 @@ export default function Scans() {
       setErr('Scanner unavailable');
       return;
     }
+    const scope = s.network_name ?? s.targets ?? 'the same targets';
+    const deep = s.scan_type === 'full' ? '\n\nThis is a deep scan of every port and can take a long time on large networks.' : '';
+    if (!confirm(`Run a ${SCAN_TYPE_LABELS[s.scan_type]} scan of ${scope} again?${deep}`)) return;
     setErr(null);
     setRerunBusy(s.id);
     try {
@@ -124,39 +143,70 @@ export default function Scans() {
 
   const isActiveStatus = (status: Scan['status']) => status === 'queued' || status === 'running';
 
-  const openDetail = async (id: number) => {
-    setErr(null);
-    try {
-      setDetail(await get<Scan>(`/scans/${id}`));
-    } catch (e: any) {
-      setErr(`Could not open scan #${id}: ${e.message}`);
+  const openDetail = (id: number) => setParam('scan', String(id));
+  const closeDetail = () => setParam('scan', null, true);
+  useEffect(() => {
+    if (!detailId) {
+      setDetail(null);
+      return;
     }
-  };
+    let live = true;
+    setErr(null);
+    get<Scan>(`/scans/${detailId}`).then(
+      (d) => live && setDetail(d),
+      (e: any) => {
+        if (!live) return;
+        setErr(`Could not open scan #${detailId}: ${e.message}`);
+        setParam('scan', null, true);
+      },
+    );
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch only when the URL's scan id changes
+  }, [detailId]);
   const onWcStarted = () => { wcHistory.reload(); wcActive.reload(); };
   const running = active.data?.running ?? [];
   const queued = active.data?.queued ?? [];
 
   const wcCancel = async (id: number) => {
+    if (pending(`wc-cancel-${id}`)) return;
     if (!confirm(`Cancel Web Capture job #${id}? Pages captured so far are kept.`)) return;
     setErr(null);
-    try {
-      await post(`/web-captures/${id}/cancel`);
-      wcActive.reload();
-      wcHistory.reload();
-    } catch (e: any) {
-      setErr(e.message);
-    }
+    await track(`wc-cancel-${id}`, async () => {
+      try {
+        await post(`/web-captures/${id}/cancel`);
+        wcActive.reload();
+        wcHistory.reload();
+      } catch (e: any) {
+        setErr(e.message);
+      }
+    });
   };
   const wcDelete = async (id: number) => {
+    if (pending(`wc-delete-${id}`)) return;
     if (!confirm('Delete this Web Capture job and all its screenshots?')) return;
     setErr(null);
-    try {
-      await del(`/web-captures/${id}`);
-      wcHistory.reload();
-      setWcDetail(null);
-    } catch (e: any) {
-      setErr(e.message);
-    }
+    await track(`wc-delete-${id}`, async () => {
+      try {
+        await del(`/web-captures/${id}`);
+        wcHistory.reload();
+        setWcDetail(null);
+      } catch (e: any) {
+        setErr(e.message);
+      }
+    });
+  };
+  const resetMock = async () => {
+    if (pending('mock-reset')) return;
+    if (!confirm('Reset the mock scanner scenario to its first step?')) return;
+    setErr(null);
+    await track('mock-reset', async () => {
+      try {
+        await post('/dev/mock/reset');
+        mock.reload();
+      } catch (e: any) {
+        setErr(`Could not reset the mock scenario: ${e.message}`);
+      }
+    });
   };
   const openWcDetail = async (id: number) => {
     setErr(null);
@@ -200,6 +250,7 @@ export default function Scans() {
             {!wcActive.data?.running.length && !wcActive.data?.queued.length ? (
               <Empty>No Web Capture running or queued.</Empty>
             ) : (
+              <div className="table-wrap">
               <table>
                 <thead><tr><th>#</th><th>Targets</th><th>Status</th><th>Progress</th><th>Started</th>{isAdmin && <th />}</tr></thead>
                 <tbody>
@@ -210,16 +261,24 @@ export default function Scans() {
                       <td><ScanStatusBadge status={c.status as any} /></td>
                       <td>{c.status === 'running' ? <Progress value={c.progress} /> : <span className="muted small">queued</span>}</td>
                       <td className="small">{fmtTime(c.started_at ?? c.created_at)}</td>
-                      {isAdmin && <td className="right"><button className="btn danger sm" onClick={() => wcCancel(c.id)}>Cancel</button></td>}
+                      {isAdmin && (
+                        <td className="right">
+                          <button className="btn danger sm" disabled={pending(`wc-cancel-${c.id}`)} onClick={() => wcCancel(c.id)}>
+                            {pending(`wc-cancel-${c.id}`) ? 'Cancelling…' : 'Cancel'}
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </Card>
           <Card title="Web Capture history" flush>
             {wcHistory.data ? (!wcHistory.data.items.length ? <Empty>No Web Capture jobs yet.</Empty> : (
               <>
+                <div className="table-wrap">
                 <table>
                   <thead><tr><th>#</th><th>Targets</th><th>Status</th><th>Pages</th><th>Shots</th><th>Finished</th><th /></tr></thead>
                   <tbody>
@@ -234,13 +293,16 @@ export default function Scans() {
                         <td className="right">
                           <button className="btn sm" onClick={() => openWcDetail(c.id)}>Details</button>
                           {isAdmin && c.status !== 'running' && c.status !== 'queued' && (
-                            <button className="btn danger sm" style={{ marginLeft: 6 }} onClick={() => wcDelete(c.id)}>Delete</button>
+                            <button className="btn danger sm" style={{ marginLeft: 6 }} disabled={pending(`wc-delete-${c.id}`)} onClick={() => wcDelete(c.id)}>
+                              {pending(`wc-delete-${c.id}`) ? 'Deleting…' : 'Delete'}
+                            </button>
                           )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+                </div>
                 <Pager page={wcPage} pageSize={20} total={wcHistory.data.total} onPage={setWcPage} />
               </>
             )) : <Loading />}
@@ -257,6 +319,7 @@ export default function Scans() {
               </dl>
               {wcDetail.notes && <div className="alert" style={{ whiteSpace: 'pre-wrap' }}>{wcDetail.notes}</div>}
               {wcDetail.pages && wcDetail.pages.length > 0 && (
+                <div className="table-wrap">
                 <table>
                   <thead><tr><th>IP:port</th><th>Kind</th><th>Title</th><th>Preview</th></tr></thead>
                   <tbody>
@@ -277,6 +340,7 @@ export default function Scans() {
                     })}
                   </tbody>
                 </table>
+                </div>
               )}
             </Modal>
           )}
@@ -288,6 +352,7 @@ export default function Scans() {
 
       <Card title="Active scans" flush>
         {!running.length && !queued.length ? <Empty>No scan running or queued.</Empty> : (
+          <div className="table-wrap">
           <table>
             <thead><tr><th>#</th><th>Type</th><th>Scope</th><th>Status</th><th style={{ width: '28%' }}>Progress</th><th>Hosts</th><th>Started</th>{isAdmin && <th />}</tr></thead>
             <tbody>
@@ -302,7 +367,7 @@ export default function Scans() {
                   <td className="small">{s.started_at ? `${fmtTime(s.started_at)} (${duration(s.started_at, null)})` : fmtTime(s.created_at)}</td>
                   {isAdmin && (
                     <td className="right">
-                      <button className="btn danger icon sm" title="Stop scan" aria-label="Stop scan" onClick={() => stopScan(s.id)}>
+                      <button className="btn danger icon sm" title="Stop scan" aria-label="Stop scan" disabled={pending(`stop-${s.id}`)} onClick={() => stopScan(s.id)}>
                         <IconStop />
                       </button>
                     </td>
@@ -311,12 +376,15 @@ export default function Scans() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 
       {mock.data?.mock_active && (
         <Card title="Mock scanner scenario (development)" actions={isAdmin && (
-          <button className="btn sm" onClick={async () => { await post('/dev/mock/reset'); mock.reload(); }}>Reset scenario</button>
+          <button className="btn danger sm" disabled={pending('mock-reset')} onClick={resetMock}>
+            {pending('mock-reset') ? 'Resetting…' : 'Reset scenario'}
+          </button>
         )}>
           <div className="stack" style={{ gap: 6 }}>
             <div className="muted small">Each completed network scan advances the simulated network one step. Results pass through the same comparison engine as real nmap data.</div>
@@ -349,7 +417,7 @@ export default function Scans() {
                       {isAdmin && (
                         <td className="right nowrap" onClick={(e) => e.stopPropagation()}>
                           {isActiveStatus(s.status) ? (
-                            <button className="btn danger icon sm" title="Stop scan" aria-label="Stop scan" onClick={(e) => stopScan(s.id, e)}>
+                            <button className="btn danger icon sm" title="Stop scan" aria-label="Stop scan" disabled={pending(`stop-${s.id}`)} onClick={(e) => stopScan(s.id, e)}>
                               <IconStop />
                             </button>
                           ) : (
@@ -381,6 +449,7 @@ export default function Scans() {
         </div>
         {!snaps.data ? <Loading /> : !snaps.data.items.length ? <Empty>No snapshots yet (created after each successful standard network scan).</Empty> : (
           <>
+            <div className="table-wrap">
             <table>
               <thead><tr><th>Date</th><th>Network</th><th>Active / total</th><th>Open ports</th><th>Size</th><th /></tr></thead>
               <tbody>
@@ -396,6 +465,7 @@ export default function Scans() {
                 ))}
               </tbody>
             </table>
+            </div>
             <Pager page={snapPage} pageSize={10} total={snaps.data.total} onPage={setSnapPage} />
           </>
         )}
@@ -405,7 +475,7 @@ export default function Scans() {
         </>
       )}
       {tab === 'scans' && detail && (
-        <Modal title={`Scan #${detail.id}`} onClose={() => setDetail(null)}>
+        <Modal title={`Scan #${detail.id}`} onClose={closeDetail}>
           <dl className="dl">
             <dt>Type</dt><dd>{SCAN_TYPE_LABELS[detail.scan_type]} · {detail.trigger} {detail.is_baseline && <span className="badge accent">baseline</span>}</dd>
             <dt>Status</dt><dd><ScanStatusBadge status={detail.status} /></dd>
@@ -421,7 +491,7 @@ export default function Scans() {
           {isAdmin && (
             <div className="row" style={{ marginBottom: 12, gap: 8 }}>
               {isActiveStatus(detail.status) ? (
-                <button className="btn danger icon" title="Stop scan" aria-label="Stop scan" onClick={() => stopScan(detail.id)}>
+                <button className="btn danger icon" title="Stop scan" aria-label="Stop scan" disabled={pending(`stop-${detail.id}`)} onClick={() => stopScan(detail.id)}>
                   <IconStop />
                 </button>
               ) : (

@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { HttpBadge, endpointUrl, isRtspPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
 import { Card, ErrorBox, Loading } from '../components/ui';
 import type { WebHost, WebService } from '../types';
@@ -85,17 +84,21 @@ function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number
 
 export default function WebHosts() {
   const { data, error } = useApi<{ hosts: WebHost[] }>('/web-hosts', undefined, 15000);
-  const [q, setQ] = useState('');
+  // Filter state lives in the URL (q, noapp=1, hide=kind,kind) so reload, Back and shared links keep it.
+  const [sp, setSp] = useSearchParams();
+  const q = sp.get('q') ?? '';
   // Hidden by default: default server pages, errors, blank shells, redirects, no-response
-  const [showNoApp, setShowNoApp] = useState(false);
-  const [noAppFilters, setNoAppFilters] = useState<Record<NoAppKind, boolean>>({
-    default: true,
-    error: true,
-    redirect: true,
-    no_response: true,
-    blank: true,
-    other: true,
-  });
+  const showNoApp = sp.get('noapp') === '1';
+  const hidden = new Set((sp.get('hide') ?? '').split(','));
+  const noAppFilters = Object.fromEntries(NO_APP_FILTERS.map((f) => [f.id, !hidden.has(f.id)])) as Record<NoAppKind, boolean>;
+  const update = (patch: Record<string, string | null>, replace = false) => {
+    const next = new URLSearchParams(sp);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next.set(k, v);
+      else next.delete(k);
+    }
+    setSp(next, { replace });
+  };
 
   const needle = q.trim().toLowerCase();
   const matches = (...values: unknown[]) =>
@@ -122,7 +125,10 @@ export default function WebHosts() {
     0,
   );
 
-  const toggleFilter = (id: NoAppKind) => setNoAppFilters((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleFilter = (id: NoAppKind) => {
+    const hide = NO_APP_FILTERS.filter((f) => (f.id === id ? noAppFilters[f.id] : !noAppFilters[f.id])).map((f) => f.id);
+    update({ hide: hide.join(',') || null });
+  };
 
   return (
     <>
@@ -131,7 +137,7 @@ export default function WebHosts() {
           <h1>Web interfaces</h1>
           <p>Every web service serving a real application, from the latest Web Capture — one card per service, so a host with several apps shows each. Default server pages, errors, blank pages and redirects are set aside.</p>
         </div>
-        <input type="search" placeholder="Filter by host, IP, title, port…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 260 }} />
+        <input type="search" placeholder="Filter by host, IP, title, port…" value={q} onChange={(e) => update({ q: e.target.value || null }, true)} style={{ width: 260 }} />
       </div>
       <ErrorBox error={error} />
       {!data ? <Loading /> : !data.hosts.length ? (
@@ -152,7 +158,7 @@ export default function WebHosts() {
             <Card
               title={`No web application — ${noApp.length} host${noApp.length === 1 ? '' : 's'}`}
               flush
-              actions={<button className="btn sm ghost" onClick={() => setShowNoApp((v) => !v)}>{showNoApp ? 'Hide' : 'Show'}</button>}
+              actions={<button className="btn sm ghost" aria-expanded={showNoApp} onClick={() => update({ noapp: showNoApp ? null : '1' })}>{showNoApp ? 'Hide' : 'Show'}</button>}
             >
               {showNoApp && (
                 <>
@@ -165,7 +171,7 @@ export default function WebHosts() {
                         <button
                           key={f.id}
                           type="button"
-                          className={`chip${noAppFilters[f.id] ? ' on' : ''}`}
+                          className={`btn sm toggle${noAppFilters[f.id] ? ' on' : ''}`}
                           onClick={() => toggleFilter(f.id)}
                           aria-pressed={noAppFilters[f.id]}
                         >

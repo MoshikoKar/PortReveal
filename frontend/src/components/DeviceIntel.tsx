@@ -228,11 +228,7 @@ export function Timeline({ uuid }: { uuid: string }) {
             </div>
           ))}
           {all.length > TIMELINE_PREVIEW && (
-            <button type="button" onClick={() => setOpen((v) => !v)} style={{
-              display: 'block', width: '100%', padding: '10px 16px', background: 'transparent',
-              border: 0, borderTop: '1px solid var(--border)', color: 'var(--accent)',
-              cursor: 'pointer', fontSize: 12, textAlign: 'center',
-            }}>
+            <button type="button" className="btn see-all" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
               {open ? 'Show less' : `See all ${all.length} →`}
             </button>
           )}

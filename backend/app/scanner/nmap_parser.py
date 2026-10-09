@@ -71,8 +71,11 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
         timed_out = host.get("timedout") == "true"
         ports_el = host.find("ports")
         if timed_out:
+            # Host-timeout aborts mid-scan (common on full 1-65535 + -sV). Keep any
+            # ports already found; port_scan_failed tells compare not to treat the
+            # advertised scope as complete coverage.
             obs.port_scan_failed = True
-        elif ports_el is not None:
+        if ports_el is not None:
             obs.ports = []
             for p in ports_el.findall("port"):
                 state = p.find("state")

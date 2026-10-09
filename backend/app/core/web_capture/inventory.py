@@ -7,15 +7,29 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ...models import Device
-from ...scanner.known_ports import AI_LLM_WEB_PORTS
+from ...scanner.identify_truenas import looks_like_truenas
+from ...scanner.known_ports import AI_LLM_WEB_PORTS, TRUENAS_APPS_TCP_PORTS
 
 # Service names nmap commonly uses for HTTP(S)
 WEB_SERVICE_NAMES = frozenset({
     "http", "https", "http-alt", "https-alt", "http-proxy",
     "ssl/http", "ssl/https", "http-mgmt", "www",
+    "webdav", "dav",
+})
+
+# Clear non-HTTP listeners — never promote these to web capture.
+NON_WEB_SERVICE_NAMES = frozenset({
+    "ssh", "domain", "netbios-ssn", "microsoft-ds", "msrpc", "rpcbind",
+    "postgresql", "mysql", "mariadb", "redis", "mongodb", "elasticsearch",
+    "smtp", "smtps", "pop3", "pop3s", "imap", "imaps", "ldap", "ldaps",
+    "ftp", "ftp-data", "nfs", "smb", "epmap", "ident", "ms-wbt-server",
+    "rdp", "vnc", "x11", "snmp", "ntp", "kerberos",
 })
 
 COMMON_WEB_PORTS = frozenset({80, 443, 3000, 5000, 8000, 8080, 8443, 8888, 9000}) | AI_LLM_WEB_PORTS
+_TRUENAS_APP_PORTS = frozenset(TRUENAS_APPS_TCP_PORTS)
+# Custom TrueNAS app host ports often sit here when not in the catalog defaults.
+_TRUENAS_UNKNOWN_WEB_PORT_MIN = 20000
 
 # Classic RTSP listen ports when nmap leaves service empty/unknown.
 COMMON_RTSP_PORTS = frozenset({554, 8554})
@@ -43,6 +57,25 @@ def is_web_service(service: str | None) -> bool:
         return True
     # ssl/http, tcpwrapped-looking names that still contain http
     if "http" in s:
+        return True
+    if "webdav" in s or s.endswith("/dav") or "/dav" in s:
+        return True
+    return False
+
+
+def is_probable_web_port(service: str | None, port: int, *, truenas: bool) -> bool:
+    """Whether an open TCP port should be probed as HTTP(S) for web capture."""
+    if is_web_service(service) or port in COMMON_WEB_PORTS:
+        return True
+    s = (service or "").strip().lower()
+    if s in NON_WEB_SERVICE_NAMES:
+        return False
+    if not truenas:
+        return False
+    # TrueNAS Apps catalog ports are almost always HTTP UIs; nmap often leaves them "unknown".
+    if port in _TRUENAS_APP_PORTS:
+        return True
+    if s in ("", "unknown", "tcpwrapped") and port >= _TRUENAS_UNKNOWN_WEB_PORT_MIN:
         return True
     return False
 
@@ -104,6 +137,9 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
             notes.append(f"{ip}: no device in inventory.")
             continue
         found = 0
+        truenas = looks_like_truenas(
+            hostname=dev.hostname, dns_name=dev.dns_name, os_name=dev.os_name, vendor=dev.vendor,
+        )
         for p in dev.ports:
             if not p.is_open or p.protocol != "tcp":
                 continue
@@ -111,7 +147,7 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
             by_rtsp = is_rtsp_service(p.service) or (
                 not is_web_service(p.service) and not p.service and p.port in COMMON_RTSP_PORTS
             )
-            by_web = (not by_rtsp) and (is_web_service(p.service) or p.port in COMMON_WEB_PORTS)
+            by_web = (not by_rtsp) and is_probable_web_port(p.service, p.port, truenas=truenas)
             if not (by_rtsp or by_web):
                 continue
             if by_rtsp:

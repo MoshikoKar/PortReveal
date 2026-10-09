@@ -161,15 +161,15 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
         )}
         {pages.length > 1 && (
           <>
-            <button className="lightbox-nav prev" onClick={() => go(-1)} aria-label="Previous">‹</button>
-            <button className="lightbox-nav next" onClick={() => go(1)} aria-label="Next">›</button>
+            <button className="lightbox-nav prev" onClick={() => go(-1)} aria-label="Previous" title="Previous">‹</button>
+            <button className="lightbox-nav next" onClick={() => go(1)} aria-label="Next" title="Next">›</button>
           </>
         )}
       </div>
       <aside className="lightbox-side">
         <div className="spread">
           <span className="muted small">{index + 1} / {pages.length}</span>
-          <button className="btn ghost sm" onClick={onClose} aria-label="Close">✕</button>
+          <button className="btn ghost sm" onClick={onClose} aria-label="Close" title="Close">✕</button>
         </div>
         <h2 style={{ overflowWrap: 'anywhere' }}>{p.title ?? 'Untitled page'}</h2>
         <div className="row wrap" style={{ gap: 6 }}>

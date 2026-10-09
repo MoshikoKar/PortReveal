@@ -18,7 +18,14 @@ from app.core.web_capture.classify import (
     redirect_is_external,
     unusable_page_reason,
 )
-from app.core.web_capture.inventory import find_web_endpoints, is_rtsp_service, is_web_service
+from app.core.web_capture.inventory import (
+    COMMON_WEB_PORTS,
+    find_web_endpoints,
+    is_probable_web_port,
+    is_rtsp_service,
+    is_web_service,
+)
+from app.scanner.known_ports import TRUENAS_APPS_TCP_PORTS
 from app.core.web_capture.mock import mock_probe_endpoint, mock_rtsp_endpoint
 from app.core.web_capture.screenshot import meta_refresh_target
 from app.core.web_storage import captures_root
@@ -60,11 +67,49 @@ def test_service_detection_priority():
     assert is_web_service("http")
     assert is_web_service("ssl/http")
     assert is_web_service("https")
+    assert is_web_service("webdav")
     assert not is_web_service("ssh")
     assert is_rtsp_service("rtsp")
     assert is_rtsp_service("ssl/rtsp")
     assert not is_web_service("rtsp")
     assert not is_rtsp_service("http")
+
+
+def test_probable_web_port_truenas_unknown_and_catalog():
+    catalog = next(p for p in TRUENAS_APPS_TCP_PORTS if p >= 30000 and p not in COMMON_WEB_PORTS)
+    assert is_probable_web_port("unknown", catalog, truenas=True)
+    assert is_probable_web_port(None, catalog, truenas=True)
+    assert is_probable_web_port("webdav", 20720, truenas=False)
+    assert is_probable_web_port("unknown", 20720, truenas=True)
+    assert not is_probable_web_port("unknown", catalog, truenas=False)
+    assert not is_probable_web_port("postgresql", catalog, truenas=True)
+    assert not is_probable_web_port("unknown", 5440, truenas=True)
+
+
+def test_inventory_truenas_unknown_catalog_ports(db):
+    """TrueNAS hosts: catalog / unknown high ports are web-capture candidates."""
+    net = make_network(db, "10.0.0.0/24", name="TnWeb")
+    catalog = next(p for p in TRUENAS_APPS_TCP_PORTS if p >= 30000 and p not in COMMON_WEB_PORTS)
+    scan(
+        ScriptedScanner([
+            host(
+                "10.0.0.50",
+                [
+                    port(80, "http"),
+                    port(catalog, "unknown"),
+                    port(20720, "webdav"),
+                    port(5432, "postgresql"),
+                ],
+                hostname="truenas.lab",
+            ),
+        ]),
+        scan_type="full",
+        targets="10.0.0.50",
+    )
+    endpoints, _ = find_web_endpoints(db, {"10.0.0.50"}, max_endpoints=20)
+    ports = {e.port for e in endpoints}
+    assert {80, catalog, 20720} <= ports
+    assert 5432 not in ports
 
 
 def test_inventory_rtsp_on_nonstandard_port(db):
@@ -474,6 +519,18 @@ def test_discovery_adds_app_paths_on_top_of_budget():
     assert len(extended) == len(normal) + 5
     added = {u for u, _ in extended} - {u for u, _ in normal}
     assert all(u.startswith(base) for u in added)
+
+
+def test_login_paths_include_admin_variants():
+    base = "http://10.0.0.1/"
+    # Budget must cover / + LOGIN_PATHS + REGISTER_PATHS (admin paths are always probed).
+    out = candidate_paths_for_endpoint(base, None, set(), set(), 40, discovery=0)
+    urls = {u for u, _ in out}
+    assert "http://10.0.0.1/admin" in urls
+    assert "http://10.0.0.1/admin/login" in urls
+    kinds = {u: k for u, k in out}
+    assert kinds["http://10.0.0.1/admin"] == "login"
+    assert kinds["http://10.0.0.1/admin/login"] == "login"
 
 
 def test_discovery_uses_custom_wordlist():

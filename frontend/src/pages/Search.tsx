@@ -85,7 +85,8 @@ export default function Search() {
   const [saved, setSaved] = useState<string | null>(null);
   const [bulk, setBulk] = useState<Bulk | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState<'csv' | 'ndjson' | null>(null);
+  const [busy, setBusy] = useState<Bulk['kind'] | null>(null);
   const live = useApi<Facets>(at ? null : '/search/facets', { q, facets: SEARCH_FACETS });
 
   useEffect(() => setText(q), [q]);
@@ -120,16 +121,19 @@ export default function Search() {
 
   const exportAs = async (format: 'csv' | 'ndjson') => {
     setActionError(null);
+    setExporting(format);
     try {
       await downloadBlob(`/search/export${query({ q, format })}`, `network-finder-search.${format}`);
     } catch (e: any) {
       setActionError(`Export failed: ${e.message}`);
+    } finally {
+      setExporting(null);
     }
   };
 
   const openBulk = async (kind: Bulk['kind']) => {
     setActionError(null);
-    setBusy(true);
+    setBusy(kind);
     try {
       const r = await get<{ uuids: string[] }>('/search/uuids', { q });
       if (!r.uuids.length) setActionError('No hosts match this query.');
@@ -137,7 +141,7 @@ export default function Search() {
     } catch (e: any) {
       setActionError(e.message);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -190,8 +194,8 @@ export default function Search() {
             <div className="row wrap">
               {!at && (
                 <div className="tabs" role="tablist" style={{ borderBottom: 0 }}>
-                  <button className={view === 'hosts' ? 'active' : ''} onClick={() => update({ view: null })}>Hosts</button>
-                  <button className={view === 'services' ? 'active' : ''} onClick={() => update({ view: 'services' })}>Services</button>
+                  <button role="tab" aria-selected={view === 'hosts'} className={view === 'hosts' ? 'active' : ''} onClick={() => update({ view: null })}>Hosts</button>
+                  <button role="tab" aria-selected={view === 'services'} className={view === 'services' ? 'active' : ''} onClick={() => update({ view: 'services' })}>Services</button>
                 </div>
               )}
               {!at && view === 'hosts' && (
@@ -199,13 +203,21 @@ export default function Search() {
                   {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
                 </select>
               )}
-              <button className="btn sm" onClick={() => exportAs('csv')} disabled={!!error}>Export CSV</button>
-              <button className="btn sm" onClick={() => exportAs('ndjson')} disabled={!!error}>Export NDJSON</button>
+              <button className="btn sm" onClick={() => exportAs('csv')} disabled={!!error || exporting !== null}>
+                {exporting === 'csv' ? 'Exporting…' : 'Export CSV'}
+              </button>
+              <button className="btn sm" onClick={() => exportAs('ndjson')} disabled={!!error || exporting !== null}>
+                {exporting === 'ndjson' ? 'Exporting…' : 'Export NDJSON'}
+              </button>
               <button className="btn sm" onClick={() => setSaving(true)} disabled={!q || !!error}>Save as watch</button>
               {isAdmin && !at && (
                 <>
-                  <button className="btn sm" onClick={() => openBulk('scan')} disabled={busy || !!error || !results?.total}>Scan results</button>
-                  <button className="btn sm" onClick={() => openBulk('web')} disabled={busy || !!error || !results?.total}>Capture web</button>
+                  <button className="btn sm" onClick={() => openBulk('scan')} disabled={busy !== null || !!error || !results?.total}>
+                    {busy === 'scan' ? 'Loading hosts…' : 'Scan results'}
+                  </button>
+                  <button className="btn sm" onClick={() => openBulk('web')} disabled={busy !== null || !!error || !results?.total}>
+                    {busy === 'web' ? 'Loading hosts…' : 'Capture web'}
+                  </button>
                 </>
               )}
             </div>

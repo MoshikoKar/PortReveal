@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import case, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..auth.deps import client_ip, current_user, require_admin
@@ -27,7 +27,6 @@ from ..models import (
     DeviceTag,
     Event,
     Network,
-    PortHttp,
     Scan,
     ScanHost,
     User,
@@ -156,9 +155,17 @@ def list_device_uuids(
     return {"uuids": uuids, "total": len(uuids)}
 
 
-def _get(db: Session, uuid: str) -> Device:
-    d = db.scalar(select(Device).where(Device.uuid == uuid).options(selectinload(Device.ports),
-                                                                    selectinload(Device.ips)))
+def _get(db: Session, uuid: str, *, detail: bool = False) -> Device:
+    options = [selectinload(Device.ports), selectinload(Device.ips)]
+    if detail:
+        options = [
+            selectinload(Device.ports).joinedload(DevicePort.http),
+            selectinload(Device.ips),
+            joinedload(Device.network),
+            joinedload(Device.tags),
+            joinedload(Device.profile),
+        ]
+    d = db.scalars(select(Device).where(Device.uuid == uuid).options(*options)).unique().one_or_none()
     if d is None:
         raise HTTPException(404, "Device not found")
     return d
@@ -178,11 +185,8 @@ def _profile_out(p: DeviceProfile | None) -> dict:
 
 @router.get("/{uuid}")
 def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    d = _get(db, uuid)
-    net = db.get(Network, d.network_id) if d.network_id else None
-    http = {h.device_port_id: h for h in db.scalars(select(PortHttp).where(PortHttp.device_id == d.id))}
-    tags = db.scalars(select(DeviceTag).where(DeviceTag.device_id == d.id).order_by(DeviceTag.tag)).all()
-    profile = db.scalar(select(DeviceProfile).where(DeviceProfile.device_id == d.id))
+    d = _get(db, uuid, detail=True)
+    net = d.network
     score = d.exposure_score or 0
     out = device_summary(d, network_name=net.name if net else None)
     out.update({
@@ -191,7 +195,7 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "last_port_scan_at": d.last_port_scan_at,
         "full_scanned_at": d.full_scanned_at,
         "ports": [{**port_out(p), "cpe": p.cpe.split() if p.cpe else [], "tunnel": p.tunnel,
-                   "http": http_out(http.get(p.id))}
+                   "http": http_out(p.http)}
                   for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
         "ips": [{"ip": i.ip, "first_seen": i.first_seen, "last_seen": i.last_seen} for i in d.ips],
         "previous_ips": [i.ip for i in d.ips if i.ip != d.current_ip],
@@ -200,8 +204,8 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "score_level": exposure_level(score),
         "classified_at": d.classified_at,
         "zone": net.zone if net else None,
-        "tags": [_tag_out(t) for t in tags],
-        "profile": _profile_out(profile),
+        "tags": [_tag_out(t) for t in d.tags],
+        "profile": _profile_out(d.profile),
     })
     return out
 

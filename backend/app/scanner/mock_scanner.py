@@ -192,11 +192,8 @@ class MockScanner:
             if profile.os_detection:
                 obs.os_name = host.os
             is_truenas = (
-                not profile.full
-                and (
-                    ip in known_truenas
-                    or looks_like_truenas(hostname=obs.hostname, vendor=host.vendor, os_name=host.os)
-                )
+                ip in known_truenas
+                or looks_like_truenas(hostname=obs.hostname, vendor=host.vendor, os_name=host.os)
             )
             all_ports = {**host.ports, **(host.high_ports if profile.full else {})}
             if is_truenas:

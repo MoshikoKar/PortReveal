@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { del, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../../components/ui';
 import { useApp } from '../../context';
 import type { Exclusion } from '../../types';
-import { useApi } from '../../util';
+import { useApi, useInFlight } from '../../util';
 
 type Draft = { id?: number; value: string; description: string; enabled: boolean };
 
@@ -15,7 +15,9 @@ export function ExclusionsSettings() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
+  const canSave = !!draft?.value.trim();
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
   const closeDraft = () => confirmDiscard(dirty) && setDraft(null);
@@ -38,15 +40,18 @@ export function ExclusionsSettings() {
   };
 
   const remove = async (x: Exclusion) => {
+    if (pending(`excl-${x.id}`)) return;
     if (!confirm('Delete this exclusion?')) return;
     setActionError(null);
-    try {
-      await del(`/exclusions/${x.id}`);
-    } catch (e: any) {
-      setActionError(`Could not delete the exclusion: ${e.message}`);
-      return;
-    }
-    reload();
+    await track(`excl-${x.id}`, async () => {
+      try {
+        await del(`/exclusions/${x.id}`);
+      } catch (e: any) {
+        setActionError(`Could not delete the exclusion: ${e.message}`);
+        return;
+      }
+      reload();
+    });
   };
 
   return (
@@ -59,7 +64,7 @@ export function ExclusionsSettings() {
         Excluded addresses are removed from every scan before nmap runs and are never probed.
       </div>
       <ErrorBox error={error || actionError} />
-      {loading && !data ? <Loading /> : !data?.length ? <Empty>No exclusions.</Empty> : (
+      {loading && !data ? <SkeletonRows cols={isAdmin ? 5 : 4} /> : !data?.length ? <Empty>No exclusions.</Empty> : (
         <div className="table-wrap">
           <table>
             <thead><tr><th>Addresses</th><th>Count</th><th>Description</th><th>Status</th>{isAdmin && <th />}</tr></thead>
@@ -77,7 +82,7 @@ export function ExclusionsSettings() {
                   {isAdmin && (
                     <td className="right nowrap">
                       <button className="btn ghost sm" onClick={() => openDraft({ id: x.id, value: x.value, description: x.description ?? '', enabled: x.enabled })}>Edit</button>
-                      <button className="btn danger sm" onClick={() => remove(x)}>Delete</button>
+                      <button className="btn danger sm" disabled={pending(`excl-${x.id}`)} onClick={() => remove(x)}>Delete</button>
                     </td>
                   )}
                 </tr>
@@ -93,7 +98,7 @@ export function ExclusionsSettings() {
           dirty={dirty}
           footer={<>
             <button className="btn ghost" onClick={closeDraft}>Cancel</button>
-            <button className="btn primary" onClick={() => save(draft)} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+            <button className="btn primary" onClick={() => save(draft)} disabled={saving || !canSave} title={canSave ? undefined : 'Enter at least one address'}>{saving ? 'Saving…' : 'Save'}</button>
           </>}
         >
           <label className="field">Addresses

@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__
+from . import __version__, metrics
 from .api import (
     auth,
     dashboard,
@@ -31,7 +31,7 @@ from .api import (
     watches,
     web_captures,
 )
-from .config import get_settings
+from .config import check_production_config, get_settings
 from .core.manager import manager
 from .core.query import QueryError
 from .core.scheduler import scheduler
@@ -42,6 +42,7 @@ from .migrate import upgrade
 from .netutils import TargetError
 from .scanner import scanner_status
 from .seed import seed_dev
+from .stopfile import watcher_from_env
 
 log = logging.getLogger("app")
 perf_log = logging.getLogger("app.perf")
@@ -51,6 +52,7 @@ perf_log = logging.getLogger("app.perf")
 async def lifespan(app: FastAPI):
     s = get_settings()
     setup_logging()
+    check_production_config(s)
     s.data_path.mkdir(parents=True, exist_ok=True)
     log.info("Network Finder %s starting (env=%s, db=%s)", __version__, s.app_env, s.db_type)
     try:
@@ -70,10 +72,16 @@ async def lifespan(app: FastAPI):
         manager.start()
         web_capture_manager.start()
         scheduler.start()
+    stop_watcher = watcher_from_env()  # set by scripts/run.ps1 (Windows production)
+    if stop_watcher:
+        stop_watcher.start()
     yield
+    if stop_watcher:
+        stop_watcher.stop()
     scheduler.stop()
     web_capture_manager.stop()
     manager.stop()
+    log.info("Network Finder stopped")
 
 
 app = FastAPI(title="Network Finder", version=__version__, lifespan=lifespan,
@@ -96,7 +104,8 @@ async def query_error_handler(request: Request, exc: QueryError):
 
 @app.middleware("http")
 async def request_timing(request: Request, call_next):
-    """Log API latency so slow endpoints (device list, dashboard, ...) show up in the app log.
+    """Log API latency so slow endpoints (device list, dashboard, ...) show up in the app log, and
+    count requests for /api/metrics.
 
     Streaming responses are timed to their first byte, which is what the client waits on.
     """
@@ -105,6 +114,7 @@ async def request_timing(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     ms = (time.perf_counter() - start) * 1000
+    metrics.observe_request(request.method, response.status_code, ms / 1000)
     response.headers.setdefault("Server-Timing", f"app;dur={ms:.1f}")
     slow = ms >= get_settings().slow_request_ms
     if slow or perf_log.isEnabledFor(logging.DEBUG):

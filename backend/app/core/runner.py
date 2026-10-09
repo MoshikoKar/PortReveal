@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
+from .. import metrics
 from ..config import get_settings
 from ..db import session_scope, utcnow
 from ..models import (
@@ -148,6 +149,15 @@ def _run_parallel(items: list[list[str]], fn, parallelism: int, ctx: ScanContext
 
 def run_scan(scan_id: int, ctx: ScanContext | None = None, scanner: Scanner | None = None) -> str:
     """Execute a queued scan synchronously. Returns the final status."""
+    started = time.monotonic()
+    status = _run_scan(scan_id, ctx, scanner)
+    with session_scope() as db:
+        scan_type = db.scalar(select(Scan.scan_type).where(Scan.id == scan_id)) or "unknown"
+    metrics.observe_scan(scan_type, status, time.monotonic() - started)
+    return status
+
+
+def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) -> str:
     settings = get_settings()
     ctx = ctx or ScanContext(scan_id)
     started = time.monotonic()

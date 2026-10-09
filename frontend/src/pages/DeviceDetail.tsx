@@ -26,11 +26,7 @@ function previewRows<T>(items: T[], open: boolean): T[] {
 function SeeAllBar({ total, open, onToggle }: { total: number; open: boolean; onToggle: () => void }) {
   if (total <= PREVIEW_ROWS) return null;
   return (
-    <button type="button" onClick={onToggle} style={{
-      display: 'block', width: '100%', padding: '10px 16px', background: 'transparent',
-      border: 0, borderTop: '1px solid var(--border)', color: 'var(--accent)',
-      cursor: 'pointer', fontSize: 12, textAlign: 'center',
-    }}>
+    <button type="button" className="btn see-all" aria-expanded={open} onClick={onToggle}>
       {open ? 'Show less' : `See all ${total} →`}
     </button>
   );

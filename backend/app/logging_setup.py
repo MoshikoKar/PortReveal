@@ -1,12 +1,32 @@
 from __future__ import annotations
 
+import json
 import logging
 import logging.handlers
 import sys
+from datetime import datetime, timezone
 
 from .config import get_settings
 
 _configured = False
+
+
+class JsonFormatter(logging.Formatter):
+    """Render one JSON object per record for log collectors."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            payload["stack"] = self.formatStack(record.stack_info)
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def setup_logging() -> None:
@@ -14,7 +34,11 @@ def setup_logging() -> None:
     if _configured:
         return
     s = get_settings()
-    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S")
+    fmt = (
+        JsonFormatter()
+        if s.log_format == "json"
+        else logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S")
+    )
     root = logging.getLogger()
     root.setLevel(s.log_level.upper())
     stream = logging.StreamHandler(sys.stdout)

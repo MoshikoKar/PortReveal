@@ -61,7 +61,7 @@ from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.known_ports import merge_port_scope
 from ..scanner.types import HostObservation, PortObservation
 from ..settings_store import PresenceSettings, ScanSettings, get_section
-from .identity import match_hosts, normalize_hostname, normalize_mac
+from .identity import identity_hostname, match_hosts, normalize_hostname, normalize_mac
 
 log = logging.getLogger(__name__)
 
@@ -199,22 +199,39 @@ class _Applier:
         self.db.add(ev)
         self.result.events.append(ev)
 
+    def identity_keys(self, hosts: list[HostObservation]) -> list[_DeviceKey]:
+        """Identity columns of every device `match_hosts` could pick for these hosts: the same IP,
+        MAC or identity hostname as one of them. This module is the only writer of those columns
+        and stores them normalized, so exact (indexed) lookups find every candidate; the rest of
+        the inventory is not read at all.
+        """
+        ips = {h.ip for h in hosts}
+        macs = {m for h in hosts if (m := normalize_mac(h.mac))}
+        names = {n for h in hosts if (n := identity_hostname(h.hostname, h.ip))}
+        cols = (Device.id, Device.current_ip, Device.mac, Device.hostname, Device.status, Device.last_seen)
+        keys: dict[int, _DeviceKey] = {}
+        for column, values in ((Device.current_ip, ips), (Device.mac, macs), (Device.hostname, names)):
+            ordered = sorted(values)
+            for i in range(0, len(ordered), _LOAD_CHUNK):
+                for row in self.db.execute(select(*cols).where(column.in_(ordered[i:i + _LOAD_CHUNK]))).tuples():
+                    keys[row[0]] = _DeviceKey(*row)
+        return [keys[i] for i in sorted(keys)]
+
     def load_devices(self, hosts: list[HostObservation]) -> tuple[list[Device], dict[str, Device | None]]:
         """Load only the devices this scan can touch, with their ports and IPs.
 
-        Identity matching (MAC / IP / moved hostname) runs over every known device, but on a light
-        column projection. Full rows are then loaded for the matched devices plus the active/unknown
-        devices inside the scan targets (the candidates for "not detected"); devices elsewhere in
-        the inventory are never materialized.
+        Identity matching (MAC / IP / moved hostname) runs over the identity candidates of the
+        observed hosts only, on a light column projection. Full rows are then loaded for the
+        matched devices plus the active/unknown devices inside the scan targets (the candidates for
+        "not detected", found from an (id, ip) projection of active/unknown devices); devices
+        elsewhere in the inventory are never materialized.
         """
-        keys = [_DeviceKey(*row) for row in self.db.execute(
-            select(Device.id, Device.current_ip, Device.mac, Device.hostname, Device.status, Device.last_seen)
-            .order_by(Device.id)
-        ).tuples()]
-        key_matches = match_hosts(hosts, keys)
+        key_matches = match_hosts(hosts, self.identity_keys(hosts))
         targets = self.outcome.targets
         wanted = {k.id for k in key_matches.values() if k is not None}
-        wanted.update(k.id for k in keys if k.status in (DEVICE_ACTIVE, DEVICE_UNKNOWN) and k.current_ip in targets)
+        wanted.update(dev_id for dev_id, ip in self.db.execute(
+            select(Device.id, Device.current_ip).where(Device.status.in_((DEVICE_ACTIVE, DEVICE_UNKNOWN)))
+        ).tuples() if ip in targets)
         ids = sorted(wanted)
         devices: list[Device] = []
         for i in range(0, len(ids), _LOAD_CHUNK):
@@ -290,7 +307,7 @@ class _Applier:
             seen_devices[h.ip] = dev
 
             host_scope = self.host_scope(h)
-            if h.ports is not None and host_scope is not None:
+            if h.ports is not None and host_scope is not None and not h.port_scan_failed:
                 open_ports_scanned += sum(
                     1 for p in dev.ports if p.is_open and p.protocol == "tcp" and p.port in host_scope
                 )
@@ -301,6 +318,12 @@ class _Applier:
                 if outcome.scan_type == SCAN_FULL:
                     dev.full_scanned_at = now
             elif h.port_scan_failed:
+                # Partial port data (e.g. nmap host-timeout): record opens only — empty
+                # scope skips closures so unscanned ports are not marked closed.
+                if h.ports is not None:
+                    self._process_ports(dev, h.ports, is_new, mode, PortScope(""))
+                    dev.last_port_scan_id = self.scan.id
+                    dev.last_port_scan_at = now
                 dev.port_scan_failed = True
                 self.result.hosts_failed += 1
 

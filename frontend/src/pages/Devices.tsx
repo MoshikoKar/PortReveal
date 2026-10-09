@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, Pager, PortChips, SkeletonRows } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, Pager, PortChips, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -80,10 +80,8 @@ export default function Devices() {
     const same = params.sort === col;
     update({ sort: col, order: same && params.order === 'asc' ? 'desc' : 'asc' });
   };
-  const SortTh = ({ col, children }: { col: string; children: React.ReactNode }) => (
-    <th style={{ cursor: 'pointer' }} onClick={() => sortBy(col)}>
-      {children}{params.sort === col ? (params.order === 'asc' ? ' ▲' : ' ▼') : ''}
-    </th>
+  const sortTh = (col: string, label: string) => (
+    <SortTh active={params.sort === col} desc={params.order === 'desc'} onSort={() => sortBy(col)}>{label}</SortTh>
   );
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -159,7 +157,8 @@ export default function Devices() {
             {networks.data?.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
           </select>
           {activeFilters.map((k) => (
-            <button key={k} className="btn sm" onClick={() => update({ [k]: undefined })}>{k}: {sp.get(k)} ✕</button>
+            <button key={k} className="btn sm toggle on" aria-pressed="true" title="Remove this filter"
+              onClick={() => update({ [k]: undefined })}>{k}: {sp.get(k)} <span aria-hidden>✕</span></button>
           ))}
         </div>
       } actions={isAdmin && selected.size > 0 && (
@@ -205,14 +204,14 @@ export default function Devices() {
                       <input type="checkbox" checked={allSelected} onChange={() => selectPage(!allSelected)} />
                     </th>
                   )}
-                  <SortTh col="status">Status</SortTh>
-                  <SortTh col="ip">IP address</SortTh>
-                  <SortTh col="hostname">Hostname</SortTh>
+                  {sortTh('status', 'Status')}
+                  {sortTh('ip', 'IP address')}
+                  {sortTh('hostname', 'Hostname')}
                   <th>MAC / vendor</th>
-                  <SortTh col="open_ports">Open ports</SortTh>
+                  {sortTh('open_ports', 'Open ports')}
                   <th>Network</th>
-                  <SortTh col="last_seen">Last seen</SortTh>
-                  <SortTh col="first_seen">First seen</SortTh>
+                  {sortTh('last_seen', 'Last seen')}
+                  {sortTh('first_seen', 'First seen')}
                 </tr>
               </thead>
               <tbody>

@@ -105,6 +105,19 @@ export function SkeletonRows({ cols, rows = 6 }: { cols: number; rows?: number }
   );
 }
 
+/** Sortable column header: a real button (keyboard focusable) inside the `th`, which carries `aria-sort`. */
+export function SortTh({ active, desc, onSort, className, children }: {
+  active: boolean; desc: boolean; onSort: () => void; className?: string; children: ReactNode;
+}) {
+  return (
+    <th className={className} aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}>
+      <button type="button" className="th-sort" onClick={onSort}>
+        {children}{active && <span aria-hidden>{desc ? '↓' : '↑'}</span>}
+      </button>
+    </th>
+  );
+}
+
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
@@ -142,7 +155,7 @@ function focusables(root: HTMLElement): HTMLElement[] {
 /** `dirty`: the form has unsaved edits, so backdrop/✕/Escape close asks before discarding them.
  *  Consumers' own Cancel buttons should check `confirmDiscard(dirty)` the same way.
  *  Keyboard: focus moves into the dialog on open, Tab cycles inside it, Escape closes, and focus
- *  returns to the element that opened it. */
+ *  returns to the element that opened it. Body scroll is locked while it is open. */
 export function Modal({ title, onClose, children, footer, dirty }: {
   title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; dirty?: boolean;
 }) {
@@ -158,7 +171,11 @@ export function Modal({ title, onClose, children, footer, dirty }: {
       const field = el.querySelector<HTMLElement>('.card-body input:not([disabled]), .card-body select:not([disabled]), .card-body textarea:not([disabled])');
       (field ?? el).focus();
     }
+    // The page behind the backdrop must not scroll while the dialog is open (same as Lightbox).
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     return () => {
+      document.body.style.overflow = prevOverflow;
       if (opener?.isConnected) opener.focus();
     };
   }, []);
@@ -192,7 +209,7 @@ export function Modal({ title, onClose, children, footer, dirty }: {
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} ref={ref} onKeyDown={onKeyDown}>
         <div className="card-head">
           <h2 id={titleId}>{title}</h2>
-          <button className="btn ghost sm" onClick={requestClose} aria-label="Close">✕</button>
+          <button className="btn ghost sm" onClick={requestClose} aria-label="Close" title="Close">✕</button>
         </div>
         <div className="card-body stack">{children}</div>
         {footer && <div className="card-head" style={{ borderTop: '1px solid var(--border)', borderBottom: 0, justifyContent: 'flex-end' }}>{footer}</div>}

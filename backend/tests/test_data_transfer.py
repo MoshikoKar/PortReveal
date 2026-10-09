@@ -216,3 +216,46 @@ def test_api_import_upload_size_limit(client, db, monkeypatch):
     )
     assert r.status_code == 413
     assert "upload limit" in r.json()["detail"]
+
+
+def test_import_out_of_set_value_refuses_before_wipe(db, tmp_path):
+    import json
+    import zipfile
+
+    _seed_inventory(db)
+    good = tmp_path / "inv.zip"
+    export_inventory(db, good)
+    bad = tmp_path / "bad.zip"
+    with zipfile.ZipFile(good) as src, zipfile.ZipFile(bad, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info)
+            if info.filename.endswith("devices.jsonl"):
+                rows = [json.loads(line) for line in data.splitlines() if line.strip()]
+                rows[0]["status"] = "gone"
+                data = b"".join(json.dumps(r).encode() + b"\n" for r in rows)
+            dst.writestr(info, data)
+    devices_before = db.scalar(select(func.count(Device.id)))
+    with pytest.raises(DataTransferError, match=r"invalid value 'gone' for devices\.status"):
+        import_inventory(db, bad, confirm=True)
+    db.rollback()
+    assert db.scalar(select(func.count(Device.id))) == devices_before
+
+
+def test_import_removes_capture_files_only_after_commit(db, tmp_path, monkeypatch):
+    from app.core import data_transfer
+    from app.models import WebCapture
+
+    _seed_inventory(db)
+    path = tmp_path / "inv.zip"
+    export_inventory(db, path)
+    db.add(WebCapture(targets="10.0.0.1", status="completed"))
+    db.commit()
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(data_transfer, "delete_capture_files",
+                        lambda uuid: seen.append((uuid, db.in_transaction())))
+    monkeypatch.setattr(data_transfer, "cleanup_capture_dirs", lambda keep: 0)
+
+    import_inventory(db, path, confirm=True)
+
+    assert len(seen) == 1
+    assert seen[0][1] is False  # the wipe was committed before any file was touched

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     app_env: Literal["development", "production", "test"] = "development"
     log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
     # API requests slower than this are logged as warnings (logger "app.perf"); faster ones at DEBUG
     slow_request_ms: int = 1000
 
@@ -114,6 +115,33 @@ class Settings(BaseSettings):
     @property
     def db_type(self) -> str:
         return "sqlite" if self.sqlalchemy_url.startswith("sqlite") else "postgresql"
+
+
+# Placeholder shipped in .env.production.example; starting with it is the same as starting without a key.
+SECRET_KEY_PLACEHOLDER = "replace-with-output-of-openssl-rand-hex-32"
+
+
+class ConfigError(RuntimeError):
+    """Boot configuration that must be fixed before the application may start."""
+
+
+def check_production_config(s: Settings) -> None:
+    """Fail fast on production settings that would otherwise break later or silently.
+
+    Production requires an explicit APP_SECRET_KEY: the fallback key generated into the data
+    directory is lost with that directory, and every stored SMTP/LDAP password with it.
+    """
+    if s.app_env != "production":
+        return
+    secret = s.app_secret_key.strip()
+    if secret and secret != SECRET_KEY_PLACEHOLDER:
+        return
+    key_file = s.data_path / ".secret_key"
+    hint = (f"An earlier start generated {key_file}: set APP_SECRET_KEY to its contents to keep "
+            "existing encrypted SMTP/LDAP passwords readable." if key_file.is_file()
+            else "Generate one with: openssl rand -hex 32")
+    raise ConfigError(f"APP_SECRET_KEY must be set when APP_ENV=production. {hint} "
+                      "Back the key up together with the database.")
 
 
 @lru_cache

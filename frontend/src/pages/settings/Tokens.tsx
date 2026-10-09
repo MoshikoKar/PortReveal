@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { del, post } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../../components/ui';
 import type { ApiToken } from '../../types';
-import { fmtTime, relTime, useApi } from '../../util';
+import { fmtTime, relTime, useApi, useInFlight } from '../../util';
 
 const EXPIRY_OPTIONS = [
   { days: 30, label: '30 days' }, { days: 90, label: '90 days' }, { days: 365, label: '1 year' }, { days: 0, label: 'Never' },
@@ -17,6 +17,7 @@ export function TokensSettings() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [created, setCreated] = useState<ApiToken | null>(null);
   const [copied, setCopied] = useState(false);
+  const { pending, track } = useInFlight();
   const dirty = !!draft?.name;
 
   const create = async () => {
@@ -37,15 +38,18 @@ export function TokensSettings() {
   };
 
   const revoke = async (t: ApiToken) => {
+    if (pending(`token-${t.id}`)) return;
     if (!confirm(`Revoke the token "${t.name}"? Scripts using it stop working immediately.`)) return;
     setActionError(null);
-    try {
-      await del(`/tokens/${t.id}`);
-    } catch (e: any) {
-      setActionError(`Could not revoke "${t.name}": ${e.message}`);
-      return;
-    }
-    reload();
+    await track(`token-${t.id}`, async () => {
+      try {
+        await del(`/tokens/${t.id}`);
+      } catch (e: any) {
+        setActionError(`Could not revoke "${t.name}": ${e.message}`);
+        return;
+      }
+      reload();
+    });
   };
 
   const copy = async () => {
@@ -80,7 +84,7 @@ export function TokensSettings() {
           </div>
         </div>
       )}
-      {loading && !data ? <Loading /> : !data?.length ? <Empty>No API tokens yet.</Empty> : (
+      {loading && !data ? <SkeletonRows cols={6} /> : !data?.length ? <Empty>No API tokens yet.</Empty> : (
         <div className="table-wrap">
           <table>
             <thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th>Expires</th><th /></tr></thead>
@@ -94,7 +98,11 @@ export function TokensSettings() {
                   <td className="small nowrap">
                     {t.revoked ? <span className="badge outline">revoked</span> : expired(t) ? <span className="badge high">expired</span> : t.expires_at ? fmtTime(t.expires_at) : 'never'}
                   </td>
-                  <td className="right">{!t.revoked && <button className="btn danger sm" onClick={() => revoke(t)}>Revoke</button>}</td>
+                  <td className="right">{!t.revoked && (
+                    <button className="btn danger sm" disabled={pending(`token-${t.id}`)} onClick={() => revoke(t)}>
+                      {pending(`token-${t.id}`) ? 'Revoking…' : 'Revoke'}
+                    </button>
+                  )}</td>
                 </tr>
               ))}
             </tbody>

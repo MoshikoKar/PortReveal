@@ -83,6 +83,26 @@ export function addTerm(q: string, term: string): string {
 
 export const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+/** Requests in flight by key (e.g. `delete-12`), so their buttons stay disabled until each settles.
+ *  `track` ignores a key that is already in flight, which also absorbs double clicks. */
+export function useInFlight() {
+  const [keys, setKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const live = useRef(new Set<string>());
+  const pending = useCallback((key: string) => keys.has(key), [keys]);
+  const track = useCallback(async (key: string, fn: () => Promise<unknown>) => {
+    if (live.current.has(key)) return;
+    live.current.add(key);
+    setKeys(new Set(live.current));
+    try {
+      await fn();
+    } finally {
+      live.current.delete(key);
+      setKeys(new Set(live.current));
+    }
+  }, []);
+  return { pending, track };
+}
+
 /** Fetch a GET endpoint, optionally polling. Re-fetches when path/params change. */
 export function useApi<T>(path: string | null, params?: Record<string, any>, pollMs?: number) {
   const [data, setData] = useState<T | null>(null);

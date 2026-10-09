@@ -27,7 +27,9 @@
   Output goes to data\logs\production.log; stop with -Stop
 
 .PARAMETER Stop
-  Stop the production app process (leaves Docker `db` running)
+  Stop the production app process (leaves Docker `db` running). Asks the app to shut down
+  gracefully first (scan / web-capture workers and scheduler stop cleanly) and force-kills only
+  if it has not exited within the timeout; a force-killed scan is marked failed on the next start.
 
 .PARAMETER StopDb
   With -Stop: also stop the Compose `db` container
@@ -53,6 +55,12 @@ Set-Location -LiteralPath $Root
 $DataDir = Join-Path $Root "data"
 $LogDir = Join-Path $DataDir "logs"
 $PidFile = Join-Path $DataDir "network-finder-prod.pid"
+# The app watches this file (NETWORK_FINDER_STOP_FILE) and shuts down gracefully when it appears.
+$StopFile = Join-Path $DataDir "network-finder.stop"
+$GracefulStopTimeoutS = 45
+# If the stop file is still present after this many seconds, the app is not watching
+# NETWORK_FINDER_STOP_FILE (older process / env not set) — force-kill instead of waiting.
+$StopFileAckTimeoutS = 5
 $LogFile = Join-Path $LogDir "production.log"
 $ComposeFile = Join-Path $Root "docker-compose.yml"
 $ProdEnvFile = Join-Path $Root ".env.production"
@@ -130,23 +138,85 @@ function Get-ListenPids {
     return $ids
 }
 
+function Test-ProcessAlive {
+    param([int] $ProcId)
+    return $null -ne (Get-Process -Id $ProcId -ErrorAction SilentlyContinue)
+}
+
+function Wait-ProcessesExit {
+    param([int[]] $Ids, [int] $TimeoutS)
+    $deadline = (Get-Date).AddSeconds($TimeoutS)
+    while ((Get-Date) -lt $deadline) {
+        if (@($Ids | Where-Object { Test-ProcessAlive $_ }).Count -eq 0) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return (@($Ids | Where-Object { Test-ProcessAlive $_ }).Count -eq 0)
+}
+
+function Request-GracefulStop {
+    # Returns $true once the app process has exited on its own.
+    param([int] $Port)
+    $appPids = @(Get-ListenPids -Port $Port)
+    if ($appPids.Count -eq 0) { return $true }
+    Write-Log "Requesting graceful stop of PID(s) $($appPids -join ', ') (up to ${GracefulStopTimeoutS}s)"
+    New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+    Set-Content -LiteralPath $StopFile -Value (Get-Date -Format o) -Encoding ascii
+
+    # The app watcher deletes the stop file when it sees it; if the file is still here
+    # after StopFileAckTimeoutS, this process never registered the watcher — force soon.
+    $started = Get-Date
+    $ackDeadline = $started.AddSeconds($StopFileAckTimeoutS)
+    $deadline = $started.AddSeconds($GracefulStopTimeoutS)
+    $acked = $false
+    while ((Get-Date) -lt $deadline) {
+        if (@($appPids | Where-Object { Test-ProcessAlive $_ }).Count -eq 0) {
+            Remove-Item -LiteralPath $StopFile -Force -ErrorAction SilentlyContinue
+            Write-Log "App stopped gracefully"
+            return $true
+        }
+        if (-not $acked) {
+            if (-not (Test-Path -LiteralPath $StopFile)) {
+                $acked = $true
+            } elseif ((Get-Date) -ge $ackDeadline) {
+                Write-Log "Stop file not acknowledged within ${StopFileAckTimeoutS}s (app likely missing NETWORK_FINDER_STOP_FILE); forcing." "WARN"
+                Remove-Item -LiteralPath $StopFile -Force -ErrorAction SilentlyContinue
+                return $false
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    Remove-Item -LiteralPath $StopFile -Force -ErrorAction SilentlyContinue
+    Write-Log "App did not stop within ${GracefulStopTimeoutS}s; forcing. A running scan is marked failed on the next start." "WARN"
+    return $false
+}
+
 function Stop-ProductionInstance {
     param([int] $Port)
 
-    $pids = New-Object "System.Collections.Generic.HashSet[int]"
+    $wrapperPid = $null
     if (Test-Path -LiteralPath $PidFile) {
         $raw = (Get-Content -LiteralPath $PidFile -Raw).Trim()
-        if ($raw -match "^\d+$") { [void]$pids.Add([int]$raw) }
+        if ($raw -match "^\d+$") { $wrapperPid = [int]$raw }
     }
+
+    $hadApp = ($null -ne $wrapperPid) -or (@(Get-ListenPids -Port $Port).Count -gt 0)
+    if ((Request-GracefulStop -Port $Port) -and $null -ne $wrapperPid) {
+        # The launcher (PID file) exits by itself once uvicorn has; give it a moment.
+        [void](Wait-ProcessesExit -Ids @($wrapperPid) -TimeoutS 10)
+    }
+
+    $pids = New-Object "System.Collections.Generic.HashSet[int]"
+    if ($null -ne $wrapperPid -and (Test-ProcessAlive $wrapperPid)) { [void]$pids.Add($wrapperPid) }
     foreach ($p in @(Get-ListenPids -Port $Port)) { [void]$pids.Add([int]$p) }
 
     if ($pids.Count -eq 0) {
-        Write-Log "No production app found (port $Port / PID file)."
+        if (-not $hadApp) { Write-Log "No production app found (port $Port / PID file)." }
         Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     } else {
         foreach ($procId in @($pids)) {
             try {
-                Write-Log "Stopping PID $procId"
+                Write-Log "Force-stopping PID $procId" "WARN"
                 Stop-Process -Id $procId -Force -ErrorAction Stop
             } catch {
                 Write-Log "Could not stop PID ${procId}: $($_.Exception.Message)" "WARN"
@@ -242,6 +312,7 @@ if ($Mode -eq "production") {
     $env:NETWORK_FINDER_ENV_FILE = $ProdEnvFile
     $env:APP_ENV = "production"
     $env:DEV_SEED = "false"
+    $env:NETWORK_FINDER_STOP_FILE = $StopFile  # graceful -Stop (see Request-GracefulStop)
     if (-not (Test-EnvSet "SCANNER_MODE")) { $env:SCANNER_MODE = "nmap" }
     if (-not (Test-EnvSet "NMAP_PATH")) { $env:NMAP_PATH = "nmap" }
     if (-not (Test-EnvSet "POSTGRES_DB")) { $env:POSTGRES_DB = "netfinder" }

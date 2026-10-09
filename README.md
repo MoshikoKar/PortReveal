@@ -173,8 +173,18 @@ One SQLAlchemy model and one Alembic history for both engines.
   Disposable via `npm run db:reset`.
 - **PostgreSQL (prod):** `DATABASE_URL=postgresql+psycopg://…` or
   `POSTGRES_HOST` / `PORT` / `DB` / `USER` / `PASSWORD` (Compose-friendly).
+- **Naming exceptions:** `UserSession` intentionally maps to the concise plural
+  table `sessions`, while append-only `AuditLog` intentionally maps to the
+  singular table `audit_log`. Do not rename either without a staged migration
+  plan that preserves existing data and foreign-key references.
+- **PostgreSQL pooling:** each app process keeps 10 base connections and may open
+  10 overflow connections, waits up to 30 seconds for a checkout, recycles
+  connections after 30 minutes, and verifies connections before use. Size the
+  database limit for `(pool_size + max_overflow) × app worker processes` plus
+  migration and administrative connections.
 
-Migrations run automatically at startup.
+Migrations run automatically at startup. CI upgrades a fresh database to Alembic
+head and runs `alembic check` so model changes without a migration fail the build.
 
 ### Production on Windows (host nmap)
 
@@ -199,13 +209,24 @@ backend\.venv\Scripts\python.exe -m playwright install chromium
 | Start (background) | `.\scripts\run.ps1 -Mode production -Background` |
 | Skip frontend rebuild | add `-SkipBuild` |
 | Force restart | add `-ForceRestart` |
-| Stop app | `.\scripts\run.ps1 -Stop` or `npm run stop` |
+| Stop app (graceful, then forced) | `.\scripts\run.ps1 -Stop` or `npm run stop` |
 | Stop app + Postgres | `.\scripts\run.ps1 -Stop -StopDb` |
 | Dev via same script | `.\scripts\run.ps1 -Mode dev` or `npm run start:dev` |
 
 Production start loads `.env.production`, starts Compose `db` only, builds the
 frontend, migrates, and serves on `APP_PORT` (default **8081**). Background mode
 logs to `data/logs/production.log`.
+
+`-Stop` (and `-ForceRestart`) first asks the app to shut down gracefully by creating
+`data/network-finder.stop`; the app stops its scheduler, scan worker and web-capture
+worker and exits. If it has not exited within 45 seconds (hung, or a build older than
+this feature), the script falls back to `Stop-Process -Force`. A hard kill is safe for
+data: an interrupted scan or capture is marked failed on the next start, its partial
+results are discarded, and queued jobs run as normal (see
+[Availability and capacity](#availability-and-capacity)).
+
+Set `LOG_FORMAT=json` for newline-delimited JSON application logs suitable for a
+log collector; the default is human-readable `text`.
 
 Open `http://localhost:8081` and complete the first-run wizard (admin → networks →
 exclusions → schedule → SMTP → optional LDAP → recipients → baseline scan).
@@ -226,6 +247,16 @@ Upgrade: `git pull`, `npm run setup`, reinstall Chromium, then
 Set **Start in** to `<repo-root>`. Prefer **Do not start a new instance** if already
 running.
 
+This Task Scheduler setup is a convenience launcher, not a Windows service. It
+does not start until that user logs on; a password/account change can invalidate
+the task; Docker Desktop, Npcap, and Chromium must be available to the same user;
+and sleep, logout, Windows Update, or a closed interactive session can interrupt
+the app. A successful task launch also does not prove that Postgres or the API is
+healthy, so monitor the health endpoint and `data/logs/production.log` separately.
+For unattended 24×7 operation, prefer the Linux Docker Compose deployment on an
+always-on host. If Windows is required, verify the task, Docker Desktop, and API
+after every reboot.
+
 ### Production (Linux Docker Compose)
 
 Linux Docker host with host networking (not Docker Desktop on Windows/macOS).
@@ -244,7 +275,13 @@ docker compose logs -f app
 
 Compose provides PostgreSQL 16 (`pgdata`) and the app image (frontend + FastAPI +
 nmap + Playwright Chromium + ffmpeg) with host networking and `NET_RAW` /
-`NET_ADMIN`. One app process only (queue + scheduler live inside it).
+`NET_ADMIN`. One app process only (queue + scheduler live inside it); see
+[Availability and capacity](#availability-and-capacity).
+
+`APP_SECRET_KEY` is required in production: the app refuses to start while it is
+empty or still the example placeholder. Installs that previously ran without it
+used a key generated into the app data volume (`/data/.secret_key`); copy that
+file's contents into `APP_SECRET_KEY` so stored SMTP/LDAP passwords stay readable.
 
 Upgrade: `git pull && docker compose up -d --build`.
 
@@ -255,18 +292,40 @@ Upgrade: `git pull && docker compose up -d --build`.
 under `/run/secrets/<setting_name>` are also read. SMTP/LDAP passwords from the UI
 are encrypted with `APP_SECRET_KEY` and never returned by the API.
 
-**Backup:**
+**Backup.** A recoverable set is Postgres + app data (`appdata` / `data/`: web
+captures and optional `.secret_key`) + the production env (`APP_SECRET_KEY`) +
+the deployed Git revision. Without the matching secret, restored SMTP/LDAP
+passwords cannot be decrypted.
+
+| Target | RPO | RTO |
+|---|---|---|
+| Daily scheduled backup (default) | ≤ 24 hours | ≤ 2 hours (restore drill on a spare host) |
+
+Schedule the script on the production host and copy each set **off-box**:
 
 ```bash
-docker compose exec -T db pg_dump -U netfinder netfinder | gzip > netfinder-$(date +%F).sql.gz
-cp .env /secure/backup/location/
+# Linux Docker Compose (cron example: 02:15 daily)
+chmod +x scripts/backup.sh
+./scripts/backup.sh
+# 15 2 * * * cd /opt/network_finder && ./scripts/backup.sh >> data/logs/backup.log 2>&1
 ```
-
-Windows host production (Postgres-only Compose):
 
 ```powershell
-docker compose --env-file .env.production exec -T db pg_dump -U netfinder netfinder | Out-File -Encoding utf8 netfinder-backup.sql
+# Windows host production (Task Scheduler daily)
+.\scripts\backup.ps1
+# Keeps ./backups/<timestamp>/{postgres.dump,appdata.tar.gz,env.production,…} for KEEP_DAYS (default 14)
 ```
+
+Manual one-shot (Linux) if you prefer not to use the script:
+
+```bash
+docker compose exec -T db pg_dump -U netfinder -d netfinder -Fc > postgres.dump
+docker compose exec -T app tar czf - -C /data . > appdata.tar.gz
+cp .env.production /secure/backup/location/
+```
+
+Restore steps, validation checklist, and quarterly restore drill:
+[operations runbook — Backup set and restore](docs/runbook.md#backup-set-and-restore).
 
 **Migrate inventory from dev to production** (ZIP export; users/settings/web-capture
 screenshots are not included):
@@ -283,6 +342,52 @@ npm run cli -- import-data .\inventory.zip --yes
 Also available under **Settings → Data** (admin). Import **replaces** inventory on
 the target; keep environments on the same schema revision.
 
+### Availability and capacity
+
+**Single process by design.** One app process holds the scan queue, the scheduler,
+and the web-capture worker. High availability (several replicas, failover) is a
+non-goal: two processes would run the same schedule and queue twice. The process is
+therefore a single point of failure, mitigated by:
+
+- **Automatic restart:** `restart: unless-stopped` (Docker); on Windows, rerun the
+  Task Scheduler task or `run.ps1`.
+- **Restart recovery:** on start, scans and web captures that were running are marked
+  failed ("Interrupted by an application restart") and their partial results are
+  discarded, so inventory stays at the last completed scan. Queued jobs are kept and
+  run normally. Covered by `backend/tests/test_ops.py`.
+- **Monitoring:** watch `/api/health` and `/api/metrics` (below) from outside the host.
+
+**Metrics.** `GET /api/metrics` returns Prometheus text format: API requests by method
+and status, request latency, scans finished by type and status, scan duration, scan
+and web-capture queue depth, and devices by status. Counters reset when the process
+restarts. It requires authentication, so scrape it with a read-only API token
+(Settings → API tokens):
+
+```yaml
+scrape_configs:
+  - job_name: network-finder
+    metrics_path: /api/metrics
+    authorization: { credentials: nf_xxxxxxxx }   # API token
+    static_configs: [{ targets: ["netfinder-host:8081"] }]
+```
+
+**Host sizing.** Work runs one scan at a time, with up to `parallelism` concurrent
+nmap processes (Settings → Scan profiles, default 4), plus one web-capture job using
+up to `http_concurrency` HTTP probes and `screenshot_concurrency` headless Chromium
+pages (defaults 3 and 1).
+
+| Workload | CPU | RAM (app) | RAM (Postgres) | Disk |
+|---|---|---|---|---|
+| Up to a few /24s, default settings | 2 cores | 2 GB | 512 MB | 5 GB |
+| /16 inventory, full-port scans, web capture (Compose defaults) | 4 cores | 3 GB | 1 GB | 20 GB |
+| Parallelism 8–16, screenshot concurrency 2 | 8 cores | 6 GB | 2 GB | 40 GB+ |
+
+Disk grows mainly with web-capture screenshots and event history, both bounded by the
+retention period. Linux Compose enforces `APP_MEM_LIMIT` / `APP_CPUS` (defaults `3g` /
+`4`) and `DB_MEM_LIMIT` / `DB_CPUS` (`1g` / `2`); raise them together with parallelism or
+screenshot concurrency. An out-of-memory kill behaves like a crash: the restart policy
+starts the app again and restart recovery applies.
+
 ### Behaviour notes
 
 **Scan profiles** (fixed argument lists):
@@ -297,7 +402,8 @@ Daily schedule (optional discovery then standard), daytime presence scans, and
 correlated absence thresholds are configured under **Settings → Schedule**.
 Large CIDRs are chunked with bounded parallelism; failed/partial scans never
 remove inventory. Device identity prefers unique MAC, then IP/hostname rules.
-History and compressed daily snapshots are retained (default 365 days).
+History and compressed daily snapshots are retained (default 365 days). What is
+stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy.md).
 
 Layout overview:
 
@@ -336,6 +442,9 @@ docker/Dockerfile, docker-compose.yml
 
 ## Troubleshooting
 
+For incident triage, database restore, secret rotation, and failed-migration
+recovery, see the [operations runbook](docs/runbook.md).
+
 | Symptom | Fix |
 |---|---|
 | Scanner unavailable / nmap missing | Install nmap or use `SCANNER_MODE=mock`. Preinstalled in the Docker app image. |
@@ -352,6 +461,7 @@ docker/Dockerfile, docker-compose.yml
 | Browser unavailable at capture time | `backend\.venv\Scripts\python.exe -m playwright install chromium` as the app user, then restart. |
 | ffmpeg unavailable | Install ffmpeg; confirm `ffmpeg -version`, then restart. Preinstalled in Docker. |
 | Scan stuck after restart | In-flight scans are marked failed; start a new one. |
+| App exits at start: `APP_SECRET_KEY must be set` | Production needs an explicit key. Set it in `.env.production` / `.env` (`openssl rand -hex 32`), or copy `data/.secret_key` from an earlier run to keep stored SMTP/LDAP passwords. |
 | Login HTTP 429 | Wait out the login window (`LOGIN_WINDOW_MINUTES`, default 15). |
 | Lost admin password | `npm run cli -- create-user rescue 'New-pass-123' --role admin` (Docker: `docker compose exec app python -m app.cli create-user …`). |
 
@@ -359,9 +469,11 @@ docker/Dockerfile, docker-compose.yml
 
 Pull requests are welcome. For substantial changes, open an issue first to discuss
 the approach. Prefer matching existing patterns; run `npm test` and `npm run lint`
-before submitting.
+before submitting. UI changes should also pass `npm run test:e2e` (builds the frontend,
+then signs in and opens the dashboard and devices list in headless Chromium; needs
+`python -m playwright install chromium` once).
 
 ## License
 
-No `LICENSE` file is present in this repository. Treat the project as proprietary
-unless the owner publishes license terms.
+See [LICENSE](LICENSE). Network Finder is proprietary software intended only for
+authorized internal use; no open-source license is granted.

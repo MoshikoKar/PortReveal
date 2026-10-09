@@ -173,7 +173,11 @@ def build_fixed_port_args(privileged: bool, profile: PortProfile, ports: tuple[i
 
 
 def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
-    """Union open ports from a follow-up scan into the primary host observation."""
+    """Union open ports from a follow-up scan into the primary host observation.
+
+    Follow-ups are additive. Do not clear ``port_scan_failed`` on the primary host —
+    a timed-out full ``1-65535`` pass is still incomplete coverage even after extras.
+    """
     if extra.ports is None:
         if extra.port_scan_failed and base.ports is None:
             base.port_scan_failed = True
@@ -184,7 +188,6 @@ def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     for p in extra.ports:
         by_key[(p.protocol, p.port)] = p
     base.ports = sorted(by_key.values(), key=lambda p: (p.protocol, p.port))
-    base.port_scan_failed = False
     base.mac = base.mac or extra.mac
     base.vendor = base.vendor or extra.vendor
     base.hostname = base.hostname or extra.hostname
@@ -245,8 +248,9 @@ class NmapScanner:
             port_scope = merge_port_scope(port_scope or extra.port_scope, STANDARD_EXTRA_TCP_PORTS)
 
         # TrueNAS Apps catalog ports (3XXXX) only on hosts identified as TrueNAS / FreeNAS.
-        # Kept out of the scan-wide port_scope so other hosts are not treated as covered.
-        if not profile.full and TRUENAS_APPS_TCP_PORTS:
+        # Also run after full scans: --host-timeout often aborts 1-65535+-sV before high
+        # catalog ports are reached. Kept out of scan-wide port_scope.
+        if TRUENAS_APPS_TCP_PORTS:
             known = ctx.known_truenas_ips or set()
             truenas_ips = [
                 ip for ip in ips

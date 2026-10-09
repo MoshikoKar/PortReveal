@@ -4,10 +4,11 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import __version__
+from .. import __version__, metrics
 from ..auth.deps import current_user
 from ..config import get_settings
 from ..core.manager import manager
@@ -27,6 +28,12 @@ STARTED = time.time()
 def health():
     ok, _ = check_db()
     return {"status": "ok" if ok else "degraded", "database": "ok" if ok else "error", "version": __version__}
+
+
+@router.get("/metrics", response_class=PlainTextResponse)
+def prometheus_metrics(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Prometheus text format. Scrape with a read-only API token (Authorization: Bearer ...)."""
+    return PlainTextResponse(metrics.render(db), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 def _scan(db: Session, *conds) -> Scan | None:

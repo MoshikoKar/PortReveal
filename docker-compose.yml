@@ -11,6 +11,10 @@
 # or set HTTP_PROXY / HTTPS_PROXY in .env.production if builds go through a proxy.
 #
 # APP_PORT and POSTGRES_PORT come from the env file (e.g. 8081 / 5434).
+#
+# Resource limits: defaults fit the default scan settings (parallelism 4, one screenshot
+# browser). Raise APP_MEM_LIMIT / APP_CPUS with Settings -> Scan profiles parallelism or Web
+# capture screenshot concurrency; see "Availability and capacity" in README.md.
 
 services:
   db:
@@ -27,6 +31,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production (or .env)}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"   # host mapping; container always listens on 5432
+    mem_limit: ${DB_MEM_LIMIT:-1g}
+    cpus: ${DB_CPUS:-2}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -52,6 +58,10 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
+    # nmap workers + headless Chromium (screenshots) + ffmpeg (RTSP stills) + the API itself.
+    mem_limit: ${APP_MEM_LIMIT:-3g}
+    cpus: ${APP_CPUS:-4}
+    shm_size: 256m  # Chromium renders into /dev/shm; Docker's 64 MB default can crash large pages
     env_file:
       - path: .env.production
         required: false
@@ -65,12 +75,13 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-netfinder}
       POSTGRES_USER: ${POSTGRES_USER:-netfinder}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production (or .env)}
-      APP_SECRET_KEY: ${APP_SECRET_KEY:-}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?Set APP_SECRET_KEY in .env.production (or .env); openssl rand -hex 32}
       SCANNER_MODE: ${SCANNER_MODE:-nmap}
       NMAP_PRIVILEGED: "true"
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-text}
       SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-480}
       SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-24}
       TZ: ${TZ:-UTC}

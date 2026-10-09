@@ -3,7 +3,7 @@ import { post } from '../api';
 import { useApp } from '../context';
 import type { Network, Scan, ScanType } from '../types';
 import { useApi } from '../util';
-import { ErrorBox, Modal } from './ui';
+import { confirmDiscard, ErrorBox, Modal } from './ui';
 
 export interface ScanPreset {
   scan_type?: ScanType;
@@ -52,15 +52,23 @@ export function ScanDialog({ preset, onClose, onStarted }: {
   };
 
   const ready = mode === 'devices' ? !!preset?.device_uuids?.length : mode === 'networks' ? selected.length > 0 : targets.trim().length > 0;
+  const dirty = selected.length > 0 || targets !== '';
+  const startHint = !ready
+    ? mode === 'networks' ? 'Select at least one network' : mode === 'targets' ? 'Enter targets' : 'Select at least one device'
+    : unavailable ? system?.scanner.message ?? 'Scanner unavailable'
+    : busy ? 'Starting scan…'
+    : undefined;
+  const requestClose = () => confirmDiscard(dirty) && onClose();
 
   return (
     <Modal
       title="Scan now"
       onClose={onClose}
+      dirty={dirty}
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className={`btn ${type === 'full' ? 'warn' : 'primary'}`} disabled={!ready || busy || unavailable} onClick={submit}>
+          <button className="btn ghost" onClick={requestClose}>Cancel</button>
+          <button className={`btn ${type === 'full' ? 'warn' : 'primary'}`} disabled={!ready || busy || unavailable} onClick={submit} title={startHint}>
             {busy ? 'Starting…' : type === 'full' ? 'Start full port scan' : 'Start scan'}
           </button>
         </>

@@ -16,6 +16,8 @@ LOGIN_PATHS = (
     "/user/login",
     "/users/sign_in",
     "/session/new",
+    "/admin/login",
+    "/admin",
 )
 REGISTER_PATHS = (
     "/register",
@@ -28,7 +30,8 @@ REGISTER_PATHS = (
 # Tried only when "/" has no application (error or default server page): where apps usually live.
 # Ordered most-common first; the discovery cap keeps only the first N. Users can override via a wordlist file.
 APP_PATHS = (
-    "/home/", "/app/", "/apps/", "/portal/", "/web/", "/ui/", "/dashboard/", "/admin/",
+    "/home/", "/app/", "/apps/", "/portal/", "/web/", "/ui/", "/dashboard/",
+    "/admin/", "/admin", "/admin/login",
     "/console/", "/manage/", "/management/", "/login", "/index.html", "/index.htm",
     "/default.aspx", "/default.asp", "/home.aspx", "/main.aspx", "/portal.aspx",
     "/owa/", "/ecp/", "/RDWeb/", "/certsrv/", "/Reports/", "/ReportServer/", "/aspnet_client/",

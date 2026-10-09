@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { del, post, put } from '../api';
 import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../components/ui';
 import type { SavedSearch } from '../types';
-import { fmtTime, relTime, useApi } from '../util';
+import { fmtTime, relTime, useApi, useInFlight } from '../util';
 
 type Draft = { id?: number; name: string; query: string; description: string; kind: 'watch' | 'policy'; alert: boolean };
 
@@ -16,6 +16,7 @@ export default function Watches() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
 
   const open = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
@@ -38,15 +39,18 @@ export default function Watches() {
   };
 
   const remove = async (s: SavedSearch) => {
+    if (pending(`watch-${s.id}`)) return;
     if (!confirm(`Delete the saved search "${s.name}"?`)) return;
     setActionError(null);
-    try {
-      await del(`/saved-searches/${s.id}`);
-    } catch (e: any) {
-      setActionError(`Could not delete "${s.name}": ${e.message}`);
-      return;
-    }
-    reload();
+    await track(`watch-${s.id}`, async () => {
+      try {
+        await del(`/saved-searches/${s.id}`);
+      } catch (e: any) {
+        setActionError(`Could not delete "${s.name}": ${e.message}`);
+        return;
+      }
+      reload();
+    });
   };
 
   return (
@@ -85,7 +89,9 @@ export default function Watches() {
                       {s.can_edit && (
                         <>
                           <button className="btn ghost sm" onClick={() => open({ id: s.id, name: s.name, query: s.query, description: s.description ?? '', kind: s.kind, alert: s.alert })}>Edit</button>
-                          <button className="btn danger sm" onClick={() => remove(s)}>Delete</button>
+                          <button className="btn danger sm" disabled={pending(`watch-${s.id}`)} onClick={() => remove(s)}>
+                            {pending(`watch-${s.id}`) ? 'Deleting…' : 'Delete'}
+                          </button>
                         </>
                       )}
                     </td>

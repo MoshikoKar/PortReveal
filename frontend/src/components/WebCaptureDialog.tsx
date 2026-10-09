@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { post } from '../api';
-import { ErrorBox, Modal } from './ui';
+import { confirmDiscard, ErrorBox, Modal } from './ui';
 
 export interface WebCapturePreset {
   device_uuids?: string[];
@@ -40,15 +40,22 @@ export function WebCaptureDialog({ preset, onClose, onStarted }: {
   };
 
   const ready = mode === 'devices' ? !!preset?.device_uuids?.length : targets.trim().length > 0;
+  const dirty = targets !== (preset?.targets ?? '');
+  const startHint = !ready
+    ? mode === 'targets' ? 'Enter targets' : 'Select at least one device'
+    : busy ? 'Starting web capture…'
+    : undefined;
+  const requestClose = () => confirmDiscard(dirty) && onClose();
 
   return (
     <Modal
       title="Web Capture"
       onClose={onClose}
+      dirty={dirty}
       footer={
         <>
-          <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={!ready || busy} onClick={submit}>
+          <button className="btn ghost" onClick={requestClose}>Cancel</button>
+          <button className="btn primary" disabled={!ready || busy} onClick={submit} title={startHint}>
             {busy ? 'Starting…' : 'Capture web interfaces'}
           </button>
         </>

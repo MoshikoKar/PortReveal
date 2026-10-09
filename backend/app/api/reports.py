@@ -21,7 +21,7 @@ TOP_HOSTS = 20
 SCORE_BUCKET = 10
 MAX_BUCKET = 100 // SCORE_BUCKET - 1  # the last bucket is 90-100
 MAX_ROWS = 200
-SUBNET_SCAN_LIMIT = 200_000
+IPV4_SPACE = 2 ** 32
 
 
 def _host(d: Device, networks: dict[int, str]) -> dict:
@@ -108,29 +108,33 @@ def version_skew(db: Session = Depends(get_db), user: User = Depends(current_use
 
 @router.get("/subnets")
 def subnets(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    """Each IPv4 /24 with its host count, active count and max / average exposure score."""
-    acc: dict[str, dict] = {}
-    for ip, status, score in db.execute(
-        select(Device.current_ip, Device.status, Device.exposure_score).where(device_visible(db))
-        .limit(SUBNET_SCAN_LIMIT)
-    ):
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            continue
-        if addr.version != 4:
-            continue
-        net = str(ipaddress.ip_network(f"{ip}/24", strict=False))
-        a = acc.setdefault(net, {"subnet": net, "hosts": 0, "active": 0, "max_score": 0, "_sum": 0})
-        a["hosts"] += 1
-        a["active"] += status == DEVICE_ACTIVE
-        a["max_score"] = max(a["max_score"], score or 0)
-        a["_sum"] += score or 0
+    """Each IPv4 /24 with its host count, active count and max / average exposure score.
+
+    Aggregated in SQL (GROUP BY the address's /24 number), so the response costs one row per
+    subnet however many devices there are.
+    """
+    ip_key = ipv4_int_expr(db.get_bind().dialect.name, Device.current_ip)
+    block = (ip_key // 256).label("block")
+    score = func.coalesce(Device.exposure_score, 0)
+    rows = db.execute(
+        select(
+            block,
+            func.count().label("hosts"),
+            func.sum(case((Device.status == DEVICE_ACTIVE, 1), else_=0)).label("active"),
+            func.max(score).label("max_score"),
+            func.sum(score).label("score_sum"),
+        )
+        .where(device_visible(db), Device.current_ip.like("%.%.%.%"), Device.current_ip.not_like("%:%"))
+        .group_by(block)
+        .order_by(block)
+    ).all()
     items = []
-    for a in acc.values():
-        total = a.pop("_sum")
-        a["avg_score"] = round(total / a["hosts"], 1)
-        a["query"] = f"net:{a['subnet']}"
-        items.append(a)
-    items.sort(key=lambda x: int(ipaddress.ip_network(x["subnet"]).network_address))
+    for blk, hosts, active, max_score, score_sum in rows:
+        if blk is None or not 0 < int(blk) * 256 < IPV4_SPACE:  # 0 = not an IPv4 address
+            continue
+        net = str(ipaddress.IPv4Network((int(blk) * 256, 24)))
+        items.append({
+            "subnet": net, "hosts": int(hosts), "active": int(active or 0), "max_score": int(max_score or 0),
+            "avg_score": round(int(score_sum or 0) / hosts, 1), "query": f"net:{net}",
+        })
     return {"items": items}

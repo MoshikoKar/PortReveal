@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event as sa_event
 
 from app.api.auth import limiter
+from app.api.devices import get_device
 from app.main import app
 
 from .helpers import ScriptedScanner, host, make_network, port, scan
@@ -84,6 +86,27 @@ def test_device_detail_tags_and_profile(admin):
     viewer = _viewer(admin)
     assert viewer.post(f"/api/devices/{uuid}/tags", json={"tag": "x"},
                        headers={"X-CSRF-Token": viewer.cookies.get("nf_csrf", "")}).status_code == 403
+
+
+def test_device_detail_eager_loads_related_data_in_three_queries(admin, db):
+    uuid = _uuid(admin, "10.0.0.1")
+    db.expunge_all()
+    selects: list[str] = []
+
+    def record_select(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    bind = db.get_bind()
+    sa_event.listen(bind, "before_cursor_execute", record_select)
+    try:
+        detail = get_device(uuid, db=db, user=None)
+    finally:
+        sa_event.remove(bind, "before_cursor_execute", record_select)
+
+    assert len(selects) == 3
+    assert detail["tags"] and detail["profile"]["exposure_factors"]
+    assert all("http" in port_data for port_data in detail["ports"])
 
 
 def test_saved_searches_crud_and_ownership(admin):

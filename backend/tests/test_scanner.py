@@ -32,6 +32,24 @@ def test_parse_standard_scan_xml():
     assert timed_out.port_scan_failed and timed_out.ports is None
 
 
+def test_parse_timed_out_host_keeps_partial_ports():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><scaninfo protocol="tcp" services="1-65535"/>
+    <host timedout="true"><status state="up"/>
+    <address addr="10.0.0.5" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="22"><state state="open"/>
+        <service name="ssh" method="probed" conf="10"/></port>
+      <port protocol="tcp" portid="80"><state state="open"/>
+        <service name="http" method="probed" conf="10"/></port>
+    </ports>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    h = run.hosts[0]
+    assert h.port_scan_failed and [p.port for p in h.ports] == [22, 80]
+
+
 def test_parse_rejects_garbage_and_incomplete_output():
     with pytest.raises(ScanStageError):
         parse_nmap_xml("")

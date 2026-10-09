@@ -70,7 +70,7 @@ class ScriptedScanner:
             if h.ports is not None:
                 limit = 65535 if profile.full else 10000
                 extras = set(h.extra_tcp_ports or ())
-                if not profile.full and (
+                if (
                     ip in known_truenas
                     or looks_like_truenas(
                         hostname=h.hostname, os_name=h.os_name, vendor=h.vendor, ports=h.ports,

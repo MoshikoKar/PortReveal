@@ -1,5 +1,5 @@
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Card, ErrorBox, Loading } from '../components/ui';
+import { Card, Empty, ErrorBox, Loading, SortTh } from '../components/ui';
 import type { ExposedPort, Network } from '../types';
 import { useApi } from '../util';
 
@@ -45,7 +45,6 @@ export default function Ports() {
     const desc = sort.key === key ? !sort.desc : defaultDesc(key);
     set({ sort: key === 'count' ? undefined : key, dir: desc === defaultDesc(key) ? undefined : desc ? 'desc' : 'asc' });
   };
-  const arrow = (key: SortKey) => (sort.key === key ? (sort.desc ? ' ↓' : ' ↑') : '');
   const networkName = networks.data?.find((n) => String(n.id) === networkId)?.name;
   const portLink = (p: ExposedPort) =>
     `/ports/${p.protocol}/${p.port}${networkName ? `?network=${encodeURIComponent(networkName)}` : ''}`;
@@ -73,14 +72,15 @@ export default function Ports() {
       )}
       {!data ? <Loading /> : (
         <Card flush title={`${rows.length} port${rows.length === 1 ? '' : 's'} · ${totalHosts} open-port instances`}>
-          {rows.length === 0 ? <div className="empty">No open ports match.</div> : (
+          {rows.length === 0 ? <Empty>No open ports match.</Empty> : (
+            <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th style={{ cursor: 'pointer' }} onClick={() => sortBy('port')}>Port{arrow('port')}</th>
-                  <th style={{ cursor: 'pointer' }} onClick={() => sortBy('service')}>Service{arrow('service')}</th>
+                  <SortTh active={sort.key === 'port'} desc={sort.desc} onSort={() => sortBy('port')}>Port</SortTh>
+                  <SortTh active={sort.key === 'service'} desc={sort.desc} onSort={() => sortBy('service')}>Service</SortTh>
                   <th>Also reported as</th>
-                  <th className="right" style={{ cursor: 'pointer' }} onClick={() => sortBy('count')}>Hosts{arrow('count')}</th>
+                  <SortTh className="right" active={sort.key === 'count'} desc={sort.desc} onSort={() => sortBy('count')}>Hosts</SortTh>
                 </tr>
               </thead>
               <tbody>
@@ -96,6 +96,7 @@ export default function Ports() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </Card>
       )}

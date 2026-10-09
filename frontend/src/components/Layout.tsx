@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useApp } from '../context';
 import type { SystemStatus } from '../types';
 import { SCAN_TYPE_LABELS } from '../util';
@@ -96,41 +96,62 @@ export function Layout({ children }: { children: ReactNode }) {
   // Narrow viewports (<900px) collapse the sidebar into a top bar; the toggle opens the nav.
   const [navOpen, setNavOpen] = useState(false);
   const { pathname } = useLocation();
-  const activeNav = NAV.find((n) => (n.end ? pathname === n.to : pathname === n.to || pathname.startsWith(`${n.to}/`)));
+  // A device's web preview (/devices/:uuid/web) belongs to the Web section, not Devices.
+  const navPath = /^\/devices\/[^/]+\/web$/.test(pathname) ? '/web' : pathname;
+  const activeNav = NAV.find((n) => (n.end ? navPath === n.to : navPath === n.to || navPath.startsWith(`${n.to}/`)));
   useEffect(() => setNavOpen(false), [pathname]);
   useEffect(() => {
     if (!navOpen) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setNavOpen(false);
+    // The open nav overlays the page: lock its scroll, and close if the viewport widens past the breakpoint.
+    const narrow = window.matchMedia('(max-width: 900px)');
+    const onWiden = () => !narrow.matches && setNavOpen(false);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    narrow.addEventListener('change', onWiden);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      document.removeEventListener('keydown', onKey);
+      narrow.removeEventListener('change', onWiden);
+    };
   }, [navOpen]);
   return (
     <div className="app">
       <aside className={`sidebar ${navOpen ? 'open' : ''}`}>
         <div className="brand">
-          <Logo />
-          <div>
-            <div className="brand-name">NETWORK FINDER</div>
-            <div className="brand-sub">Discovery · Change detection</div>
-          </div>
+          <Link className="brand-home" to="/">
+            <Logo />
+            <div>
+              <div className="brand-name">NETWORK FINDER</div>
+              <div className="brand-sub">Discovery · Change detection</div>
+            </div>
+          </Link>
           {activeNav && <span className="nav-current"><Icon d={ICONS[activeNav.icon]} />{activeNav.label}</span>}
           <button className="btn ghost icon nav-toggle" onClick={() => setNavOpen((o) => !o)}
             aria-expanded={navOpen} aria-controls="main-nav" aria-label={navOpen ? 'Close menu' : 'Open menu'} title={navOpen ? 'Close menu' : 'Open menu'}>
             <Icon d={navOpen ? ICONS.close : ICONS.menu} />
           </button>
         </div>
-        <nav className="nav" id="main-nav">
-          {NAV.map((n) => <NavLink key={n.to} to={n.to} end={n.end}><Icon d={ICONS[n.icon]} />{n.label}</NavLink>)}
-        </nav>
-        <div className="sidebar-foot">
-          <div>
-            <div style={{ color: 'var(--text-2)' }}>{user.display_name || user.username}</div>
-            <div>{user.role === 'admin' ? 'Administrator' : 'Viewer (read-only)'} · {user.source}</div>
+        <div className="sidebar-drawer">
+          <nav className="nav" id="main-nav">
+            {NAV.map((n) => (
+              <Link key={n.to} to={n.to} className={n === activeNav ? 'active' : undefined} aria-current={n === activeNav ? 'page' : undefined}>
+                <Icon d={ICONS[n.icon]} />{n.label}
+              </Link>
+            ))}
+          </nav>
+          <div className="sidebar-foot">
+            <div>
+              <div style={{ color: 'var(--text-2)' }}>{user.display_name || user.username}</div>
+              <div>{user.role === 'admin' ? 'Administrator' : 'Viewer (read-only)'} · {user.source}</div>
+            </div>
+            <button className="btn sm" onClick={logout}>Sign out</button>
+            <div>v{system?.app.version}</div>
           </div>
-          <button className="btn sm" onClick={logout}>Sign out</button>
-          <div>v{system?.app.version}</div>
         </div>
       </aside>
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden />}
       <div className="main">
         {scanner?.mock_active && (
           <div className="banner">

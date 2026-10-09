@@ -100,8 +100,9 @@ export function ScheduleForm({ onSaved, onDirtyChange }: { onSaved?: () => void;
 }
 
 // ---------------------------------------------------------------- presence
-export function PresenceForm() {
+export function PresenceForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const f = useForm<PresenceSettings>('/settings/presence');
+  useReportDirty(f.dirty, onDirtyChange);
   if (!f.form) return <Card title="Daytime presence"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   return (
@@ -139,8 +140,9 @@ export function PresenceForm() {
 }
 
 // ---------------------------------------------------------------- scan profile
-export function ScanProfileForm() {
+export function ScanProfileForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const f = useForm<ScanSettings>('/settings/scan');
+  useReportDirty(f.dirty, onDirtyChange);
   if (!f.form) return <Card title="Scan profiles"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   const set = (patch: Partial<ScanSettings>) => f.setForm({ ...s, ...patch });
@@ -183,8 +185,9 @@ export function ScanProfileForm() {
 }
 
 // ---------------------------------------------------------------- web capture
-export function WebCaptureForm() {
+export function WebCaptureForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const f = useForm<WebCaptureSettings>('/settings/web-capture');
+  useReportDirty(f.dirty, onDirtyChange);
   if (!f.form) return <Card title="Web capture"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   const set = (patch: Partial<WebCaptureSettings>) => f.setForm({ ...s, ...patch });
@@ -347,6 +350,7 @@ export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onD
   const [testUser, setTestUser] = useState('');
   const [testPass, setTestPass] = useState('');
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testing, setTesting] = useState(false);
   if (!f.form) return <Card title="LDAP / Active Directory"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   const set = (patch: Partial<LdapSettings>) => f.setForm({ ...s, ...patch });
@@ -356,12 +360,16 @@ export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onD
     return { ...rest, ...(password !== null ? { bind_password: password } : {}) };
   };
   const test = async () => {
+    if (testing) return;
     setTestMsg(null);
+    setTesting(true);
     try {
       const r = await post<{ ok: boolean; message: string }>('/settings/ldap/test', { ...body(), test_username: testUser || null, test_password: testPass || null });
       setTestMsg({ ok: r.ok, text: r.message });
     } catch (e: any) {
       setTestMsg({ ok: false, text: e.message });
+    } finally {
+      setTesting(false);
     }
   };
   return (
@@ -386,7 +394,7 @@ export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onD
         <div className="row wrap">
           <input type="text" placeholder="test username (optional)" value={testUser} onChange={(e) => setTestUser(e.target.value)} />
           <input type="password" placeholder="test password" value={testPass} onChange={(e) => setTestPass(e.target.value)} autoComplete="new-password" />
-          <button className="btn" onClick={test} disabled={!s.server_uri}>Test connection</button>
+          <button className="btn" onClick={test} disabled={!s.server_uri || testing}>{testing ? 'Testing…' : 'Test connection'}</button>
         </div>
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <Msg msg={f.msg} />
@@ -397,8 +405,9 @@ export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onD
 }
 
 // ---------------------------------------------------------------- retention
-export function RetentionForm() {
+export function RetentionForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const f = useForm<{ days: number }>('/settings/retention');
+  useReportDirty(f.dirty, onDirtyChange);
   const [runMsg, setRunMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [running, setRunning] = useState(false);
   if (!f.form) return <Card title="Retention"><ErrorBox error={f.error} /><Loading /></Card>;

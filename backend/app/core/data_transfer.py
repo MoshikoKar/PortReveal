@@ -8,7 +8,8 @@ do not block the wipe.
 Both directions stream: export pages each table by id and writes JSONL straight into the
 ZIP entry; import validates the package in one streaming pass (nothing kept in memory),
 then wipes and re-inserts in fixed-size Core batches. The wipe + insert stays a single
-transaction on purpose, so a failed import never leaves a half-replaced inventory.
+transaction on purpose, so a failed import never leaves a half-replaced inventory; screenshot
+files of the wiped web captures are removed only after that transaction commits.
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from .. import __version__
 from ..config import get_settings
 from ..db import UTCDateTime
 from ..models import (
+    CLOSED_VALUES,
     SCAN_ACTIVE_STATES,
     WEB_CAPTURE_ACTIVE_STATES,
     Device,
@@ -269,14 +271,23 @@ def _check_limits(zf: zipfile.ZipFile, manifest: dict) -> None:
 
 
 def _validate_tables(zf: zipfile.ZipFile) -> None:
-    """Parse every table once without keeping rows, so bad JSON is caught before the wipe."""
+    """Parse every table once without keeping rows, so bad JSON or out-of-set values (status,
+    type, zone, ...) are caught before the wipe instead of failing a CHECK constraint mid-insert."""
     max_rows = get_settings().import_max_rows
     total = 0
     for name, _model in INVENTORY_TABLES:
-        for _row in _iter_table_rows(zf, name):
+        closed = {col: set(values) for (table, col), values in CLOSED_VALUES.items() if table == name}
+        for row in _iter_table_rows(zf, name):
             total += 1
             if total > max_rows:  # the manifest's counts are a claim; enforce the real ones too
                 raise DataTransferError(f"package too large: more than {max_rows} rows (IMPORT_MAX_ROWS)")
+            for col, allowed in closed.items():
+                value = row.get(col)
+                if value is not None and value not in allowed:
+                    raise DataTransferError(
+                        f"invalid value {value!r} for {name}.{col} (row id {row.get('id')!r}); "
+                        f"expected one of: {', '.join(sorted(allowed))}"
+                    )
 
 
 def _insert_batch(db: Session, model, batch: list[dict]) -> None:
@@ -301,8 +312,10 @@ def _assert_idle(db: Session) -> None:
         raise DataTransferError(f"cannot import while {active_caps} web-capture job(s) are queued or running")
 
 
-def _wipe_inventory(db: Session) -> dict[str, int]:
-    """Delete inventory (and web-capture rows that reference devices/ports)."""
+def _wipe_inventory(db: Session) -> tuple[dict[str, int], list[str]]:
+    """Delete inventory (and web-capture rows that reference devices/ports); not committed.
+    Returns the counts and the uuids of the deleted web captures, whose files the caller removes
+    once the deletes are committed (no filesystem I/O inside the transaction)."""
     deleted: dict[str, int] = {}
     capture_uuids = list(db.scalars(select(WebCapture.uuid)).all())
     for label, stmt in (
@@ -327,10 +340,15 @@ def _wipe_inventory(db: Session) -> dict[str, int]:
     # watches re-baseline against the imported inventory instead of alerting on every device
     db.execute(update(SavedSearch).values(initialized=False, last_count=0))
     db.flush()
+    return deleted, capture_uuids
+
+
+def _cleanup_capture_files(db: Session, capture_uuids: list[str]) -> None:
+    """Filesystem half of the wipe; call after the import is committed. Directories of captures
+    created since then are kept."""
     for uuid in capture_uuids:
         delete_capture_files(uuid)
-    cleanup_capture_dirs(set())
-    return deleted
+    cleanup_capture_dirs(set(db.scalars(select(WebCapture.uuid)).all()))
 
 
 def _reset_sequences(db: Session, table_names: Iterable[str]) -> None:
@@ -349,7 +367,7 @@ def _reset_sequences(db: Session, table_names: Iterable[str]) -> None:
 
 
 def import_inventory(db: Session, src: Path | BinaryIO, *, confirm: bool) -> dict:
-    """Replace local inventory with the package. Requires confirm=True."""
+    """Replace local inventory with the package and commit. Requires confirm=True."""
     if not confirm:
         raise DataTransferError("import refuses to run without confirm=True / --yes")
 
@@ -370,7 +388,7 @@ def import_inventory(db: Session, src: Path | BinaryIO, *, confirm: bool) -> dic
         _check_limits(zf, manifest)
         _validate_tables(zf)
 
-        wiped = _wipe_inventory(db)
+        wiped, capture_uuids = _wipe_inventory(db)
         # Drop identity-map entries so re-inserting the same primary keys is safe.
         db.expunge_all()
         imported: dict[str, int] = {}
@@ -388,8 +406,9 @@ def import_inventory(db: Session, src: Path | BinaryIO, *, confirm: bool) -> dic
                 n += len(batch)
             imported[name] = n
         _reset_sequences(db, [name for name, _ in INVENTORY_TABLES])
-        db.flush()
+        db.commit()
 
+    _cleanup_capture_files(db, capture_uuids)
     result = {
         "schema_revision": local_revision,
         "wiped": wiped,

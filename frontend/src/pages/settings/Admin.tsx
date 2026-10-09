@@ -1,10 +1,10 @@
 // Users, audit log and system health.
 import { useState } from 'react';
 import { del, patch, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal, Pager, ScanStatusBadge, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Loading, Modal, Pager, ScanStatusBadge, SkeletonRows, confirmDiscard } from '../../components/ui';
 import { useApp } from '../../context';
 import type { AuditEntry, Paged, User } from '../../types';
-import { fmtTime, relTime, useApi } from '../../util';
+import { fmtTime, relTime, useApi, useInFlight } from '../../util';
 
 export function UsersSettings() {
   const { user: me } = useApp();
@@ -12,8 +12,12 @@ export function UsersSettings() {
   const [draft, setDraft] = useState<{ username: string; password: string; role: 'admin' | 'viewer' } | null>(null);
   const [pw, setPw] = useState<{ user: User; password: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Row actions are keyed per user; the Create/Set password dialogs share the `dialog` key.
+  const { pending, track } = useInFlight();
+  const saving = pending('dialog');
 
   const draftDirty = !!draft && (draft.username !== '' || draft.password !== '' || draft.role !== 'viewer');
+  const canCreate = !!draft && !!draft.username.trim() && !!draft.password;
   const closeDraft = () => confirmDiscard(draftDirty) && setDraft(null);
   const closePw = () => confirmDiscard(!!pw?.password) && setPw(null);
 
@@ -21,14 +25,20 @@ export function UsersSettings() {
     const msg = role === 'viewer'
       ? `Change ${u.username} from Administrator to Viewer? They lose access to configuration and scans.`
       : `Make ${u.username} an Administrator? They gain full access to configuration, users and scans.`;
-    if (confirm(msg)) act(() => patch(`/users/${u.id}`, { role }));
+    if (confirm(msg)) track(`user-${u.id}`, () => act(() => patch(`/users/${u.id}`, { role })));
   };
   const toggleActive = (u: User) => {
     const msg = u.is_active
       ? `Disable ${u.username}? They are signed out and can no longer log in.`
       : `Enable ${u.username}? They can log in again.`;
-    if (confirm(msg)) act(() => patch(`/users/${u.id}`, { is_active: !u.is_active }));
+    if (confirm(msg)) track(`user-${u.id}`, () => act(() => patch(`/users/${u.id}`, { is_active: !u.is_active })));
   };
+  const remove = (u: User) => {
+    if (confirm(`Delete user ${u.username}?`)) track(`user-${u.id}`, () => act(() => del(`/users/${u.id}`)));
+  };
+  /** Dialog submit: busy while in flight, closes only on success. */
+  const submit = (fn: () => Promise<unknown>, close: () => void) =>
+    track('dialog', async () => { if (await act(fn)) close(); });
 
   const act = async (fn: () => Promise<unknown>) => {
     setErr(null);
@@ -49,7 +59,7 @@ export function UsersSettings() {
         first login; their role follows directory group membership. At least one active local administrator always remains.
       </div>
       <ErrorBox error={error || err} />
-      {loading && !data ? <Loading /> : (
+      {loading && !data ? <SkeletonRows cols={6} /> : (
         <div className="table-wrap">
           <table>
             <thead><tr><th>User</th><th>Source</th><th>Role</th><th>Status</th><th>Last login</th><th /></tr></thead>
@@ -59,7 +69,7 @@ export function UsersSettings() {
                   <td><strong>{u.username}</strong>{u.display_name && <div className="muted small">{u.display_name}</div>}</td>
                   <td>{u.source}</td>
                   <td>
-                    <select value={u.role} disabled={u.id === me.id} onChange={(e) => changeRole(u, e.target.value as 'admin' | 'viewer')}>
+                    <select value={u.role} disabled={u.id === me.id || pending(`user-${u.id}`)} onChange={(e) => changeRole(u, e.target.value as 'admin' | 'viewer')}>
                       <option value="admin">Administrator</option><option value="viewer">Viewer</option>
                     </select>
                   </td>
@@ -69,8 +79,8 @@ export function UsersSettings() {
                     {u.source === 'local' && <button className="btn ghost sm" onClick={() => setPw({ user: u, password: '' })}>Set password</button>}
                     {u.id !== me.id && (
                       <>
-                        <button className="btn ghost sm" onClick={() => toggleActive(u)}>{u.is_active ? 'Disable' : 'Enable'}</button>
-                        <button className="btn danger sm" onClick={() => confirm(`Delete user ${u.username}?`) && act(() => del(`/users/${u.id}`))}>Delete</button>
+                        <button className={`btn sm ${u.is_active ? 'warn' : 'ghost'}`} disabled={pending(`user-${u.id}`)} onClick={() => toggleActive(u)}>{u.is_active ? 'Disable' : 'Enable'}</button>
+                        <button className="btn danger sm" disabled={pending(`user-${u.id}`)} onClick={() => remove(u)}>Delete</button>
                       </>
                     )}
                   </td>
@@ -83,7 +93,8 @@ export function UsersSettings() {
       {draft && (
         <Modal title="Add local user" onClose={() => setDraft(null)} dirty={draftDirty}
           footer={<><button className="btn ghost" onClick={closeDraft}>Cancel</button>
-            <button className="btn primary" onClick={async () => { if (await act(() => post('/users', draft))) setDraft(null); }}>Create</button></>}>
+            <button className="btn primary" disabled={saving || !canCreate} title={canCreate ? undefined : 'Enter a username and a password'}
+              onClick={() => submit(() => post('/users', draft), () => setDraft(null))}>{saving ? 'Creating…' : 'Create'}</button></>}>
           <label className="field">Username<input type="text" value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} /></label>
           <label className="field">Password<input type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} autoComplete="new-password" /><span className="hint">Minimum 8 characters</span></label>
           <label className="field">Role
@@ -97,7 +108,8 @@ export function UsersSettings() {
       {pw && (
         <Modal title={`Set password for ${pw.user.username}`} onClose={() => setPw(null)} dirty={!!pw.password}
           footer={<><button className="btn ghost" onClick={closePw}>Cancel</button>
-            <button className="btn primary" onClick={async () => { if (await act(() => patch(`/users/${pw.user.id}`, { password: pw.password }))) setPw(null); }}>Save</button></>}>
+            <button className="btn primary" disabled={saving || !pw.password}
+              onClick={() => submit(() => patch(`/users/${pw.user.id}`, { password: pw.password }), () => setPw(null))}>{saving ? 'Saving…' : 'Save'}</button></>}>
           <label className="field">New password<input type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} autoComplete="new-password" /></label>
           <ErrorBox error={err} />
         </Modal>
@@ -113,7 +125,7 @@ export function AuditSettings() {
   return (
     <Card title="Audit log" flush actions={<input type="search" placeholder="Filter action / user / target" value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} />}>
       <ErrorBox error={error} />
-      {loading && !data ? <Loading /> : !data?.items.length ? <Empty>No entries.</Empty> : (
+      {loading && !data ? <SkeletonRows cols={6} /> : !data?.items.length ? <Empty>No entries.</Empty> : (
         <>
           <div className="table-wrap">
             <table>

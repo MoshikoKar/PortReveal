@@ -5,7 +5,9 @@ requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-p no:cacheprovider"
+# e2e (browser) tests are opt-in: `npm run test:e2e` builds the frontend and passes -m e2e.
+addopts = "-p no:cacheprovider -m 'not e2e'"
+markers = ["e2e: end-to-end browser tests against the built frontend (npm run test:e2e)"]
 filterwarnings = ["ignore::DeprecationWarning", "ignore:Using .httpx. with .starlette.testclient.:Warning"]
 
 [tool.ruff]

@@ -59,7 +59,8 @@ class HostObservation:
             self.extra_tcp_ports = tuple(sorted(merged))
         if other.ports is not None:
             self.ports = other.ports
-            self.port_scan_failed = False
+            # Preserve failure when the port stage returned partial results (host-timeout).
+            self.port_scan_failed = other.port_scan_failed
         elif other.port_scan_failed and self.ports is None:
             self.port_scan_failed = True
 

@@ -7,6 +7,7 @@ from datetime import date, datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     Float,
     ForeignKey,
@@ -24,10 +25,13 @@ from .db import Base, UTCDateTime, utcnow
 # --- enumerations (stored as plain strings) ---------------------------------
 ROLE_ADMIN = "admin"
 ROLE_VIEWER = "viewer"
+ROLES = (ROLE_ADMIN, ROLE_VIEWER)
+USER_SOURCES = ("local", "ldap")
 
 DEVICE_ACTIVE = "active"            # seen in the latest scan that covered it
 DEVICE_UNKNOWN = "unknown"          # missed by a scan, not yet confirmed gone
 DEVICE_NOT_DETECTED = "not_detected"  # missed by N consecutive complete scans
+DEVICE_STATUSES = (DEVICE_ACTIVE, DEVICE_UNKNOWN, DEVICE_NOT_DETECTED)
 
 SCAN_QUEUED = "queued"
 SCAN_RUNNING = "running"
@@ -36,6 +40,7 @@ SCAN_PARTIAL = "partial"
 SCAN_FAILED = "failed"
 SCAN_CANCELLED = "cancelled"
 SCAN_ACTIVE_STATES = (SCAN_QUEUED, SCAN_RUNNING)
+SCAN_STATUSES = (SCAN_QUEUED, SCAN_RUNNING, SCAN_COMPLETED, SCAN_PARTIAL, SCAN_FAILED, SCAN_CANCELLED)
 
 SCAN_DISCOVERY = "discovery"
 SCAN_STANDARD = "standard"
@@ -45,6 +50,7 @@ SCAN_TYPES = (SCAN_DISCOVERY, SCAN_STANDARD, SCAN_FULL)
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULED = "scheduled"  # night inventory schedule
 TRIGGER_PRESENCE = "presence"    # daytime discovery-only presence schedule
+SCAN_TRIGGERS = (TRIGGER_MANUAL, TRIGGER_SCHEDULED, TRIGGER_PRESENCE)
 
 EV_DEVICE_DISCOVERED = "device_discovered"
 EV_DEVICE_DISAPPEARED = "device_disappeared"
@@ -93,13 +99,39 @@ EVENT_SEVERITY = {
     EV_TAG_REMOVED: "info",
 }
 
+SEVERITIES = ("high", "medium", "low", "info")
+
 NETWORK_ZONES = ("servers", "users", "iot", "dmz", "management", "guest", "lab")
 CRITICALITY_LEVELS = ("low", "medium", "high", "critical")
 TAG_SOURCE_RULE = "rule"
 TAG_SOURCE_MANUAL = "manual"
 TAG_SOURCE_SUPPRESSED = "suppressed"
+TAG_SOURCES = (TAG_SOURCE_RULE, TAG_SOURCE_MANUAL, TAG_SOURCE_SUPPRESSED)
 SEARCH_KIND_WATCH = "watch"
 SEARCH_KIND_POLICY = "policy"
+
+# Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
+# column is nullable); data import validates against the same sets. Adding a value here needs a
+# migration that rewrites the matching constraint.
+CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("users", "role"): ROLES,
+    ("users", "source"): USER_SOURCES,
+    ("networks", "zone"): NETWORK_ZONES,
+    ("devices", "status"): DEVICE_STATUSES,
+    ("device_tags", "source"): TAG_SOURCES,
+    ("device_profiles", "criticality"): CRITICALITY_LEVELS,
+    ("scans", "scan_type"): SCAN_TYPES,
+    ("scans", "trigger"): SCAN_TRIGGERS,
+    ("scans", "status"): SCAN_STATUSES,
+    ("events", "event_type"): EVENT_TYPES,
+    ("events", "severity"): SEVERITIES,
+}
+
+
+def one_of(table: str, column: str) -> CheckConstraint:
+    """CHECK constraint `ck_<table>_<column>` limiting the column to its CLOSED_VALUES set."""
+    values = ", ".join(f"'{v}'" for v in CLOSED_VALUES[(table, column)])
+    return CheckConstraint(f'"{column}" IN ({values})', name=f"ck_{table}_{column}")
 
 
 def new_uuid() -> str:
@@ -108,6 +140,7 @@ def new_uuid() -> str:
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (one_of("users", "role"), one_of("users", "source"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(150), unique=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(200))
@@ -134,6 +167,7 @@ class UserSession(Base):
 
 class Network(Base):
     __tablename__ = "networks"
+    __table_args__ = (one_of("networks", "zone"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True)
     cidr: Mapped[str] = mapped_column(String(64))
@@ -165,6 +199,7 @@ class AppSetting(Base):
 
 class Device(Base):
     __tablename__ = "devices"
+    __table_args__ = (one_of("devices", "status"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)
     network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), index=True)
@@ -203,6 +238,7 @@ class Device(Base):
     profile: Mapped[DeviceProfile | None] = relationship(
         back_populates="device", cascade="all, delete-orphan", uselist=False
     )
+    network: Mapped[Network | None] = relationship()
 
 
 class DeviceIP(Base):
@@ -268,7 +304,7 @@ class PortHttp(Base):
 
 class DeviceTag(Base):
     __tablename__ = "device_tags"
-    __table_args__ = (UniqueConstraint("device_id", "tag", name="uq_device_tag"),)
+    __table_args__ = (UniqueConstraint("device_id", "tag", name="uq_device_tag"), one_of("device_tags", "source"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
     tag: Mapped[str] = mapped_column(String(60), index=True)
@@ -282,6 +318,7 @@ class DeviceProfile(Base):
     """Operator context for a device (1:1) plus the explanation of its exposure score."""
 
     __tablename__ = "device_profiles"
+    __table_args__ = (one_of("device_profiles", "criticality"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), unique=True)
     owner: Mapped[str | None] = mapped_column(String(150))
@@ -340,6 +377,7 @@ class ApiToken(Base):
 
 class Scan(Base):
     __tablename__ = "scans"
+    __table_args__ = (one_of("scans", "scan_type"), one_of("scans", "trigger"), one_of("scans", "status"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     scan_type: Mapped[str] = mapped_column(String(20))
     trigger: Mapped[str] = mapped_column(String(20), default=TRIGGER_MANUAL)  # manual | scheduled | presence
@@ -380,7 +418,13 @@ class ScanHost(Base):
 
 class Event(Base):
     __tablename__ = "events"
-    __table_args__ = (Index("ix_events_type_created", "event_type", "created_at"),)
+    __table_args__ = (
+        Index("ix_events_type_created", "event_type", "created_at"),
+        # Digest hot path: notify IS TRUE AND notified_at IS NULL.
+        Index("ix_events_pending", "notify", "notified_at"),
+        one_of("events", "event_type"),
+        one_of("events", "severity"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
     scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"), index=True)

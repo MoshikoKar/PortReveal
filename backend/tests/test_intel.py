@@ -4,8 +4,10 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from sqlalchemy import event as sa_event
 from sqlalchemy import select
 
+from app.core import watches
 from app.core.exposure import compute, level
 from app.core.notify import _pending_all, format_daily_digest
 from app.core.tagging import DeviceFacts, Service, apply_tags, classify, load_facts, normalize_tag
@@ -198,6 +200,29 @@ def test_web_capture_fills_port_http_and_retags(db):
 
 
 # --- watches --------------------------------------------------------------------------------------------
+def test_evaluate_all_loads_saved_searches_once(db):
+    db.add_all([
+        SavedSearch(name="SSH", query="port:22"),
+        SavedSearch(name="HTTPS", query="port:443"),
+        SavedSearch(name="RDP", query="port:3389"),
+    ])
+    db.commit()
+    saved_search_selects: list[str] = []
+
+    def record_saved_search_select(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "FROM saved_searches" in statement:
+            saved_search_selects.append(statement)
+
+    bind = db.get_bind()
+    sa_event.listen(bind, "before_cursor_execute", record_saved_search_select)
+    try:
+        assert evaluate_all(db) == 0
+    finally:
+        sa_event.remove(bind, "before_cursor_execute", record_saved_search_select)
+
+    assert len(saved_search_selects) == 1
+
+
 def test_watch_baselines_then_alerts_and_drops_stale_hits(db):
     net = make_network(db)
     a = host("10.0.0.1", [port(3389, "ms-wbt-server")], mac="02:00:00:00:00:01")
@@ -240,3 +265,24 @@ def test_digest_always_includes_watch_alerts(db):
     assert [e.event_type for e in pending] == ["watch_match"]
     _, plain, html_body = format_daily_digest(pending)
     assert "Watches (1)" in plain and "Watch matches" in html_body and "RDP" in plain
+
+
+def test_watch_evaluation_walks_matches_in_chunks(db, monkeypatch):
+    monkeypatch.setattr(watches, "CHUNK", 2)  # force several chunks with a handful of hosts
+    net = make_network(db)
+    hosts = [host(f"10.0.0.{i}", [port(22, "ssh")], mac=f"02:00:00:00:00:{i:02x}") for i in range(1, 6)]
+    scan(ScriptedScanner(hosts), network_id=net.id)
+    db.add(SavedSearch(name="SSH", query="port:22"))
+    db.commit()
+    assert evaluate_all(db) == 0  # baseline: all five recorded silently
+    db.commit()
+    search = db.scalar(select(SavedSearch))
+    assert search.last_count == 5
+    assert len(db.scalars(select(SavedSearchHit).where(SavedSearchHit.search_id == search.id)).all()) == 5
+
+    more = [host(f"10.0.0.{i}", [port(22, "ssh")], mac=f"02:00:00:00:00:{i:02x}") for i in range(6, 11)]
+    scan(ScriptedScanner(hosts + more), network_id=net.id)  # watches run after the scan
+    db.expire_all()
+    alerts = sorted(e.ip for e in db.scalars(select(Event).where(Event.event_type == "watch_match")).unique())
+    assert alerts == sorted(f"10.0.0.{i}" for i in range(6, 11))
+    assert db.get(SavedSearch, search.id).last_count == 10

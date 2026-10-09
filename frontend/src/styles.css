@@ -74,7 +74,10 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   position: sticky; top: 0; height: 100vh;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 18px 18px 16px; border-bottom: 1px solid var(--border); }
+.brand-home { display: flex; align-items: center; gap: 10px; color: inherit; }
+.brand-home:hover { color: inherit; text-decoration: none; }
 .brand-name { font-weight: 700; letter-spacing: 0.04em; }
+/* Intentional exception: the NETWORK FINDER lockup and .brand-sub eyebrow are the only uppercase UI chrome. */
 .brand-sub { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; }
 .nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
 .nav a {
@@ -140,9 +143,12 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
    the toggle drops the nav and account footer down beneath it. */
 /* Scoped under .brand so these beat the later generic `.btn { display: inline-flex }`. */
 .brand .nav-toggle, .brand .nav-current { display: none; }
+.nav-backdrop { display: none; }
+/* Wide layout: the drawer wrapper is transparent to the sidebar's flex column. */
+.sidebar-drawer { display: contents; }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
-  .sidebar { position: sticky; top: 0; z-index: 10; height: auto; max-height: 100vh; overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  .sidebar { position: sticky; top: 0; z-index: 10; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
   .brand { padding: 10px 16px; border-bottom: 0; }
   .brand-sub { display: none; }
   .brand .nav-current {
@@ -153,7 +159,14 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   .nav-current svg { width: 14px; height: 14px; }
   .brand .nav-toggle { display: inline-flex; }
   .sidebar:not(.open) .nav, .sidebar:not(.open) .sidebar-foot { display: none; }
-  .sidebar.open .brand { border-bottom: 1px solid var(--border); }
+  /* The open nav drops down over a dimmed page (no push-down); tapping the dimmed area closes it. */
+  .sidebar.open .sidebar-drawer {
+    display: flex; flex-direction: column; position: absolute; top: 100%; left: 0; right: 0;
+    max-height: calc(100vh - 56px); overflow-y: auto;
+    background: var(--panel); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border-2);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+  .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 9; background: rgba(2, 6, 14, 0.6); }
   .sidebar-foot { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
   /* The collapsed sidebar is the sticky bar now; two stacked sticky bars would overlap. */
   .topbar { position: static; }
@@ -178,6 +191,8 @@ th, td { text-align: left; line-height: 1.4; padding: 8px 12px; border-bottom: 1
 th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--panel); position: sticky; top: 0; }
 tbody tr:hover { background: var(--panel-2); }
 tr.clickable { cursor: pointer; }
+.th-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.th-sort:hover { color: var(--text); }
 tr.selected { background: rgba(45, 212, 191, 0.06); }
 td.mono, td .mono { font-family: var(--mono); font-size: 12.5px; }
 tr.dim td { color: var(--muted); }
@@ -198,7 +213,7 @@ tr.dim td { color: var(--muted); }
 .chip { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--panel-3); color: var(--text-2); margin: 1px 4px 1px 0; border: 1px solid var(--border); }
 button.chip { cursor: pointer; }
 .chip.on { border-color: var(--accent, #5b8def); color: var(--text); background: color-mix(in srgb, var(--accent, #5b8def) 18%, var(--panel-3)); }
-.chip.suppressed { opacity: 0.55; text-decoration: line-through; }
+.chip.suppressed { color: var(--muted); border-color: var(--border-2); text-decoration: line-through; }
 .chip.new { border-color: rgba(248, 113, 113, 0.5); color: var(--high); }
 
 /* ---------- forms ---------- */
@@ -232,6 +247,12 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); }
 .btn.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--border-2); }
 .btn.sm { padding: 4px 10px; font-size: 12.5px; }
+/* "See all / Show less" bar closing a flush card list: a full-width text-link button. */
+.btn.see-all {
+  display: flex; width: 100%; padding: 10px 16px; font-size: 12px; color: var(--accent);
+  background: transparent; border: 0; border-top: 1px solid var(--border); border-radius: 0;
+}
+.btn.see-all:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border); }
 /* Filter toggles: outline when off, accent-tinted outline when on (not a filled primary CTA). */
 .btn.toggle { background: transparent; color: var(--text-2); }
 .btn.toggle.on { border-color: var(--accent); color: var(--text); background: rgba(45, 212, 191, 0.12); }
@@ -385,8 +406,11 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 .search-bar input[type='search'] { flex: 1; min-width: 260px; font-family: var(--mono); font-size: 13px; padding: 9px 12px; }
 .search-bar input[type='date'] { background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 6px 8px; color: var(--text); }
 .search-layout { display: grid; grid-template-columns: 250px 1fr; gap: var(--space-4); align-items: start; }
-@media (max-width: 900px) { .search-layout { grid-template-columns: 1fr; } }
 .search-layout > aside { position: sticky; top: 64px; max-height: calc(100vh - 80px); overflow: auto; }
+@media (max-width: 900px) {
+  .search-layout { grid-template-columns: 1fr; }
+  .search-layout > aside { position: static; max-height: none; }
+}
 .facet h3 { margin-bottom: 4px; }
 .facet-row {
   display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 3px 6px; border: 0; background: none;
@@ -401,7 +425,7 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 .result-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .result-services { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
 .result-services li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.result-services li > .mono { min-width: 70px; color: var(--accent); }
+.result-services li > .mono { min-width: 70px; color: var(--text-2); }
 .result-shot { flex: none; width: 176px; aspect-ratio: 16 / 10; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg); }
 .result-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 @media (max-width: 700px) { .result-shot { display: none; } }
