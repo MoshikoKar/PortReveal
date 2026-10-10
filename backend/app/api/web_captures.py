@@ -421,7 +421,7 @@ def live_rtsp_by_port(
     user: User = Depends(current_user),
 ):
     """Live MJPEG from an inventory RTSP port (discovers a working path if needed)."""
-    from ..core.web_capture.inventory import is_rtsp_service, COMMON_RTSP_PORTS
+    from ..core.web_capture.inventory import COMMON_RTSP_PORTS, is_rtsp_service
 
     if port < 1 or port > 65535:
         raise HTTPException(400, "Invalid port")

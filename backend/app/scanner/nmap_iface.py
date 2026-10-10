@@ -23,7 +23,7 @@ _IFACE_LINE = re.compile(
     re.IGNORECASE,
 )
 
-_cache: tuple[float, str, tuple["NmapIface", ...]] | None = None
+_cache: tuple[float, str, tuple[NmapIface, ...]] | None = None
 
 
 @dataclass(frozen=True)

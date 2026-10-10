@@ -22,18 +22,20 @@ export function ExclusionsSettings() {
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
   const closeDraft = () => confirmDiscard(dirty) && setDraft(null);
 
-  const save = async (d: Draft) => {
+  const save = async (d: Draft, { list = false }: { list?: boolean } = {}) => {
     if (saving) return;
-    setSaveError(null);
+    if (list) setActionError(null);
+    else setSaveError(null);
     setSaving(true);
     try {
       const body = { value: d.value, description: d.description || null, enabled: d.enabled };
       if (d.id) await put(`/exclusions/${d.id}`, body);
       else await post('/exclusions', body);
-      setDraft(null);
+      if (!list) setDraft(null);
       reload();
     } catch (e: any) {
-      setSaveError(e.message);
+      if (list) setActionError(`Could not update the exclusion: ${e.message}`);
+      else setSaveError(e.message);
     } finally {
       setSaving(false);
     }
@@ -76,7 +78,7 @@ export function ExclusionsSettings() {
                   <td>{x.description}</td>
                   <td>
                     {isAdmin ? (
-                      <label className="check small"><input type="checkbox" checked={x.enabled} onChange={(e) => save({ id: x.id, value: x.value, description: x.description ?? '', enabled: e.target.checked })} />{x.enabled ? 'enabled' : 'disabled'}</label>
+                      <label className="check small"><input type="checkbox" checked={x.enabled} disabled={saving} onChange={(e) => save({ id: x.id, value: x.value, description: x.description ?? '', enabled: e.target.checked }, { list: true })} />{x.enabled ? 'enabled' : 'disabled'}</label>
                     ) : x.enabled ? 'enabled' : 'disabled'}
                   </td>
                   {isAdmin && (

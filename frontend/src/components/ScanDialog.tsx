@@ -3,7 +3,7 @@ import { post } from '../api';
 import { useApp } from '../context';
 import type { Network, Scan, ScanType } from '../types';
 import { useApi } from '../util';
-import { confirmDiscard, ErrorBox, Modal } from './ui';
+import { confirmDiscard, ErrorBox, Loading, Modal } from './ui';
 
 export interface ScanPreset {
   scan_type?: ScanType;
@@ -112,17 +112,26 @@ export function ScanDialog({ preset, onClose, onStarted }: {
             )}
             {mode === 'networks' && (
               <div className="stack" style={{ gap: 6 }}>
-                {networks.data?.length === 0 && <div className="muted">No networks configured. Add one in Settings → Networks.</div>}
-                {networks.data?.map((n) => (
-                  <label key={n.id} className="check">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(n.id)}
-                      onChange={(e) => setSelected(e.target.checked ? [...selected, n.id] : selected.filter((x) => x !== n.id))}
-                    />
-                    <span>{n.name} <span className="mono muted">{n.cidr}</span>{!n.enabled && <span className="muted small"> (schedule disabled)</span>}</span>
-                  </label>
-                ))}
+                {networks.loading && !networks.data ? (
+                  <Loading />
+                ) : (
+                  <>
+                    <ErrorBox error={networks.error} />
+                    {networks.data && networks.data.length === 0 && (
+                      <div className="muted">No networks configured. Add one in Settings → Networks.</div>
+                    )}
+                    {networks.data?.map((n) => (
+                      <label key={n.id} className="check">
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(n.id)}
+                          onChange={(e) => setSelected(e.target.checked ? [...selected, n.id] : selected.filter((x) => x !== n.id))}
+                        />
+                        <span>{n.name} <span className="mono muted">{n.cidr}</span>{!n.enabled && <span className="muted small"> (schedule disabled)</span>}</span>
+                      </label>
+                    ))}
+                  </>
+                )}
               </div>
             )}
             {mode === 'targets' && (

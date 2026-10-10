@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Route, Routes, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { get, post } from './api';
 import { Layout } from './components/Layout';
 import { Card, Loading } from './components/ui';
@@ -22,6 +22,28 @@ const Settings = lazy(() => import('./pages/Settings'));
 const Watches = lazy(() => import('./pages/Watches'));
 const WebHosts = lazy(() => import('./pages/WebHosts'));
 const WebPreview = lazy(() => import('./pages/WebPreview'));
+
+/** Paths that render real pages after login (must stay aligned with <Routes> below). */
+const APP_ROUTE_PATTERNS = [
+  '/',
+  '/search',
+  '/watches',
+  '/reports',
+  '/devices',
+  '/devices/:uuid',
+  '/devices/:uuid/web',
+  '/web',
+  '/changes',
+  '/ports',
+  '/ports/:proto/:port',
+  '/scans',
+  '/settings',
+  '/settings/:tab',
+] as const;
+
+function isKnownAppPath(pathname: string): boolean {
+  return APP_ROUTE_PATTERNS.some((pattern) => matchPath({ path: pattern, end: true }, pathname) != null);
+}
 
 export default function App() {
   const location = useLocation();
@@ -125,7 +147,12 @@ export default function App() {
     get<SetupStatus>('/setup/status').then(setSetup);
     const back = returnToRef.current;
     returnToRef.current = null;
-    if (back) navigate(back, { replace: true });
+    if (back) {
+      navigate(back, { replace: true });
+    } else if (!isKnownAppPath(location.pathname)) {
+      // Unauth gate keeps the URL (e.g. /login); without a returnTo that would hit NotFound.
+      navigate('/', { replace: true });
+    }
   };
 
   if (!user && !setup.needs_admin) {

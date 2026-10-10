@@ -19,14 +19,14 @@ export default function Ports() {
   const dir = sp.get('dir');
   const sort = { key: sortKey, desc: dir === 'asc' ? false : dir === 'desc' ? true : defaultDesc(sortKey) };
 
-  /** Update query params in place, dropping empty values so default views keep a clean URL. */
-  const set = (patch: Record<string, string | undefined>) => {
+  /** Update query params, dropping empty values so default views keep a clean URL. Discrete filters push; typing uses replace. */
+  const set = (patch: Record<string, string | undefined>, { replace = false }: { replace?: boolean } = {}) => {
     const next = new URLSearchParams(sp);
     for (const [k, v] of Object.entries(patch)) {
       if (v) next.set(k, v);
       else next.delete(k);
     }
-    setSp(next, { replace: true });
+    setSp(next, { replace });
   };
 
   const needle = q.trim().toLowerCase();
@@ -61,7 +61,7 @@ export default function Ports() {
             <option value="">All networks</option>
             {(networks.data ?? []).map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
           </select>
-          <input type="search" placeholder="Filter by port or service…" value={q} onChange={(e) => set({ q: e.target.value })} style={{ width: 220 }} />
+          <input type="search" placeholder="Filter by port or service…" value={q} onChange={(e) => set({ q: e.target.value }, { replace: true })} style={{ width: 220 }} />
         </div>
       </div>
       <ErrorBox error={error} />

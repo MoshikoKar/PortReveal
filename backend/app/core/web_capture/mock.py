@@ -1,8 +1,8 @@
 """Mock Web Capture responses for DEV / tests (scenarios A–E). Same pipeline, fake I/O only."""
 from __future__ import annotations
 
-from .probe import EndpointProbe, ProbeResult
 from ...models import WEB_PAGE_HOME, WEB_PAGE_LOGIN, WEB_PAGE_OTHER, WEB_PAGE_STREAM
+from .probe import EndpointProbe, ProbeResult
 
 # Minimal 1x1 webp-ish placeholder (actually a tiny PNG; storage accepts bytes)
 _PLACEHOLDER_PNG = (

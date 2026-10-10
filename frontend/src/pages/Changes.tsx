@@ -21,19 +21,19 @@ export default function Changes() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range, sp.get('page')]);
 
-  const set = (patch: Record<string, string | undefined>) => {
+  const set = (patch: Record<string, string | undefined>, { replace = false }: { replace?: boolean } = {}) => {
     const next = new URLSearchParams(sp);
     for (const [k, v] of Object.entries(patch)) {
       if (v) next.set(k, v);
       else next.delete(k);
     }
     if (!('page' in patch)) next.delete('page');
-    setSp(next, { replace: true });
+    setSp(next, { replace });
   };
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      if ((sp.get('q') ?? '') !== qInput) set({ q: qInput || undefined });
+      if ((sp.get('q') ?? '') !== qInput) set({ q: qInput || undefined }, { replace: true });
     }, 300);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps

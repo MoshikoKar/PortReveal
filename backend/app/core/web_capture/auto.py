@@ -22,7 +22,6 @@ from ...models import (
 from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
 from .inventory import COMMON_RTSP_PORTS, COMMON_WEB_PORTS, find_web_endpoints, is_rtsp_service, is_web_service
-from .manager import web_capture_manager
 
 log = logging.getLogger(__name__)
 

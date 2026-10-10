@@ -6,11 +6,11 @@ from app.core.notify import format_daily_digest, send_daily_digest
 from app.core.retention import run_retention
 from app.core.scheduler import enqueue_baseline_retries, enqueue_scheduled_scans, next_run, tick
 from app.core.snapshots import load_snapshot
-from app.models import AuditLog, Device, Event, Scan, Snapshot
+from app.models import AuditLog, Device, Event, Network, Scan, Snapshot
 from app.security import encrypt_secret
 from app.settings_store import NotificationSettings, ScheduleSettings, put_section
 
-from .helpers import ScriptedScanner, events, host, make_network, port, scan
+from .helpers import ScriptedScanner, device_by_ip, events, host, make_network, port, scan
 
 
 def test_snapshot_created_after_successful_scan_and_replaced_same_day(db):
@@ -63,6 +63,38 @@ def test_retention_cleanup(db):
     assert counts["audit_log"] == 1 and counts["devices"] == 1
     assert db.scalar(select(func.count(Event.id))) == 0
     assert {d.current_ip for d in db.scalars(select(Device))} == {"10.0.0.1", "10.0.0.3"}
+
+
+def test_retention_nulls_baseline_and_port_scan_refs_when_scans_purged(db):
+    """ON DELETE SET NULL keeps networks/devices consistent after scan retention."""
+    net = make_network(db)
+    s = scan(
+        ScriptedScanner([host("10.0.0.1", [port(22, "ssh")], mac="00:00:00:00:00:01")]),
+        network_id=net.id,
+    )
+    db.expire_all()
+    net = db.get(Network, net.id)
+    device = device_by_ip(db, "10.0.0.1")
+    assert net.baseline_scan_id == s.id
+    assert device.last_port_scan_id == s.id
+
+    old = datetime.now(timezone.utc) - timedelta(days=400)
+    for e in db.scalars(select(Event)).unique():
+        e.created_at = old
+    for row in db.scalars(select(Scan)):
+        row.created_at = old
+    for snap in db.scalars(select(Snapshot)):
+        snap.snapshot_date = old.date()
+    db.commit()
+
+    counts = run_retention(db, days=365)
+    db.commit()
+    assert counts["scans"] >= 1
+    db.expire_all()
+    net = db.get(Network, net.id)
+    device = device_by_ip(db, "10.0.0.1")
+    assert net.baseline_scan_id is None
+    assert device.last_port_scan_id is None
 
 
 def test_email_format_is_categorized_html(db):

@@ -84,8 +84,16 @@ async def lifespan(app: FastAPI):
     log.info("Network Finder stopped")
 
 
-app = FastAPI(title="Network Finder", version=__version__, lifespan=lifespan,
-              docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+_settings = get_settings()
+_docs_enabled = _settings.app_env != "production"
+app = FastAPI(
+    title="Network Finder",
+    version=__version__,
+    lifespan=lifespan,
+    docs_url="/api/docs" if _docs_enabled else None,
+    openapi_url="/api/openapi.json" if _docs_enabled else None,
+    redoc_url=None,
+)
 
 for r in (auth, setup, system, dashboard, devices, events, scans, networks, exclusions, settings, users, misc,
           web_captures, data_transfer, search, watches, reports, tokens):
@@ -158,9 +166,11 @@ if (_dist / "index.html").exists():
 else:
     @app.get("/", include_in_schema=False)
     async def root():
-        return {
+        body = {
             "app": "Network Finder API",
             "version": __version__,
             "ui": "Frontend not built here. In development open http://localhost:5173 (npm run dev).",
-            "docs": "/api/docs",
         }
+        if _docs_enabled:
+            body["docs"] = "/api/docs"
+        return body

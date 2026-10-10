@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { RtspLivePlayer, liveStreamUrl } from './RtspLivePlayer';
 import type { WebPage, WebPageKind } from '../types';
 import { fmtTime } from '../util';
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusables(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0);
+}
 
 export const KIND_LABELS: Record<WebPageKind, string> = {
   home: 'Home', login: 'Login', register: 'Register', other: 'Page', stream: 'Stream',
@@ -119,31 +125,66 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
 }) {
   const p = pages[index];
   const [showLive, setShowLive] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const go = (d: number) => onIndex((index + d + pages.length) % pages.length);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      else if (e.key === 'ArrowRight') go(1);
-      else if (e.key === 'ArrowLeft') go(-1);
-    };
-    window.addEventListener('keydown', onKey);
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const el = ref.current;
+    if (el && !el.contains(document.activeElement)) el.focus();
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
-      window.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
+      if (opener?.isConnected) opener.focus();
     };
-  });
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') onIndex((index + 1 + pages.length) % pages.length);
+      else if (e.key === 'ArrowLeft') onIndex((index - 1 + pages.length) % pages.length);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [index, onClose, onIndex, pages.length]);
 
   useEffect(() => { setShowLive(false); }, [p?.id]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Tab' || !ref.current) return;
+    const items = focusables(ref.current);
+    if (!items.length) {
+      e.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === ref.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   if (!p) return null;
   const live = p.final_url ?? p.url;
   const rtsp = isRtspPage(p);
 
   return (
-    <div className="lightbox" role="dialog" aria-label={rtsp ? 'Stream preview' : 'Screenshot preview'}>
+    <div
+      className="lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label={rtsp ? 'Stream preview' : 'Screenshot preview'}
+      tabIndex={-1}
+      ref={ref}
+      onKeyDown={onKeyDown}
+    >
       <div className="lightbox-stage" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
         {rtsp && showLive ? (
           <div className="rtsp-lightbox-feed">

@@ -25,13 +25,13 @@ from app.core.web_capture.inventory import (
     is_rtsp_service,
     is_web_service,
 )
-from app.scanner.known_ports import TRUENAS_APPS_TCP_PORTS
 from app.core.web_capture.mock import mock_probe_endpoint, mock_rtsp_endpoint
 from app.core.web_capture.screenshot import meta_refresh_target
 from app.core.web_storage import captures_root
 from app.db import utcnow
 from app.main import app
 from app.models import WEB_CAPTURE_COMPLETED, WEB_PAGE_STREAM, Device, Exclusion, WebCapture, WebPage
+from app.scanner.known_ports import TRUENAS_APPS_TCP_PORTS
 from app.settings_store import WebCaptureSettings, put_section
 from tests.helpers import ScriptedScanner, host, make_network, port, scan
 from tests.test_api import csrf, setup_admin
@@ -88,7 +88,7 @@ def test_probable_web_port_truenas_unknown_and_catalog():
 
 def test_inventory_truenas_unknown_catalog_ports(db):
     """TrueNAS hosts: catalog / unknown high ports are web-capture candidates."""
-    net = make_network(db, "10.0.0.0/24", name="TnWeb")
+    make_network(db, "10.0.0.0/24", name="TnWeb")
     catalog = next(p for p in TRUENAS_APPS_TCP_PORTS if p >= 30000 and p not in COMMON_WEB_PORTS)
     scan(
         ScriptedScanner([

@@ -2,18 +2,26 @@
 
 > One line per finding. Full detail: `todo-archive/.backup/`
 
-**Entries:** 91  
-**Prettified:** 2026-10-08  
+**Entries:** 118  
+**Prettified:** 2026-10-09  
 **Format:** `severity` `id` — outcome (≤72 chars)
 
-### 🔴 Critical (3)
+### 🔴 Critical (4)
 
 - 🔴 `Perf-C1` — SQL COUNT/LIMIT device list; ports loaded per page only
 - 🔴 `PR09-C1` — Scheduled pg_dump+appdata backup scripts; RPO/RTO drill
+- 🔴 `PR09-C2` — Runbook: external health probes + scan-fail ops alerts
 - 🔴 `UX09-C1` — Settings tabs/leave confirm before discarding dirty forms
 
-### 🟠 High (17)
+### 🟠 High (32)
 
+- 🟠 `DB09-H1` — FK baseline/last_port_scan → scans ON DELETE SET NULL
+- 🟠 `DB09-H2` — Pending digest filters event_type in SQL; LIMIT 500
+- 🟠 `PR09-H1` — CI runs pytest, Ruff, frontend lint, and npm build
+- 🟠 `PR09-H4` — Require COOKIE_SECURE in prod; COOKIE_ALLOW_HTTP override
+- 🟠 `PR09-H5` — Disable /api/docs and openapi.json when APP_ENV=production
+- 🟠 `PR09-H6` — Document image tags, rollback, no prod alembic downgrade
+- 🟠 `PR09-H8` — /api/health returns 503 when DB check fails; HEALTHCHECK asserts ok
 - 🟠 `Perf-H1` — Scoped device load in scan compare Applier
 - 🟠 `Perf-H2` — Streamed export JSONL; chunked import with guards
 - 🟠 `Perf-H3` — SMTP send outside session_scope before notify
@@ -25,14 +33,22 @@
 - 🟠 `UI-H3` — Modal Escape, focus trap, and aria-modal
 - 🟠 `UI-H4` — Shared :focus-visible rings for buttons/links/tabs
 - 🟠 `UI-H5` — Setup step pills meet AA contrast on panel-3
+- 🟠 `UI09-H1` — Active scan/WC lists show SkeletonRows until data loads
+- 🟠 `UI09-H2` — Lightbox aria-modal, focus trap, restore; fixed key deps
 - 🟠 `UX-H1` — Session expiry shows message; restores prior route on login
 - 🟠 `UX-H2` — Setup wizard step persisted and restored via ?step=
 - 🟠 `UX-H3` — Dirty Setup Next/Skip auto-saves or confirms discard
 - 🟠 `UX-H4` — Setup finish shows ErrorBox; busy state on Finish
 - 🟠 `UX-H5` — Device/network/exclusion delete try/catch + feedback
 - 🟠 `UX-H6` — Retention cleanup confirm, error handling, busy state
+- 🟠 `UX09-H1` — Post-login redirects unknown paths (e.g. /login) to /
+- 🟠 `UX09-H2` — Exclusion list toggle failures surface via actionError
+- 🟠 `UX09-H3` — Active scan/WC fetch errors show ErrorBox + Retry
+- 🟠 `UX09-H4` — ScanDialog networks: Loading/error vs empty configured
+- 🟠 `UX09-H5` — Devices/Changes/Ports push filter history; q uses replace
+- 🟠 `UX09-H6` — Search dims stale results; blocks export/bulk while loading
 
-### 🟡 Medium (45)
+### 🟡 Medium (52)
 
 - 🟡 `DB09-M1` — Closed-value CHECKs on enums + import validation
 - 🟡 `DB09-M2` — Import FS cleanup after inventory wipe commit
@@ -46,6 +62,13 @@
 - 🟡 `Perf-M4` — Wired web-capture concurrency into parallel work
 - 🟡 `Perf-M5` — Limited exposed_ports aggregation; paginated API
 - 🟡 `Perf-M6` — UUID list selects only uuid with SQL LIMIT 4096
+- 🟡 `PR09-M1` — Documented single-process SPOF; scan restart recovery test
+- 🟡 `PR09-M2` — Compose CPU/memory limits; host sizing documented
+- 🟡 `PR09-M3` — Fail fast when production APP_SECRET_KEY empty
+- 🟡 `PR09-M5` — Export HTTP/scan/queue basic metrics counters
+- 🟡 `PR09-M6` — Smoke e2e: login → dashboard → devices list
+- 🟡 `PR09-M7` — Documented data categories, retention, offboarding
+- 🟡 `PR09-M9` — Graceful stop before force-kill in run.ps1
 - 🟡 `UI-M1` — Added --space-* tokens; mapped layout utilities
 - 🟡 `UI-M2` — Raised body line-height to ≥1.5
 - 🟡 `UI-M3` — Switched chrome labels toward sentence case
@@ -80,7 +103,7 @@
 - 🟡 `UX09-M7` — Scans page/WebHosts filters in URL
 - 🟡 `UX09-M8` — Run again confirm; mock reset error handling
 
-### 🟢 Low (26)
+### 🟢 Low (30)
 
 - 🟢 `DB09-L1` — Documented sessions/audit_log naming as intentional
 - 🟢 `DB09-L2` — Set pool_recycle (and pool docs) in init_engine
@@ -91,6 +114,10 @@
 - 🟢 `Perf-L2` — Added latency logging for device list and dashboard
 - 🟢 `Perf-L3` — Added decoding=async / size hints on shot images
 - 🟢 `Perf-L4` — Added short process-local cache for get_section
+- 🟢 `PR09-L1` — Added LICENSE / INTERNAL-USE notice
+- 🟢 `PR09-L2` — Optional JSON logging via LOG_FORMAT=json
+- 🟢 `PR09-L3` — Documented Task Scheduler limits; prefer Linux host
+- 🟢 `PR09-L4` — Added runbook for restore, rotation, migrations
 - 🟢 `UI-L1` — Normalized font-weights to standard 400/600/700
 - 🟢 `UI-L2` — Added skeleton row pattern for primary list tables
 - 🟢 `UI-L3` — Documented native title tooltips as accepted pattern

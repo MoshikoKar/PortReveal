@@ -56,7 +56,7 @@ baseline scan so the dashboard fills within seconds.
 | Reset mock scenario | `npm run mock:reset` |
 
 - Backend: FastAPI on `127.0.0.1:8000` (`uvicorn --reload`). Docs:
-  http://localhost:8000/api/docs
+  http://localhost:8000/api/docs (disabled when `APP_ENV=production`)
 - Frontend: Vite on `:5173`; `/api` is proxied to the backend
 - Logs: terminal and `data/logs/app.log`
 
@@ -183,8 +183,9 @@ One SQLAlchemy model and one Alembic history for both engines.
   database limit for `(pool_size + max_overflow) × app worker processes` plus
   migration and administrative connections.
 
-Migrations run automatically at startup. CI upgrades a fresh database to Alembic
-head and runs `alembic check` so model changes without a migration fail the build.
+Migrations run automatically at startup. GitHub Actions runs pytest and Ruff,
+frontend typecheck/eslint, `npm run build`, and (separately) Alembic upgrade +
+`alembic check` so regressions and model/migration drift fail the build.
 
 ### Production on Windows (host nmap)
 
@@ -231,8 +232,22 @@ log collector; the default is human-readable `text`.
 Open `http://localhost:8081` and complete the first-run wizard (admin → networks →
 exclusions → schedule → SMTP → optional LDAP → recipients → baseline scan).
 
-Upgrade: `git pull`, `npm run setup`, reinstall Chromium, then
-`.\scripts\run.ps1 -Mode production -ForceRestart`.
+**Upgrade**
+
+1. Take a backup set (`.\scripts\backup.ps1`) and record the current Git revision
+   (`git rev-parse HEAD`) with the stamp.
+2. `git pull`, `npm run setup`, reinstall Chromium if the Playwright pin changed, then
+   `.\scripts\run.ps1 -Mode production -ForceRestart`.
+3. Confirm `/api/health`, sign-in, and a smoke check of inventory before closing the
+   window. Migrations run automatically on start.
+
+**Rollback (Windows):** stop the app (`.\scripts\run.ps1 -Stop`). If the new revision
+applied a schema migration (or startup failed mid-migration), restore the matching
+pre-upgrade backup set and check out the recorded prior revision, then start with
+`-SkipBuild` in the foreground — see [docs/runbook.md](docs/runbook.md)
+(Deployment rollback / Failed migration). If the failure was app-only and the database
+schema did not change, `git checkout <prior-sha>` and restart is enough. Do **not** run
+`alembic downgrade` against production.
 
 **Task Scheduler** (same Windows user as Docker Desktop / Npcap):
 
@@ -283,10 +298,39 @@ empty or still the example placeholder. Installs that previously ran without it
 used a key generated into the app data volume (`/data/.secret_key`); copy that
 file's contents into `APP_SECRET_KEY` so stored SMTP/LDAP passwords stay readable.
 
-Upgrade: `git pull && docker compose up -d --build`.
+**Upgrade and image tags**
+
+Compose builds `network-finder:latest`. Before each upgrade, keep a rollback handle:
+
+```bash
+./scripts/backup.sh                                          # Postgres + appdata + env + revision
+docker tag network-finder:latest network-finder:previous     # keep last good image
+git pull
+SHA=$(git rev-parse --short HEAD)
+docker compose build
+docker tag network-finder:latest "network-finder:${SHA}"     # immutable release tag
+docker compose up -d
+# Confirm /api/health (JSON status ok), sign-in, smoke inventory
+```
+
+**Rollback (Linux):** stop the app (`docker compose stop app`). If a migration ran or
+failed, restore the pre-upgrade backup set (Postgres + `appdata`) from the same stamp,
+then retag and start the prior image:
+
+```bash
+docker tag network-finder:previous network-finder:latest
+docker compose up -d --no-build app
+```
+
+If the schema did not change, retagging/starting `network-finder:previous` alone is
+enough. Full restore steps and migration policy:
+[docs/runbook.md](docs/runbook.md) (Deployment rollback / Failed migration). Do **not**
+run `alembic downgrade` against production. Practice the path on a disposable host or
+DB copy before you need it.
 
 **HTTPS:** reverse-proxy to the app, set `COOKIE_SECURE=true` and
-`FORWARDED_ALLOW_IPS` to the proxy IP.
+`FORWARDED_ALLOW_IPS` to the proxy IP. Production refuses to start with
+`COOKIE_SECURE=false` unless `COOKIE_ALLOW_HTTP=true` (trusted plain-HTTP LAN only).
 
 **Secrets:** keep them in `.env` / `.env.production` (never commit). Docker secrets
 under `/run/secrets/<setting_name>` are also read. SMTP/LDAP passwords from the UI

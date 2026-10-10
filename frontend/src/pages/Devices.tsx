@@ -52,19 +52,19 @@ export default function Devices() {
   const { data, error, loading } = useApi<Paged<DeviceSummary>>('/devices', params, 15000);
   const networks = useApi<Network[]>('/networks');
 
-  const update = (patch: Record<string, string | undefined>) => {
+  const update = (patch: Record<string, string | undefined>, { replace = false }: { replace?: boolean } = {}) => {
     const next = new URLSearchParams(sp);
     for (const [k, v] of Object.entries(patch)) {
       if (v) next.set(k, v);
       else next.delete(k);
     }
     if (!('page' in patch)) next.delete('page');
-    setSp(next, { replace: true });
+    setSp(next, { replace });
   };
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      if ((sp.get('q') ?? '') !== qInput) update({ q: qInput || undefined });
+      if ((sp.get('q') ?? '') !== qInput) update({ q: qInput || undefined }, { replace: true });
     }, 300);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps

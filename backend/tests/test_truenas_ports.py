@@ -48,7 +48,7 @@ def test_truenas_catalog_ports_only_on_identified_host(db):
 
 def test_truenas_catalog_ports_on_full_scan(db):
     """Full scans also probe TrueNAS Apps catalog ports (host-timeout often misses 3XXXX)."""
-    net = make_network(db)
+    make_network(db)
     catalog_port = next(p for p in TRUENAS_APPS_TCP_PORTS if p >= 30000)
     tn = host(
         "10.0.0.2",

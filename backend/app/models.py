@@ -174,7 +174,7 @@ class Network(Base):
     description: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     zone: Mapped[str | None] = mapped_column(String(20))  # NETWORK_ZONES; weights the exposure score
-    baseline_scan_id: Mapped[int | None] = mapped_column(Integer)
+    baseline_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
@@ -213,7 +213,7 @@ class Device(Base):
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)  # retention purge
     missed_scans: Mapped[int] = mapped_column(Integer, default=0)
-    last_port_scan_id: Mapped[int | None] = mapped_column(Integer)
+    last_port_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     last_port_scan_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     full_scanned_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     port_scan_failed: Mapped[bool] = mapped_column(Boolean, default=False)

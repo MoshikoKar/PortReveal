@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     session_idle_minutes: int = 480
     session_max_hours: int = 24
     cookie_secure: bool = False
+    # Production override: allow Secure=false when serving plain HTTP on a trusted LAN.
+    cookie_allow_http: bool = False
     login_max_failures: int = 10
     login_window_minutes: int = 15
 
@@ -130,18 +132,26 @@ def check_production_config(s: Settings) -> None:
 
     Production requires an explicit APP_SECRET_KEY: the fallback key generated into the data
     directory is lost with that directory, and every stored SMTP/LDAP password with it.
+
+    Production also requires COOKIE_SECURE=true unless COOKIE_ALLOW_HTTP=true is set for
+    intentional plain-HTTP (trusted LAN) deployments.
     """
     if s.app_env != "production":
         return
     secret = s.app_secret_key.strip()
-    if secret and secret != SECRET_KEY_PLACEHOLDER:
-        return
-    key_file = s.data_path / ".secret_key"
-    hint = (f"An earlier start generated {key_file}: set APP_SECRET_KEY to its contents to keep "
-            "existing encrypted SMTP/LDAP passwords readable." if key_file.is_file()
-            else "Generate one with: openssl rand -hex 32")
-    raise ConfigError(f"APP_SECRET_KEY must be set when APP_ENV=production. {hint} "
-                      "Back the key up together with the database.")
+    if not secret or secret == SECRET_KEY_PLACEHOLDER:
+        key_file = s.data_path / ".secret_key"
+        hint = (f"An earlier start generated {key_file}: set APP_SECRET_KEY to its contents to keep "
+                "existing encrypted SMTP/LDAP passwords readable." if key_file.is_file()
+                else "Generate one with: openssl rand -hex 32")
+        raise ConfigError(f"APP_SECRET_KEY must be set when APP_ENV=production. {hint} "
+                          "Back the key up together with the database.")
+    if not s.cookie_secure and not s.cookie_allow_http:
+        raise ConfigError(
+            "COOKIE_SECURE must be true when APP_ENV=production. "
+            "Terminate TLS at a reverse proxy for non-localhost clients, "
+            "or set COOKIE_ALLOW_HTTP=true only for trusted plain-HTTP LAN access."
+        )
 
 
 @lru_cache

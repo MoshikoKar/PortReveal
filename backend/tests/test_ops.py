@@ -33,8 +33,29 @@ def test_production_boot_error_points_at_the_generated_key_file(tmp_path):
 
 def test_secret_key_check_passes_with_a_key_or_outside_production(tmp_path):
     check_production_config(Settings(_env_file=None, app_env="production", app_secret_key="k" * 64,
-                                     data_dir=str(tmp_path)))
+                                     cookie_secure=True, data_dir=str(tmp_path)))
     check_production_config(Settings(_env_file=None, app_env="development", app_secret_key="", data_dir=str(tmp_path)))
+
+
+def test_production_refuses_insecure_cookies_without_allow_http(tmp_path):
+    s = Settings(_env_file=None, app_env="production", app_secret_key="k" * 64,
+                 cookie_secure=False, cookie_allow_http=False, data_dir=str(tmp_path))
+    with pytest.raises(ConfigError, match="COOKIE_SECURE must be true"):
+        check_production_config(s)
+
+
+def test_production_allows_http_cookies_with_explicit_override(tmp_path):
+    check_production_config(Settings(
+        _env_file=None, app_env="production", app_secret_key="k" * 64,
+        cookie_secure=False, cookie_allow_http=True, data_dir=str(tmp_path),
+    ))
+
+
+def test_openapi_docs_available_outside_production(client):
+    assert client.get("/api/docs").status_code == 200
+    assert client.get("/api/openapi.json").status_code == 200
+    assert app.docs_url == "/api/docs"
+    assert app.openapi_url == "/api/openapi.json"
 
 
 # --- restart recovery (single process: a crash or kill mid-scan is recovered on the next start) --------

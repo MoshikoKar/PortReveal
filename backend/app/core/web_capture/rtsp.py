@@ -7,9 +7,9 @@ import socket
 import subprocess
 import sys
 import threading
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Callable, Iterator
 from urllib.parse import urlparse
 
 from .screenshot import ScreenshotResult, _to_webp

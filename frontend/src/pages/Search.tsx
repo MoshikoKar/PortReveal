@@ -203,19 +203,19 @@ export default function Search() {
                   {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
                 </select>
               )}
-              <button className="btn sm" onClick={() => exportAs('csv')} disabled={!!error || exporting !== null}>
+              <button className="btn sm" onClick={() => exportAs('csv')} disabled={loading || !!error || exporting !== null}>
                 {exporting === 'csv' ? 'Exporting…' : 'Export CSV'}
               </button>
-              <button className="btn sm" onClick={() => exportAs('ndjson')} disabled={!!error || exporting !== null}>
+              <button className="btn sm" onClick={() => exportAs('ndjson')} disabled={loading || !!error || exporting !== null}>
                 {exporting === 'ndjson' ? 'Exporting…' : 'Export NDJSON'}
               </button>
               <button className="btn sm" onClick={() => setSaving(true)} disabled={!q || !!error}>Save as watch</button>
               {isAdmin && !at && (
                 <>
-                  <button className="btn sm" onClick={() => openBulk('scan')} disabled={busy !== null || !!error || !results?.total}>
+                  <button className="btn sm" onClick={() => openBulk('scan')} disabled={loading || busy !== null || !!error || !results?.total}>
                     {busy === 'scan' ? 'Loading hosts…' : 'Scan results'}
                   </button>
-                  <button className="btn sm" onClick={() => openBulk('web')} disabled={busy !== null || !!error || !results?.total}>
+                  <button className="btn sm" onClick={() => openBulk('web')} disabled={loading || busy !== null || !!error || !results?.total}>
                     {busy === 'web' ? 'Loading hosts…' : 'Capture web'}
                   </button>
                 </>
@@ -223,55 +223,62 @@ export default function Search() {
             </div>
           </div>
 
-          {loading && !results ? <Loading /> : !results ? null : !results.items.length ? (
-            <Card><Empty>No hosts match this query.</Empty></Card>
-          ) : at ? (
-            <Card flush>
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>IP</th><th>Hostname</th><th>Network</th><th>Type</th><th>Score</th><th>Ports</th><th>Tags</th></tr></thead>
-                  <tbody>
-                    {(results.items as HistoryHost[]).map((h) => (
-                      <tr key={`${h.network}-${h.uuid}`} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
-                        <td className="mono">{h.ip}</td>
-                        <td>{h.hostname ?? '—'}</td>
-                        <td>{h.network ?? '—'}</td>
-                        <td>{h.type ?? '—'}</td>
-                        <td>{h.score != null ? <ScoreBadge score={h.score} /> : '—'}</td>
-                        <td>{h.ports.slice(0, 8).map((p) => <span key={`${p.proto}${p.port}`} className="chip" title={p.product ?? p.service ?? undefined}>{p.port}</span>)}</td>
-                        <td>{h.tags.map((t) => <span key={t} className="chip">{t}</span>)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ) : view === 'services' ? (
-            <Card flush>
-              <div className="table-wrap">
-                <table>
-                  <thead><tr><th>Host</th><th>Port</th><th>Service</th><th>HTTP</th><th>Score</th></tr></thead>
-                  <tbody>
-                    {(results.items as SearchServiceRow[]).map((s) => (
-                      <tr key={`${s.host.uuid}-${s.protocol}${s.port}`} className="clickable" onClick={() => nav(`/devices/${s.host.uuid}`)}>
-                        <td><span className="mono">{s.host.ip}</span>{s.host.hostname && <div className="muted small">{s.host.hostname}</div>}</td>
-                        <td className="mono nowrap">{s.port}/{s.protocol}</td>
-                        <td>{serviceLabel(s) || <span className="muted">—</span>}{s.extra_info && <div className="muted small">{s.extra_info}</div>}</td>
-                        <td className="small">{s.http ? <>{s.http.status ?? ''} {s.http.title ?? ''}</> : <span className="muted">—</span>}</td>
-                        <td><ScoreBadge score={s.host.score} /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ) : (
-            <Card flush>
-              {(results.items as SearchHost[]).map((h) => <HostResult key={h.uuid} h={h} />)}
-            </Card>
-          )}
-          {results && results.total > 0 && (
-            <Pager page={page} pageSize={PAGE_SIZE} total={results.total} onPage={(p) => update({ page: p > 1 ? String(p) : null })} />
+          {loading && !results ? <Loading /> : !results ? null : (
+            <div
+              aria-busy={loading || undefined}
+              style={loading ? { opacity: 0.55, pointerEvents: 'none' } : undefined}
+            >
+              {!results.items.length ? (
+                <Card><Empty>No hosts match this query.</Empty></Card>
+              ) : at ? (
+                <Card flush>
+                  <div className="table-wrap">
+                    <table>
+                      <thead><tr><th>IP</th><th>Hostname</th><th>Network</th><th>Type</th><th>Score</th><th>Ports</th><th>Tags</th></tr></thead>
+                      <tbody>
+                        {(results.items as HistoryHost[]).map((h) => (
+                          <tr key={`${h.network}-${h.uuid}`} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
+                            <td className="mono">{h.ip}</td>
+                            <td>{h.hostname ?? '—'}</td>
+                            <td>{h.network ?? '—'}</td>
+                            <td>{h.type ?? '—'}</td>
+                            <td>{h.score != null ? <ScoreBadge score={h.score} /> : '—'}</td>
+                            <td>{h.ports.slice(0, 8).map((p) => <span key={`${p.proto}${p.port}`} className="chip" title={p.product ?? p.service ?? undefined}>{p.port}</span>)}</td>
+                            <td>{h.tags.map((t) => <span key={t} className="chip">{t}</span>)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              ) : view === 'services' ? (
+                <Card flush>
+                  <div className="table-wrap">
+                    <table>
+                      <thead><tr><th>Host</th><th>Port</th><th>Service</th><th>HTTP</th><th>Score</th></tr></thead>
+                      <tbody>
+                        {(results.items as SearchServiceRow[]).map((s) => (
+                          <tr key={`${s.host.uuid}-${s.protocol}${s.port}`} className="clickable" onClick={() => nav(`/devices/${s.host.uuid}`)}>
+                            <td><span className="mono">{s.host.ip}</span>{s.host.hostname && <div className="muted small">{s.host.hostname}</div>}</td>
+                            <td className="mono nowrap">{s.port}/{s.protocol}</td>
+                            <td>{serviceLabel(s) || <span className="muted">—</span>}{s.extra_info && <div className="muted small">{s.extra_info}</div>}</td>
+                            <td className="small">{s.http ? <>{s.http.status ?? ''} {s.http.title ?? ''}</> : <span className="muted">—</span>}</td>
+                            <td><ScoreBadge score={s.host.score} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              ) : (
+                <Card flush>
+                  {(results.items as SearchHost[]).map((h) => <HostResult key={h.uuid} h={h} />)}
+                </Card>
+              )}
+              {results.total > 0 && (
+                <Pager page={page} pageSize={PAGE_SIZE} total={results.total} onPage={(p) => update({ page: p > 1 ? String(p) : null })} />
+              )}
+            </div>
           )}
         </div>
       </div>

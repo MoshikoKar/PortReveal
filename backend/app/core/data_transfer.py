@@ -76,6 +76,13 @@ INVENTORY_TABLES: tuple[tuple[str, type], ...] = (
 
 INVENTORY_BY_NAME = {name: model for name, model in INVENTORY_TABLES}
 
+# Soft FKs to scans.id: networks/devices are imported before scans, so these are
+# stripped on insert and restored after scans exist (ON DELETE SET NULL cycle).
+SOFT_SCAN_FK_COLUMNS: dict[str, str] = {
+    "networks": "baseline_scan_id",
+    "devices": "last_port_scan_id",
+}
+
 # Rows per export page / import insert batch.
 BATCH_ROWS = 2000
 
@@ -392,11 +399,20 @@ def import_inventory(db: Session, src: Path | BinaryIO, *, confirm: bool) -> dic
         # Drop identity-map entries so re-inserting the same primary keys is safe.
         db.expunge_all()
         imported: dict[str, int] = {}
+        soft_refs: dict[str, list[tuple[int, int]]] = {name: [] for name in SOFT_SCAN_FK_COLUMNS}
         for name, model in INVENTORY_TABLES:
             n = 0
             batch: list[dict] = []
+            soft_col = SOFT_SCAN_FK_COLUMNS.get(name)
             for data in _iter_table_rows(zf, name):
-                batch.append(_dict_to_kwargs(model, data))
+                kwargs = _dict_to_kwargs(model, data)
+                if soft_col is not None:
+                    ref = kwargs.get(soft_col)
+                    pk = kwargs.get("id")
+                    if ref is not None and pk is not None:
+                        soft_refs[name].append((int(pk), int(ref)))
+                    kwargs[soft_col] = None
+                batch.append(kwargs)
                 if len(batch) >= BATCH_ROWS:
                     _insert_batch(db, model, batch)
                     n += len(batch)
@@ -405,6 +421,10 @@ def import_inventory(db: Session, src: Path | BinaryIO, *, confirm: bool) -> dic
                 _insert_batch(db, model, batch)
                 n += len(batch)
             imported[name] = n
+        for name, col in SOFT_SCAN_FK_COLUMNS.items():
+            model = INVENTORY_BY_NAME[name]
+            for pk, ref in soft_refs[name]:
+                db.execute(update(model.__table__).where(model.__table__.c.id == pk).values({col: ref}))
         _reset_sequences(db, [name for name, _ in INVENTORY_TABLES])
         db.commit()
 

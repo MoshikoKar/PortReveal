@@ -4,9 +4,9 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Callable
 from urllib.parse import urljoin
 
 from .classify import BLANK_PAGE_REASON, unusable_page_reason

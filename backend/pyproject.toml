@@ -22,3 +22,7 @@ ignore = ["B008"]  # FastAPI dependency injection uses calls in argument default
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
 known-third-party = ["alembic"]
+
+[tool.ruff.lint.per-file-ignores]
+# Compact HTML email templates keep long inline style attributes.
+"app/core/notify.py" = ["E501"]

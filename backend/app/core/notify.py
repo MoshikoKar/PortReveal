@@ -39,6 +39,9 @@ log = logging.getLogger(__name__)
 SUBJECT_PREFIX = "[Network Monitor]"
 # Keep each category short so the daily mail stays scannable.
 MAX_LINES_PER_SECTION = 8
+# Cap one digest load so a large notify backlog cannot grow memory unboundedly;
+# remaining pending rows stay for the next run.
+PENDING_DIGEST_LIMIT = 500
 
 TITLES = {
     EV_DEVICE_DISCOVERED: "New devices",
@@ -363,9 +366,18 @@ def send_daily_digest() -> str:
 
 
 def _pending_all(db: Session, cfg: NotificationSettings) -> list[Event]:
-    rows = db.scalars(
-        select(Event).where(Event.notify.is_(True), Event.notified_at.is_(None))
-        .order_by(Event.created_at, Event.id)
-    ).unique().all()
-    allowed = set(cfg.event_types) | set(ALWAYS_NOTIFY_TYPES)
-    return [e for e in rows if e.event_type in allowed]
+    allowed = sorted(set(cfg.event_types) | set(ALWAYS_NOTIFY_TYPES))
+    if not allowed:
+        return []
+    return list(
+        db.scalars(
+            select(Event)
+            .where(
+                Event.notify.is_(True),
+                Event.notified_at.is_(None),
+                Event.event_type.in_(allowed),
+            )
+            .order_by(Event.created_at, Event.id)
+            .limit(PENDING_DIGEST_LIMIT)
+        ).unique().all()
+    )

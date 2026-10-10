@@ -15,6 +15,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..db import utcnow
 from ..models import (
     EV_TAG_ADDED,
     EV_TAG_REMOVED,
@@ -30,7 +31,6 @@ from ..models import (
     Network,
     PortHttp,
 )
-from ..db import utcnow
 from ..scanner.identify_truenas import looks_like_truenas
 from .compare import _Applier, device_label
 from .query.compile import service_from

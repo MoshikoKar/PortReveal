@@ -140,13 +140,40 @@ then update `POSTGRES_PASSWORD` in the production secret/env file and restart th
 app. Confirm `/api/health` before closing the maintenance window. Roll back both
 the role and env value together if the application cannot reconnect.
 
+## Deployment rollback
+
+Supported rollback is **retarget the previous application revision (or Docker image
+tag) and, when the schema changed, restore the pre-upgrade backup set**. Image
+tagging and the Windows/Linux upgrade checklists live in `README.md` (Upgrade
+sections). Record the Git SHA (and `network-finder:<sha>` / `network-finder:previous`
+tags on Linux) with every backup stamp.
+
+| Situation | Action |
+|---|---|
+| App bug; Alembic revision unchanged | Retag/`checkout` the prior revision or `network-finder:previous`, restart; no DB restore |
+| Migration applied or failed mid-upgrade | Restore pre-upgrade Postgres + appdata from the same stamp, then start the prior revision/image |
+| Unsure whether schema changed | Treat as migration case: restore backup + prior revision |
+
+After rollback: `GET /api/health` (JSON `status` ok), sign-in, inventory smoke check,
+then one controlled scan before re-enabling schedules.
+
+### Alembic downgrade policy
+
+Migration files may define `downgrade()` for local/dev use. **Production rollback
+must not use `alembic downgrade`.** Downgrades are not rehearsed as a release path,
+can drop or reshape data, and leave the database out of sync with the image that
+was running. Prefer restore from the pre-upgrade dump to a matching prior revision.
+Forward-fix only: a reviewed corrective migration on a restored copy, then cut
+over. Practice the restore+retag path on a disposable host or database copy before
+relying on it in an incident.
+
 ## Failed migration
 
 The application runs Alembic migrations before it accepts traffic. If startup
 reports `DATABASE MIGRATION FAILED`:
 
-1. Leave the app stopped. Do not run `alembic stamp`, edit the version table, or
-   reset the production database.
+1. Leave the app stopped. Do not run `alembic stamp`, edit the version table,
+   `alembic downgrade`, or reset the production database.
 2. Preserve the complete app/Postgres logs and take a database dump if Postgres is
    reachable.
 3. Confirm the app is using the intended production database and revision. Check
@@ -158,19 +185,78 @@ reports `DATABASE MIGRATION FAILED`:
      foreground. Do not use the generic `npm run db:migrate` unless
      `DATABASE_URL` explicitly points at production Postgres.
 5. If a migration itself failed or partially applied, stop. Escalate with the
-   migration name, database revision, logs, and backup timestamp. Use a reviewed
-   corrective migration, or restore the pre-upgrade backup and matching prior
-   application revision; do not improvise a downgrade.
+   migration name, database revision, logs, and backup timestamp. Recover with a
+   reviewed corrective migration on a copy, or restore the pre-upgrade backup and
+   matching prior application revision/image (see Deployment rollback above).
 6. After recovery, verify health, sign-in, inventory counts, a read-only search,
    and one controlled scan before resuming schedules.
 
-## Common recovery checks
+## Monitoring and alerting
 
-- Scanner unavailable: verify nmap/Npcap privileges and the route to the target
-  network; do not switch production to mock mode to conceal the outage.
-- Scan stuck after restart: the app marks interrupted scans failed; start a new
-  controlled scan after worker health is confirmed.
-- Database unavailable: check Postgres health and disk space before restarting the
-  app repeatedly.
-- Windows after reboot: confirm an interactive user session, Docker Desktop,
-  Task Scheduler history, the PID/log files, and `/api/health`.
+Network Finder does not ship paging or an alert manager. Product email digests
+(Settings → Notifications / watches) report inventory and watch matches; they are
+**not** a substitute for external ops monitoring. Point an outside probe or
+Prometheus/Alertmanager (or equivalent) at the host, and page on the conditions
+below.
+
+### Readiness and degraded database
+
+Probe `GET /api/health` (unauthenticated). Example body:
+
+```json
+{"status": "ok", "database": "ok", "version": "…"}
+```
+
+When the database check fails, the endpoint returns **HTTP 503** with
+`"status": "degraded"` and `"database": "error"`. `curl -sf` and the image
+`HEALTHCHECK` both fail on that status. Optionally still assert the JSON body:
+
+```bash
+# Linux / Git Bash — fail unless HTTP success and status is ok
+curl -sf "http://HOST:PORT/api/health" | python -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)"
+```
+
+```powershell
+# Windows PowerShell
+$r = Invoke-WebRequest "http://HOST:PORT/api/health"
+if ($r.StatusCode -ne 200) { throw "health HTTP $($r.StatusCode)" }
+$h = $r.Content | ConvertFrom-Json
+if ($h.status -ne 'ok') { throw "health degraded: $($h | ConvertTo-Json -Compress)" }
+```
+
+Optional scrape of authenticated `GET /api/metrics` (API token) is documented in
+`README.md` (Availability and capacity). Use it for trends; keep the unauthenticated
+health probe as the liveness/readiness signal for “is the app usable?”
+
+### Container and process restarts
+
+Alert when the app or database keeps coming back up after crashes:
+
+| Deploy | Signal |
+|---|---|
+| Linux Compose | `docker compose ps` / `docker events` restart storms; Compose `restart: unless-stopped` masking a crash loop; Docker `HEALTHCHECK` failing repeatedly on `app` |
+| Windows host | Task Scheduler task failures, missing `data/network-finder-prod.pid`, or unexpected process exit in `data/logs/production.log` |
+
+A single restart after a planned upgrade is normal. Page on repeated restarts in a
+short window or on health staying degraded after restart.
+
+### Failed scheduled scans (separate from digests)
+
+Inventory digests and watch emails mean “something changed on the network.” Ops
+alerts for **failed scheduled scans** mean “the nightly (or configured) inventory
+job did not complete.” Configure them separately so a quiet network does not hide a
+broken scanner, and a busy digest does not look like an outage.
+
+Practical signals:
+
+- Prometheus: rising `nf_scans_finished_total{status="failed"}` (from `/api/metrics`)
+  while the schedule is enabled — especially after the configured schedule time.
+- Authenticated `GET /api/system/status`: `scans.last_failed` newer than
+  `scans.last_successful` / `scans.last_completed` when a run was due
+  (`scans.next_scheduled` / schedule settings).
+- App logs: `scheduled scan` lines followed by scan failure or scanner-unavailable
+  errors around the schedule window.
+
+Do not rely on the daily digest SMTP path alone for this: digests only fire when
+there are pending notify events, so a failed scan with no inventory changes can
+produce no email.

@@ -31,6 +31,15 @@ def test_health_is_public(client):
     assert r.status_code == 200 and r.json()["database"] == "ok"
 
 
+def test_health_returns_503_when_database_fails(client, monkeypatch):
+    monkeypatch.setattr("app.api.system.check_db", lambda: (False, "boom"))
+    r = client.get("/api/health")
+    body = r.json()
+    assert r.status_code == 503
+    assert body["status"] == "degraded" and body["database"] == "error"
+    assert "version" in body
+
+
 def test_first_run_wizard_and_login(client):
     assert client.get("/api/setup/status").json()["needs_admin"] is True
     setup_admin(client)

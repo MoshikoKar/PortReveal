@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -27,7 +27,12 @@ STARTED = time.time()
 @router.get("/health")
 def health():
     ok, _ = check_db()
-    return {"status": "ok" if ok else "degraded", "database": "ok" if ok else "error", "version": __version__}
+    body = {
+        "status": "ok" if ok else "degraded",
+        "database": "ok" if ok else "error",
+        "version": __version__,
+    }
+    return body if ok else JSONResponse(status_code=503, content=body)
 
 
 @router.get("/metrics", response_class=PlainTextResponse)

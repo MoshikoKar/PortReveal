@@ -2,22 +2,21 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from ...models import WEB_PAGE_HOME, WEB_PAGE_LOGIN, WEB_PAGE_OTHER, WEB_PAGE_REGISTER
 from .classify import (
     candidate_paths_for_endpoint,
-    unusable_page_reason,
     extract_title,
-    is_same_target,
     looks_like_login_html,
     redirect_is_external,
+    unusable_page_reason,
 )
 from .identify_ai import identify_local_ai
-from ...models import WEB_PAGE_HOME, WEB_PAGE_LOGIN, WEB_PAGE_OTHER, WEB_PAGE_REGISTER
 
 # Fingerprint paths tried on every web endpoint. Identity still comes only from
 # response content (see identify_ai) — never from the port number alone.

@@ -75,7 +75,7 @@ VOLUME ["/data"]
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD python -c "import os,urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"APP_PORT\",\"8080\")}/api/health', timeout=4)" || exit 1
+  CMD python -c "import json,os,urllib.request; r=urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"APP_PORT\",\"8080\")}/api/health', timeout=4); d=json.load(r); assert d.get('status')=='ok'" || exit 1
 
 # Single process on purpose: the scan queue and scheduler run inside it.
 CMD ["sh", "-c", "exec uvicorn app.main:app --host ${APP_HOST:-0.0.0.0} --port ${APP_PORT:-8080} --proxy-headers --forwarded-allow-ips ${FORWARDED_ALLOW_IPS:-127.0.0.1} --log-level warning"]

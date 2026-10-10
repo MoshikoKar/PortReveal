@@ -247,14 +247,22 @@ export default function Scans() {
       {tab === 'web-captures' && (
         <>
           <Card title="Active Web Capture jobs" flush>
-            {!wcActive.data?.running.length && !wcActive.data?.queued.length ? (
-              <Empty>No Web Capture running or queued.</Empty>
+            {wcActive.error && (
+              <div className="card-body stack">
+                <ErrorBox error={wcActive.error} />
+                <div><button type="button" className="btn sm" onClick={() => wcActive.reload()}>Retry</button></div>
+              </div>
+            )}
+            {!wcActive.data ? (
+              wcActive.error ? null : <SkeletonRows cols={isAdmin ? 6 : 5} rows={3} />
+            ) : !wcActive.data.running.length && !wcActive.data.queued.length ? (
+              wcActive.error ? null : <Empty>No Web Capture running or queued.</Empty>
             ) : (
               <div className="table-wrap">
               <table>
                 <thead><tr><th>#</th><th>Targets</th><th>Status</th><th>Progress</th><th>Started</th>{isAdmin && <th />}</tr></thead>
                 <tbody>
-                  {[...(wcActive.data?.running ?? []), ...(wcActive.data?.queued ?? [])].map((c) => (
+                  {[...wcActive.data.running, ...wcActive.data.queued].map((c) => (
                     <tr key={c.id}>
                       <td>{c.id}</td>
                       <td><CaptureTargets c={c} /></td>
@@ -351,7 +359,17 @@ export default function Scans() {
         <>
 
       <Card title="Active scans" flush>
-        {!running.length && !queued.length ? <Empty>No scan running or queued.</Empty> : (
+        {active.error && (
+          <div className="card-body stack">
+            <ErrorBox error={active.error} />
+            <div><button type="button" className="btn sm" onClick={() => active.reload()}>Retry</button></div>
+          </div>
+        )}
+        {!active.data ? (
+          active.error ? null : <SkeletonRows cols={isAdmin ? 8 : 7} rows={3} />
+        ) : !running.length && !queued.length ? (
+          active.error ? null : <Empty>No scan running or queued.</Empty>
+        ) : (
           <div className="table-wrap">
           <table>
             <thead><tr><th>#</th><th>Type</th><th>Scope</th><th>Status</th><th style={{ width: '28%' }}>Progress</th><th>Hosts</th><th>Started</th>{isAdmin && <th />}</tr></thead>
