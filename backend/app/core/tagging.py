@@ -30,6 +30,7 @@ from ..models import (
     Event,
     Network,
     PortHttp,
+    PortTls,
 )
 from ..scanner.identify_truenas import looks_like_truenas
 from .compare import _Applier, device_label
@@ -83,6 +84,7 @@ class Service:
     server: str | None = None
     login: bool = False
     default_page: bool = False
+    web_vnc: bool = False
 
     @property
     def label(self) -> str:
@@ -96,6 +98,8 @@ class DeviceFacts:
     services: list[Service] = field(default_factory=list)
     tags: list[DeviceTag] = field(default_factory=list)
     profile: DeviceProfile | None = None
+    tls_expired_ports: list[str] = field(default_factory=list)
+    tls_expires_soon_ports: list[str] = field(default_factory=list)
 
     @property
     def open_ports(self) -> set[int]:
@@ -116,7 +120,21 @@ def load_facts(db: Session, device_ids: list[int]) -> list[DeviceFacts]:
         facts[p.device_id].services.append(Service(
             p.port, p.protocol, p.service, p.product, p.version, p.extra_info, p.cpe,
             h.title if h else None, h.server if h else None, bool(h and h.login), bool(h and h.default_page),
+            bool(h and h.web_vnc),
         ))
+    tls_ports = {p.id: p for p in db.scalars(select(DevicePort).where(
+        DevicePort.id.in_(select(PortTls.device_port_id).where(PortTls.device_id.in_(device_ids)))
+    ))}
+    for t in db.scalars(select(PortTls).where(PortTls.device_id.in_(device_ids))):
+        f = facts.get(t.device_id)
+        if f is None:
+            continue
+        port = tls_ports.get(t.device_port_id)
+        port_label = f"{port.port}/{port.protocol}" if port else f"port_id={t.device_port_id}"
+        if t.expired:
+            f.tls_expired_ports.append(port_label)
+        elif t.expires_soon:
+            f.tls_expires_soon_ports.append(port_label)
     for t in db.scalars(select(DeviceTag).where(DeviceTag.device_id.in_(device_ids))):
         facts[t.device_id].tags.append(t)
     for prof in db.scalars(select(DeviceProfile).where(DeviceProfile.device_id.in_(device_ids))):
@@ -221,6 +239,8 @@ RULES: tuple[Rule, ...] = (
     Rule("web-server", "web-server", 10, check=_web),
     Rule("windows", services=("msrpc", "microsoft-ds"), host=("windows",)),
     Rule("remote-access", ports=(3389, 5900, 22), services=("ms-wbt-server", "vnc", "ssh")),
+    Rule("web-vnc", "remote-access", 55, http=("novnc", "guacamole", "websockify"),
+         check=lambda f: next((f"web VNC UI on {s.label}" for s in f.services if getattr(s, "web_vnc", False)), None)),
 )
 
 

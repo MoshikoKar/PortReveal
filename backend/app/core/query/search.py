@@ -22,14 +22,48 @@ from ...models import (
     WebPage,
 )
 from ..mockdata import device_visible
-from .compile import Ctx, compile_host, compile_row, has_port_terms, needs_http, service_from, validate
-from .parser import Node, QueryError, parse, quote_value
+from .compile import (
+    Ctx, compile_host, compile_row, has_port_terms, join_flags, needs_http, service_from, validate,
+)
+from .parser import And, Node, QueryError, parse, quote_value, terms
 from .sqlfn import ipv4_int_expr
+from .values import time_window
 
 SERVICES_PER_HOST = 6
 MAX_FACETS = 12
 MAX_FACET_LIMIT = 50
 HOST_SORTS = ("score", "ip", "last_seen", "first_seen", "hostname")
+
+
+def extract_before(node: Node | None) -> tuple[Node | None, object | None]:
+    """Pull `before:` out of the AST. Returns (remaining node, date|None for historical search)."""
+    from datetime import date as date_cls, timedelta
+
+    if node is None:
+        return None, None
+    before_date = None
+    kept: list[Node] = []
+    for t in terms(node):
+        if t.field and t.field.lower() == "before":
+            raw = t.value.lstrip("<>= ").strip()
+            try:
+                before_date = date_cls.fromisoformat(raw[:10]) - timedelta(days=1)
+            except ValueError:
+                try:
+                    _start, end = time_window(t, t.op, raw, Ctx().now)
+                    ref = end or _start or Ctx().now
+                    before_date = ref.date() if hasattr(ref, "date") else None
+                except Exception:
+                    before_date = None
+            continue
+        kept.append(t)
+    if before_date is None:
+        return node, None
+    if not kept:
+        return None, before_date
+    if len(kept) == 1:
+        return kept[0], before_date
+    return And(tuple(kept)), before_date
 
 
 def prepare(text: str | None) -> Node | None:
@@ -47,9 +81,12 @@ def host_conditions(db: Session, node: Node | None, ctx: Ctx | None = None) -> l
     return [device_visible(db), compile_host(node, ctx or make_ctx(db))]
 
 
-def _rows_from():
-    """Open services joined with their device and HTTP metadata (the row context)."""
-    return service_from(True).join(Device.__table__, Device.id == DevicePort.device_id)
+def _rows_from(node: Node | None = None):
+    """Open services joined with their device and enrichment metadata (the row context)."""
+    if node is None:
+        return service_from(True, True, True, False).join(Device.__table__, Device.id == DevicePort.device_id)
+    http, tls, snmp, shot = join_flags(node)
+    return service_from(True, tls, snmp, shot).join(Device.__table__, Device.id == DevicePort.device_id)
 
 
 def _host_order(db: Session, sort: str, desc: bool) -> list:
@@ -75,7 +112,9 @@ def http_out(h: PortHttp | None) -> dict | None:
         return None
     return {"scheme": h.scheme, "status": h.status, "title": h.title, "server": h.server,
             "content_type": h.content_type, "location": h.location, "login": h.login,
-            "default_page": h.default_page, "last_seen": h.last_seen}
+            "default_page": h.default_page, "favicon_hash": h.favicon_hash,
+            "html_hash": h.html_hash, "header_set_hash": h.header_set_hash,
+            "web_vnc": h.web_vnc, "last_seen": h.last_seen}
 
 
 def service_out(p: DevicePort, http: PortHttp | None) -> dict:

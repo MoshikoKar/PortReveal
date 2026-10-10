@@ -138,3 +138,61 @@ def subnets(db: Session = Depends(get_db), user: User = Depends(current_user)):
             "avg_score": round(int(score_sum or 0) / hosts, 1), "query": f"net:{net}",
         })
     return {"items": items}
+
+
+@router.get("/heatmap")
+def subnet_heatmap(
+    subnet: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """/24 grid coloured by exposure score (LAN version of Shodan Maps).
+
+    Without `subnet`, returns the densest /24. With `subnet=10.0.1.0/24`, returns that grid.
+    """
+    ok = device_visible(db)
+    if subnet:
+        try:
+            net = ipaddress.ip_network(subnet, strict=False)
+        except ValueError as exc:
+            from fastapi import HTTPException
+            raise HTTPException(422, str(exc)) from exc
+        if net.version != 4 or net.prefixlen != 24:
+            from fastapi import HTTPException
+            raise HTTPException(422, "heatmap requires an IPv4 /24")
+        base = int(net.network_address)
+    else:
+        # Pick the /24 with the most hosts
+        ip_key = ipv4_int_expr(db.get_bind().dialect.name, Device.current_ip)
+        block = (ip_key // 256).label("block")
+        top = db.execute(
+            select(block, func.count().label("n")).where(ok, Device.current_ip.like("%.%.%.%"))
+            .group_by(block).order_by(func.count().desc()).limit(1)
+        ).first()
+        if not top or top[0] is None:
+            return {"subnet": None, "cells": [], "hosts": 0}
+        base = int(top[0]) * 256
+        net = ipaddress.IPv4Network((base, 24))
+
+    devices = db.scalars(select(Device).where(ok, Device.current_ip.like("%.%.%.%"))).all()
+    by_host: dict[int, Device] = {}
+    for d in devices:
+        try:
+            addr = int(ipaddress.IPv4Address(d.current_ip))
+        except ValueError:
+            continue
+        if addr & ~0xFF == base:
+            by_host[addr & 0xFF] = d
+    cells = []
+    for i in range(256):
+        d = by_host.get(i)
+        cells.append({
+            "host": i,
+            "ip": str(ipaddress.IPv4Address(base + i)),
+            "present": d is not None,
+            "score": (d.exposure_score or 0) if d else 0,
+            "uuid": d.uuid if d else None,
+            "hostname": d.hostname if d else None,
+            "status": d.status if d else None,
+        })
+    return {"subnet": str(net), "cells": cells, "hosts": len(by_host), "query": f"net:{net}"}

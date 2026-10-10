@@ -32,13 +32,16 @@ from ...models import (
 from ...netutils import AddressSet, TargetError
 from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
+from ..image_intel import average_hash, ocr_text
 from ..web_storage import delete_capture_files, write_screenshot
 from .classify import BLANK_PAGE_REASON, unusable_page_reason
 from .inventory import find_web_endpoints
 from .mock import mock_probe_endpoint, mock_rtsp_endpoint, placeholder_image
 from .probe import EndpointProbe, probe_endpoint
+from .rdp import freerdp_available, grab_rdp_frame
 from .rtsp import ffmpeg_available, placeholder_rtsp_webp, probe_rtsp
 from .screenshot import playwright_available, take_screenshot
+from .vnc import grab_vnc_frame, vnc_tool_available
 from .wordlist import discovery_paths
 
 log = logging.getLogger(__name__)
@@ -144,7 +147,8 @@ class _ProbePrefetcher:
 
     def __init__(self, endpoints: list[dict], workers: int, probe: Callable[[dict, Callable[[], bool]], ProbeOutcome],
                  cancelled: Callable[[], bool]):
-        self._queue = [(i, ep) for i, ep in enumerate(endpoints) if ep["scheme"] not in ("rtsp", "rtsps")]
+        self._queue = [(i, ep) for i, ep in enumerate(endpoints)
+                       if ep["scheme"] not in ("rtsp", "rtsps", "rdp", "vnc")]
         self._pos = 0
         self._workers = max(1, workers)
         self._futures: dict[int, Future] = {}
@@ -268,6 +272,10 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             notes.append("Chromium unavailable; HTTP metadata captured without screenshots.")
         if not ffmpeg_ok and not mock and any(e["scheme"] in ("rtsp", "rtsps") for e in endpoint_data):
             notes.append("ffmpeg unavailable; RTSP endpoints recorded without frames or live proxy.")
+        if not mock and any(e["scheme"] == "rdp" for e in endpoint_data) and not freerdp_available():
+            notes.append("freerdp unavailable; RDP endpoints recorded without screenshots.")
+        if not mock and any(e["scheme"] == "vnc" for e in endpoint_data) and not vnc_tool_available():
+            notes.append("VNC tools unavailable; VNC endpoints recorded without screenshots.")
 
         # (ip, landing URL) -> (status, relpath, error) of a screenshot already taken in this job,
         # so e.g. http:80 redirecting to the https:443 page reuses that image instead of reloading it
@@ -304,6 +312,23 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                     ctx=ctx,
                     mock=mock,
                     ffmpeg_ok=ffmpeg_ok,
+                    shot_budget=shot_budget,
+                    timeout=cfg.http_timeout_seconds,
+                    pages_done=pages_done,
+                    screenshots_done=screenshots_done,
+                    had_failures=had_failures,
+                    notes=notes,
+                )
+                continue
+
+            # --- RDP / VNC: still grab, empty-auth only (no credential guessing) -----------
+            if ep["scheme"] in ("rdp", "vnc"):
+                pages_done, screenshots_done, shot_budget, had_failures = _capture_remote_desktop(
+                    capture_id=capture_id,
+                    capture_uuid=capture_uuid,
+                    ep=ep,
+                    ctx=ctx,
+                    mock=mock,
                     shot_budget=shot_budget,
                     timeout=cfg.http_timeout_seconds,
                     pages_done=pages_done,
@@ -553,6 +578,8 @@ def _capture_rtsp_endpoint(
     shot_status = SCREENSHOT_SKIPPED
     shot_path = None
     shot_err: str | None = None
+    phash_val: str | None = None
+    ocr_val: str | None = None
     page_uuid = new_uuid()
     title = "RTSP stream"
     content_type = "application/rtsp"
@@ -567,11 +594,13 @@ def _capture_rtsp_endpoint(
         content_type = pr.content_type or content_type
         server_header = pr.server_header or server_header
         if shot_budget > 0:
-            write_screenshot(capture_uuid, page_uuid, placeholder_rtsp_webp())
+            data = placeholder_rtsp_webp()
+            write_screenshot(capture_uuid, page_uuid, data)
             shot_status = SCREENSHOT_CAPTURED
             shot_path = f"{capture_uuid}/{page_uuid}.webp"
             shot_budget -= 1
             screenshots_done += 1
+            phash_val, ocr_val = average_hash(data), ocr_text(data)
     elif not ffmpeg_ok:
         shot_status = SCREENSHOT_SKIPPED
         shot_err = "ffmpeg unavailable"
@@ -599,10 +628,13 @@ def _capture_rtsp_endpoint(
                     shot_status = SCREENSHOT_CAPTURED
                     shot_budget -= 1
                     screenshots_done += 1
+                    phash_val = average_hash(frame.data)
+                    ocr_val = ocr_text(frame.data)
                 except Exception:
                     shot_status = SCREENSHOT_FAILED
                     shot_err = "screenshot save failed"
                     had_failures = True
+                    phash_val = ocr_val = None
             elif frame.status == "skipped":
                 shot_status = SCREENSHOT_SKIPPED
                 shot_err = frame.error
@@ -638,8 +670,104 @@ def _capture_rtsp_endpoint(
                 screenshot_status=shot_status,
                 screenshot_relpath=shot_path,
                 capture_error=shot_err,
+                phash=phash_val,
+                ocr_text=ocr_val,
             )
         )
+        pages_done += 1
+    return pages_done, screenshots_done, shot_budget, had_failures
+
+
+def _capture_remote_desktop(
+    *,
+    capture_id: int,
+    capture_uuid: str,
+    ep: dict,
+    ctx: CaptureContext,
+    mock: bool,
+    shot_budget: int,
+    timeout: float,
+    pages_done: int,
+    screenshots_done: int,
+    had_failures: bool,
+    notes: list[str],
+) -> tuple[int, int, int, bool]:
+    """Capture an open RDP or VNC service (empty credentials only)."""
+    scheme = ep["scheme"]
+    host = ep["hosts"][0]
+    url = f"{scheme}://{host}:{ep['port']}"
+    page_uuid = new_uuid()
+    title = "RDP desktop" if scheme == "rdp" else "VNC desktop"
+    shot_status = SCREENSHOT_SKIPPED
+    shot_path = None
+    shot_err: str | None = None
+    phash_val: str | None = None
+    ocr_val: str | None = None
+    frame_data: bytes | None = None
+
+    if mock:
+        if shot_budget > 0:
+            frame_data = placeholder_image()
+            write_screenshot(capture_uuid, page_uuid, frame_data)
+            shot_status = SCREENSHOT_CAPTURED
+            shot_path = f"{capture_uuid}/{page_uuid}.webp"
+            shot_budget -= 1
+            screenshots_done += 1
+    elif scheme == "rdp":
+        if not freerdp_available():
+            shot_err = "freerdp unavailable"
+            notes.append(f"{ep['ip']}:{ep['port']}: RDP recorded without frame (freerdp unavailable).")
+        else:
+            frame = grab_rdp_frame(ep["ip"], ep["port"], timeout=max(timeout, 10.0))
+            if frame.status == "captured" and frame.data and shot_budget > 0:
+                frame_data = frame.data
+                shot_path = write_screenshot(capture_uuid, page_uuid, frame.data)
+                shot_status = SCREENSHOT_CAPTURED
+                shot_budget -= 1
+                screenshots_done += 1
+            else:
+                shot_status = SCREENSHOT_SKIPPED if frame.auth_required or frame.status == "skipped" else SCREENSHOT_FAILED
+                shot_err = frame.error or "rdp frame failed"
+                if frame.auth_required:
+                    notes.append(f"{ep['ip']}:{ep['port']}: RDP requires auth (skipped; no credential guessing).")
+                elif frame.status == "failed":
+                    had_failures = True
+    else:  # vnc
+        if not vnc_tool_available():
+            shot_err = "vnc tools unavailable"
+            notes.append(f"{ep['ip']}:{ep['port']}: VNC recorded without frame (tools unavailable).")
+        else:
+            frame = grab_vnc_frame(ep["ip"], ep["port"], timeout=max(timeout, 10.0))
+            if frame.status == "captured" and frame.data and shot_budget > 0:
+                frame_data = frame.data
+                shot_path = write_screenshot(capture_uuid, page_uuid, frame.data)
+                shot_status = SCREENSHOT_CAPTURED
+                shot_budget -= 1
+                screenshots_done += 1
+            else:
+                shot_status = SCREENSHOT_SKIPPED if frame.auth_required or frame.status == "skipped" else SCREENSHOT_FAILED
+                shot_err = frame.error or "vnc frame failed"
+                if frame.auth_required:
+                    notes.append(f"{ep['ip']}:{ep['port']}: VNC requires a password (skipped).")
+                elif frame.status == "failed":
+                    had_failures = True
+
+    if frame_data is not None:
+        phash_val, ocr_val = average_hash(frame_data), ocr_text(frame_data)
+
+    with session_scope() as db:
+        job = db.get(WebCapture, capture_id)
+        if job is None or job.status == WEB_CAPTURE_CANCELLED:
+            raise CaptureCancelled()
+        db.add(WebPage(
+            uuid=page_uuid, capture_id=capture_id, device_id=ep["device_id"],
+            device_port_id=ep["device_port_id"], ip=ep["ip"], port=ep["port"],
+            scheme=scheme, host_used=host, kind=WEB_PAGE_STREAM, url=url, final_url=url,
+            redirect_target=None, external_redirect=False, http_status=None, title=title,
+            content_type=f"application/{scheme}", server_header=ep.get("service") or scheme,
+            tls_verified=None, screenshot_status=shot_status, screenshot_relpath=shot_path,
+            capture_error=shot_err, phash=phash_val, ocr_text=ocr_val,
+        ))
         pages_done += 1
     return pages_done, screenshots_done, shot_budget, had_failures
 

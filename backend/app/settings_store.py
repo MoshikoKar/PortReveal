@@ -96,6 +96,8 @@ class ScanSettings(BaseModel):
     host_timeout_minutes: int = Field(15, ge=1, le=240)
     full_host_timeout_minutes: int = Field(120, ge=5, le=720)
     os_detection: bool = False
+    # Privileged -sU on a small allowlist after TCP service scan (DNS/SNMP/NTP/SSDP/mDNS/IPMI/CoAP).
+    udp_service_scan: bool = False
     disappear_after_missed: int = Field(2, ge=1, le=30)
     mass_change_guard_percent: int = Field(50, ge=10, le=100)
     keep_raw_xml: bool = False
@@ -187,6 +189,15 @@ class RetentionSettings(BaseModel):
     days: int = Field(365, ge=7, le=3650)
 
 
+class SnmpSettings(BaseModel):
+    """Optional read-only SNMPv2c community for sys* enrichment (never bruteforced)."""
+
+    enabled: bool = False
+    community: str = ""  # plaintext only until saved; prefer community_enc
+    community_enc: str = ""
+    # Future: SNMPv3 hooks (username / auth / priv) — not implemented yet.
+
+
 class WebCaptureSettings(BaseModel):
     """On-demand web interface capture (inventory enrichment)."""
 
@@ -230,6 +241,7 @@ SECTIONS: dict[str, type[BaseModel]] = {
     "ldap": LdapSettings,
     "retention": RetentionSettings,
     "web_capture": WebCaptureSettings,
+    "snmp": SnmpSettings,
 }
 
 T = TypeVar("T", bound=BaseModel)

@@ -76,12 +76,38 @@ _SPECS: tuple[FieldSpec, ...] = (
     FieldSpec("http.login", PORT, "bool", "HTTP", "Landing page is a login form", "http.login:true"),
     FieldSpec("http.default_page", PORT, "bool", "HTTP", "Web server default/placeholder page",
               "http.default_page:true"),
+    FieldSpec("http.favicon", PORT, "int", "HTTP", "Favicon mmh3 hash (Shodan-compatible)",
+              "http.favicon:-670972762", ("http.favicon_hash", "favicon")),
+    FieldSpec("http.html_hash", PORT, "exact", "HTTP", "SHA-256 of landing HTML fingerprint",
+              "http.html_hash:abc…"),
+    FieldSpec("http.web_vnc", PORT, "bool", "HTTP", "Browser VNC/RDP gateway (noVNC, Guacamole)",
+              "http.web_vnc:true", ("web_vnc",)),
+    # --- TLS --------------------------------------------------------------------------------------------
+    FieldSpec("ssl.cert.subject.cn", PORT, "text", "TLS", "Certificate CN", "ssl.cert.subject.cn:*.corp.local",
+              ("ssl.cn", "cert.cn")),
+    FieldSpec("ssl.cert.issuer", PORT, "text", "TLS", "Certificate issuer", "ssl.cert.issuer:Let's Encrypt"),
+    FieldSpec("ssl.cert.fingerprint", PORT, "exact", "TLS", "SHA-256 fingerprint", "ssl.cert.fingerprint:ab…",
+              ("ssl.fp",)),
+    FieldSpec("ssl.cert.expired", PORT, "bool", "TLS", "Certificate is expired", "ssl.cert.expired:true"),
+    FieldSpec("ssl.cert.expires_soon", PORT, "bool", "TLS", "Expires within 30 days", "ssl.cert.expires_soon:true"),
+    FieldSpec("ssl.cert.self_signed", PORT, "bool", "TLS", "Self-signed certificate", "ssl.cert.self_signed:true"),
+    FieldSpec("ssl.cert.wildcard", PORT, "bool", "TLS", "Wildcard certificate", "ssl.cert.wildcard:true"),
+    FieldSpec("ssl.cert.weak", PORT, "bool", "TLS", "Weak key or SHA-1 signature", "ssl.cert.weak:true"),
+    # --- SNMP -------------------------------------------------------------------------------------------
+    FieldSpec("snmp.sysname", PORT, "text", "SNMP", "sysName", "snmp.sysname:switch01"),
+    FieldSpec("snmp.sysdescr", PORT, "text", "SNMP", "sysDescr", "snmp.sysdescr:Cisco"),
+    FieldSpec("snmp.vendor", PORT, "text", "SNMP", "Vendor from sysObjectID", "snmp.vendor:Cisco"),
+    # --- point-in-time (extracted by search API; not a row filter) ---------------------------------------
+    FieldSpec("before", HOST, "time", "History", "Evaluate against the last snapshot before this date",
+              "before:2026-09-01"),
     # --- presence ---------------------------------------------------------------------------------------
-    FieldSpec("has", HOST, "has", "Presence", "Has a property: port, http, cpe, screenshot, login, tag, owner, "
-              "notes, mac, hostname, os", "has:screenshot"),
+    FieldSpec("screenshot.text", PORT, "text", "Capture", "OCR text from a captured screenshot",
+              "screenshot.text:admin"),
+    FieldSpec("has", HOST, "has", "Presence", "Has a property: port, http, cpe, screenshot, login, tls, snmp, "
+              "tag, owner, notes, mac, hostname, os", "has:screenshot"),
 )
 
-HAS_PORT_VALUES = frozenset({"http", "cpe", "screenshot", "login", "port"})
+HAS_PORT_VALUES = frozenset({"http", "cpe", "screenshot", "login", "port", "tls", "snmp"})
 HAS_HOST_VALUES = frozenset({"tag", "tags", "owner", "notes", "mac", "hostname", "os"})
 
 FIELDS: dict[str, FieldSpec] = {}

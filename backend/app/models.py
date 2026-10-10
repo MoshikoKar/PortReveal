@@ -66,6 +66,7 @@ EV_TAG_ADDED = "tag_added"
 EV_TAG_REMOVED = "tag_removed"
 EV_WATCH_MATCH = "watch_match"
 EV_POLICY_VIOLATION = "policy_violation"
+EV_BANNER_CHANGED = "banner_changed"
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -80,6 +81,7 @@ EVENT_TYPES = (
     EV_TAG_REMOVED,
     EV_WATCH_MATCH,
     EV_POLICY_VIOLATION,
+    EV_BANNER_CHANGED,
 )
 # Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
 ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION)
@@ -97,6 +99,7 @@ EVENT_SEVERITY = {
     EV_SERVICE_DETECTED: "info",
     EV_TAG_ADDED: "info",
     EV_TAG_REMOVED: "info",
+    EV_BANNER_CHANGED: "info",
 }
 
 SEVERITIES = ("high", "medium", "low", "info")
@@ -109,6 +112,13 @@ TAG_SOURCE_SUPPRESSED = "suppressed"
 TAG_SOURCES = (TAG_SOURCE_RULE, TAG_SOURCE_MANUAL, TAG_SOURCE_SUPPRESSED)
 SEARCH_KIND_WATCH = "watch"
 SEARCH_KIND_POLICY = "policy"
+
+CPE_SOURCE_NMAP = "nmap"
+CPE_SOURCE_FAVICON = "favicon"
+CPE_SOURCE_SNMP = "snmp"
+CPE_SOURCE_SSDP = "ssdp"
+CPE_SOURCE_HTTP = "http"
+CPE_SOURCES = (CPE_SOURCE_NMAP, CPE_SOURCE_FAVICON, CPE_SOURCE_SNMP, CPE_SOURCE_SSDP, CPE_SOURCE_HTTP)
 
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
@@ -225,6 +235,7 @@ class Device(Base):
     device_type: Mapped[str | None] = mapped_column(String(40), index=True)
     exposure_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    ssh_hostkey_sha256: Mapped[str | None] = mapped_column(String(64))
 
     ports: Mapped[list[DevicePort]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DevicePort.port"
@@ -280,6 +291,14 @@ class DevicePort(Base):
     device: Mapped[Device] = relationship(back_populates="ports")
     http: Mapped[PortHttp | None] = relationship(cascade="all, delete-orphan", uselist=False,
                                                  back_populates="port_row")
+    tls: Mapped[PortTls | None] = relationship(cascade="all, delete-orphan", uselist=False,
+                                               back_populates="port_row")
+    snmp: Mapped[PortSnmp | None] = relationship(cascade="all, delete-orphan", uselist=False,
+                                                 back_populates="port_row")
+    banners: Mapped[list[ServiceBanner]] = relationship(
+        cascade="all, delete-orphan", order_by="ServiceBanner.seen_at.desc()",
+    )
+    cpes: Mapped[list[PortCpe]] = relationship(cascade="all, delete-orphan")
 
 
 class PortHttp(Base):
@@ -297,9 +316,94 @@ class PortHttp(Base):
     location: Mapped[str | None] = mapped_column(Text)  # redirect target
     login: Mapped[bool] = mapped_column(Boolean, default=False)
     default_page: Mapped[bool] = mapped_column(Boolean, default=False)
+    favicon_hash: Mapped[int | None] = mapped_column(Integer, index=True)  # mmh3, Shodan-compatible
+    html_hash: Mapped[str | None] = mapped_column(String(64))
+    header_set_hash: Mapped[str | None] = mapped_column(String(64))
+    web_vnc: Mapped[bool] = mapped_column(Boolean, default=False)  # noVNC / Guacamole / websockify UI
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     port_row: Mapped[DevicePort] = relationship(back_populates="http")
+
+
+class ServiceBanner(Base):
+    """Truncated banner / probe text for one open port. New row only when the hash changes."""
+
+    __tablename__ = "service_banners"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), index=True)
+    hash: Mapped[str] = mapped_column(String(64), index=True)
+    raw_truncated: Mapped[str] = mapped_column(Text)
+    seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class PortTls(Base):
+    """TLS certificate observed on an open port (HTTPS, LDAPS, RDP, etc.)."""
+
+    __tablename__ = "port_tls"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), unique=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    cn: Mapped[str | None] = mapped_column(String(255), index=True)
+    san: Mapped[str | None] = mapped_column(Text)
+    issuer: Mapped[str | None] = mapped_column(String(500))
+    not_before: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    not_after: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    fingerprint_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    self_signed: Mapped[bool] = mapped_column(Boolean, default=False)
+    expired: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_soon: Mapped[bool] = mapped_column(Boolean, default=False)  # < 30 days
+    wildcard: Mapped[bool] = mapped_column(Boolean, default=False)
+    weak: Mapped[bool] = mapped_column(Boolean, default=False)  # SHA-1 / weak key
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    port_row: Mapped[DevicePort] = relationship(back_populates="tls")
+
+
+class PortCpe(Base):
+    """One CPE string for a port, with provenance (nmap or rule-produced)."""
+
+    __tablename__ = "port_cpes"
+    __table_args__ = (UniqueConstraint("device_port_id", "cpe", "source", name="uq_port_cpe_source"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), index=True)
+    cpe: Mapped[str] = mapped_column(String(255), index=True)
+    source: Mapped[str] = mapped_column(String(20), default=CPE_SOURCE_NMAP)
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class PortSnmp(Base):
+    """Read-only SNMPv2c sys* fields from an open UDP/161 (or TCP) SNMP service."""
+
+    __tablename__ = "port_snmp"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), unique=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    sys_descr: Mapped[str | None] = mapped_column(Text)
+    sys_name: Mapped[str | None] = mapped_column(String(255))
+    sys_object_id: Mapped[str | None] = mapped_column(String(255))
+    sys_location: Mapped[str | None] = mapped_column(String(255))
+    sys_contact: Mapped[str | None] = mapped_column(String(255))
+    vendor: Mapped[str | None] = mapped_column(String(120))
+    model: Mapped[str | None] = mapped_column(String(120))
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    port_row: Mapped[DevicePort] = relationship(back_populates="snmp")
+
+
+class WebhookEndpoint(Base):
+    """Outbound event webhook (SIEM / automation)."""
+
+    __tablename__ = "webhook_endpoints"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    url: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    secret_enc: Mapped[str | None] = mapped_column(String(500))
+    event_types: Mapped[list | None] = mapped_column(JSON)  # None / empty = all
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class DeviceTag(Base):
@@ -554,6 +658,8 @@ class WebPage(Base):
     screenshot_status: Mapped[str] = mapped_column(String(20), default=SCREENSHOT_NOT_REQUESTED)
     screenshot_relpath: Mapped[str | None] = mapped_column(String(500))
     capture_error: Mapped[str | None] = mapped_column(String(500))
+    phash: Mapped[str | None] = mapped_column(String(32))  # perceptual hash of screenshot
+    ocr_text: Mapped[str | None] = mapped_column(Text)  # optional OCR of screenshot
     captured_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
     capture: Mapped[WebCapture] = relationship(back_populates="pages")

@@ -1,0 +1,26 @@
+# Declarative device tag rules (versioned). Loaded by tagging.py; Python RULES remain the runtime
+# source of truth until a full YAML evaluator lands — this file documents the pack.
+version: 1
+rules:
+  - tag: domain-controller
+    type: domain-controller
+    priority: 100
+    all_ports: [88, 389, 445]
+    reason: "ports 88, 389, 445 open"
+  - tag: hypervisor
+    type: hypervisor
+    priority: 90
+    products: ["vmware esxi", "proxmox"]
+  - tag: nas
+    type: nas
+    priority: 70
+    products: ["synology", "qnap", "truenas", "freenas"]
+    note: "TrueNAS identify folded in via looks_like_truenas check"
+  - tag: remote-access
+    ports: [3389, 5900, 22]
+    services: ["ms-wbt-server", "vnc", "ssh"]
+  - tag: web-vnc
+    type: remote-access
+    priority: 55
+    http: ["novnc", "guacamole", "websockify"]
+    reason: "browser VNC/RDP gateway"

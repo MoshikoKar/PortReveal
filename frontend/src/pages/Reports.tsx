@@ -195,6 +195,58 @@ export default function Reports() {
           </div>
         )}
       </Card>
+
+      <HeatmapCard />
     </>
+  );
+}
+
+interface HeatCell {
+  host: number; ip: string; present: boolean; score: number;
+  uuid: string | null; hostname: string | null; status: string | null;
+}
+interface Heatmap { subnet: string | null; cells: HeatCell[]; hosts: number; query?: string }
+
+function HeatmapCard() {
+  const nav = useNavigate();
+  const heat = useApi<Heatmap>('/reports/heatmap');
+  const data = heat.data;
+  const cells = data?.cells ?? [];
+  const maxScore = Math.max(1, ...cells.map((c) => c.score));
+  return (
+    <Card title="Subnet heatmap" flush actions={
+      data?.subnet ? <Link to={searchLink(data.query || `net:${data.subnet}`)} className="small">{data.subnet} →</Link> : null
+    }>
+      <ReportBlurb>
+        /24 grid coloured by exposure score (LAN map). Empty cells have no known host.
+      </ReportBlurb>
+      <ErrorBox error={heat.error} />
+      {!data ? (!heat.error && <Loading />) : !data.subnet ? <Empty>No IPv4 hosts for a heatmap yet.</Empty> : (
+        <div style={{ padding: '0.75rem 1rem 1rem' }}>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(16, 1fr)', gap: 2,
+            maxWidth: 640,
+          }}>
+            {cells.map((c) => (
+              <button
+                key={c.host}
+                type="button"
+                title={c.present ? `${c.ip}${c.hostname ? ` (${c.hostname})` : ''} · score ${c.score}` : c.ip}
+                disabled={!c.uuid}
+                onClick={() => c.uuid && nav(`/devices/${c.uuid}`)}
+                style={{
+                  aspectRatio: '1', border: 0, borderRadius: 2, padding: 0, cursor: c.uuid ? 'pointer' : 'default',
+                  background: c.present
+                    ? `color-mix(in srgb, var(--high) ${(c.score / maxScore) * 100}%, var(--ok))`
+                    : 'var(--bg-2, #eee)',
+                  opacity: c.present ? 1 : 0.35,
+                }}
+              />
+            ))}
+          </div>
+          <div className="muted small" style={{ marginTop: 8 }}>{data.hosts} hosts in {data.subnet}</div>
+        </div>
+      )}
+    </Card>
   );
 }

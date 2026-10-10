@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session, selectinload
 from ...models import Device
 from ...scanner.identify_truenas import looks_like_truenas
 from ...scanner.known_ports import AI_LLM_WEB_PORTS, TRUENAS_APPS_TCP_PORTS
+from .rdp import is_rdp_service
+from .vnc import is_vnc_service
 
 # Service names nmap commonly uses for HTTP(S)
 WEB_SERVICE_NAMES = frozenset({
@@ -17,7 +19,8 @@ WEB_SERVICE_NAMES = frozenset({
     "webdav", "dav",
 })
 
-# Clear non-HTTP listeners — never promote these to web capture.
+# Clear non-HTTP listeners — never promote these to HTTP Playwright capture.
+# RDP/VNC use a dedicated capture path (see is_rdp_service / is_vnc_service).
 NON_WEB_SERVICE_NAMES = frozenset({
     "ssh", "domain", "netbios-ssn", "microsoft-ds", "msrpc", "rpcbind",
     "postgresql", "mysql", "mariadb", "redis", "mongodb", "elasticsearch",
@@ -86,6 +89,10 @@ def guess_scheme(service: str | None, port: int) -> str:
         if "ssl" in s or "rtsps" in s:
             return "rtsps"
         return "rtsp"
+    if is_rdp_service(service, port):
+        return "rdp"
+    if is_vnc_service(service, port):
+        return "vnc"
     s = (service or "").lower()
     if "https" in s or "ssl" in s or port in (443, 8443, 9443, 10443):
         return "https"
@@ -147,11 +154,19 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
             by_rtsp = is_rtsp_service(p.service) or (
                 not is_web_service(p.service) and not p.service and p.port in COMMON_RTSP_PORTS
             )
-            by_web = (not by_rtsp) and is_probable_web_port(p.service, p.port, truenas=truenas)
-            if not (by_rtsp or by_web):
+            by_rdp = (not by_rtsp) and is_rdp_service(p.service, p.port)
+            by_vnc = (not by_rtsp and not by_rdp) and is_vnc_service(p.service, p.port)
+            by_web = (not by_rtsp and not by_rdp and not by_vnc) and is_probable_web_port(
+                p.service, p.port, truenas=truenas,
+            )
+            if not (by_rtsp or by_rdp or by_vnc or by_web):
                 continue
             if by_rtsp:
                 scheme = "rtsps" if (p.service or "").lower().find("ssl") >= 0 else "rtsp"
+            elif by_rdp:
+                scheme = "rdp"
+            elif by_vnc:
+                scheme = "vnc"
             else:
                 scheme = guess_scheme(p.service, p.port)
             endpoints.append(
@@ -173,5 +188,5 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
                 notes.append(f"Endpoint limit reached ({max_endpoints}); remaining endpoints skipped.")
                 return endpoints, notes
         if found == 0:
-            notes.append(f"{ip}: No known web or RTSP endpoints found in current inventory.")
+            notes.append(f"{ip}: No known web/RTSP/RDP/VNC endpoints found in current inventory.")
     return endpoints, notes

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
 from ..core.mockdata import event_visible
-from ..db import get_db
+from ..db import SessionLocal, get_db
 from ..models import EVENT_TYPES, Device, Event, User
 from .common import Paging, event_out, like_pattern, paged
 
@@ -55,3 +58,29 @@ def list_events(
         select(Event).where(*conds).order_by(Event.id.desc()).offset(paging.offset).limit(paging.page_size)
     ).unique().all()
     return paged([event_out(e) for e in rows], total, paging)
+
+
+@router.get("/stream")
+async def event_stream(request: Request, user: User = Depends(current_user)):
+    """Server-Sent Events feed of new inventory events (SIEM-friendly push)."""
+
+    async def gen():
+        last_id = 0
+        with SessionLocal() as db:
+            last_id = db.scalar(select(func.max(Event.id))) or 0
+        yield f"event: ready\ndata: {json.dumps({'last_id': last_id})}\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+            with SessionLocal() as db:
+                rows = db.scalars(
+                    select(Event).where(Event.id > last_id, event_visible(db))
+                    .order_by(Event.id).limit(50)
+                ).unique().all()
+                for e in rows:
+                    last_id = e.id
+                    yield f"event: {e.event_type}\ndata: {json.dumps(event_out(e), default=str)}\n\n"
+            await asyncio.sleep(2.0)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

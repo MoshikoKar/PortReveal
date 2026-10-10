@@ -17,6 +17,7 @@ from ..core.query.history import search_history
 from ..core.query.search import (
     HOST_SORTS,
     count,
+    extract_before,
     facets,
     iter_hosts,
     matching_uuids,
@@ -54,9 +55,11 @@ def search(
     user: User = Depends(current_user),
 ):
     node = prepare(q)
-    if at is not None:
-        out = search_history(db, node, at, page=page, page_size=page_size)
-        out.update({"page": page, "page_size": page_size})
+    node, before = extract_before(node)
+    hist_at = at or before
+    if hist_at is not None:
+        out = search_history(db, node, hist_at, page=page, page_size=page_size)
+        out.update({"page": page, "page_size": page_size, "at": str(hist_at)})
         return out
     if view == "services":
         res = search_services(db, node, page=page, page_size=page_size)

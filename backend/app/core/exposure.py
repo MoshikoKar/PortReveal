@@ -52,6 +52,9 @@ LOGIN_POINTS = 10
 DEFAULT_PAGE_POINTS = 5
 NEW_HOST_POINTS = 10
 UNIQUE_SERVICE_POINTS = 5
+WEB_VNC_POINTS = 15
+TLS_EXPIRED_POINTS = 10
+TLS_SOON_POINTS = 5
 
 
 def level(score: int) -> str:
@@ -91,6 +94,16 @@ def compute(f: DeviceFacts, unique: list[str], now: datetime) -> tuple[int, list
     if default:
         factors.append({"factor": "default_page", "points": DEFAULT_PAGE_POINTS,
                         "detail": "Default web server page on " + ", ".join(default)})
+    web_vnc = [s.label for s in f.services if getattr(s, "web_vnc", False)]
+    if web_vnc:
+        factors.append({"factor": "web_vnc", "points": WEB_VNC_POINTS,
+                        "detail": "Browser VNC/RDP gateway on " + ", ".join(web_vnc)})
+    if f.tls_expired_ports:
+        factors.append({"factor": "tls_expired", "points": TLS_EXPIRED_POINTS,
+                        "detail": "Expired TLS cert on " + ", ".join(f.tls_expired_ports)})
+    elif f.tls_expires_soon_ports:
+        factors.append({"factor": "tls_expires_soon", "points": TLS_SOON_POINTS,
+                        "detail": "TLS cert expires soon on " + ", ".join(f.tls_expires_soon_ports)})
     first_seen = f.device.first_seen
     if first_seen is not None and first_seen > now - timedelta(days=NEW_HOST_DAYS):
         factors.append({"factor": "new_host", "points": NEW_HOST_POINTS,

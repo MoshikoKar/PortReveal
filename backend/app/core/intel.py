@@ -45,6 +45,48 @@ def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | No
     return events
 
 
+def _enrich_open_services(db: Session, device_ids: list[int]) -> None:
+    """Best-effort TLS / SNMP / banner / CPE / SSH enrichment for devices touched by a scan."""
+    from ..models import Device, DevicePort
+    from ..scanner import scanner_status
+    from .banners import sync_nmap_banners
+    from .cpe import sync_nmap_cpes, sync_snmp_cpes
+    from .snmp_probe import enrich_device_snmp
+    from .ssh_keys import enrich_device_ssh
+    from .tls_probe import enrich_device_tls
+
+    if not device_ids:
+        return
+    # Live probes (TLS/SNMP/SSH) need real sockets — skip in mock/tests so scripts stay fast.
+    live = scanner_status().effective_mode != "mock"
+    devices = {d.id: d for d in db.scalars(select(Device).where(Device.id.in_(device_ids)))}
+    for did, dev in devices.items():
+        if live:
+            try:
+                enrich_device_tls(db, did, dev.current_ip)
+            except Exception:
+                log.debug("tls enrich failed for device %s", did, exc_info=True)
+            try:
+                if enrich_device_snmp(db, did, dev.current_ip):
+                    from ..models import PortSnmp
+                    for snmp in db.scalars(select(PortSnmp).where(PortSnmp.device_id == did)):
+                        p = db.get(DevicePort, snmp.device_port_id)
+                        if p is not None:
+                            sync_snmp_cpes(db, p, snmp)
+            except Exception:
+                log.debug("snmp enrich failed for device %s", did, exc_info=True)
+            try:
+                enrich_device_ssh(db, did, dev.current_ip)
+            except Exception:
+                log.debug("ssh enrich failed for device %s", did, exc_info=True)
+        ports = db.scalars(select(DevicePort).where(
+            DevicePort.device_id == did, DevicePort.is_open.is_(True),
+        )).all()
+        sync_nmap_banners(db, ports, device=dev, scan_id=None, now=utcnow())
+        for p in ports:
+            sync_nmap_cpes(db, p)
+
+
 def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:
     """Inside the scan's transaction, after apply_outcome. Returns the tag events created.
 
@@ -52,7 +94,11 @@ def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:
     events): what the comparison recorded silently (baseline, first coverage) stays silent here."""
     try:
         with db.begin_nested():
-            ids = db.scalars(select(ScanHost.device_id).where(ScanHost.scan_id == scan.id)).all()
+            ids = list(db.scalars(select(ScanHost.device_id).where(ScanHost.scan_id == scan.id)).all())
+            try:
+                _enrich_open_services(db, ids)
+            except Exception:
+                log.exception("scan %s: service enrichment failed", scan.id)
             report = {e.device.id for e in changed if e.device is not None and e.device.id is not None}
             return refresh_devices(db, ids, scan_id=scan.id, report_ids=report)
     except Exception:

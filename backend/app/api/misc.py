@@ -22,6 +22,13 @@ from .common import Paging, like_pattern, paged
 router = APIRouter(prefix="/api", tags=["misc"])
 
 
+@router.post("/inventory/ad-sync")
+def ad_computer_sync(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Read AD computer objects (LDAP) and tag matching inventory hosts as `in-ad`."""
+    from ..core.ad_inventory import sync_ad_tags
+    return sync_ad_tags(db)
+
+
 @router.get("/audit")
 def list_audit(q: str | None = Query(None, max_length=200), paging: Paging = Depends(),
                db: Session = Depends(get_db), user: User = Depends(require_admin)):

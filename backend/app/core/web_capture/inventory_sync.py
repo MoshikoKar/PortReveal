@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 
 from ...db import utcnow
 from ...models import WEB_PAGE_HOME, WEB_PAGE_LOGIN, DevicePort, PortHttp, WebPage
-from .classify import default_page_reason
+from ..cpe import sync_http_cpes
+from ..http_hashes import header_set_hash, html_hash
+from .classify import default_page_reason, looks_like_web_vnc
 
 HTTP_SCHEMES = ("http", "https")
 DEFAULT_PAGE_SKIP_PREFIX = "default server page"
@@ -56,7 +58,16 @@ def sync_port_http(db: Session, capture_id: int) -> set[int]:
         row.location = best.redirect_target
         row.login = any(p.kind == WEB_PAGE_LOGIN for p in pages)
         row.default_page = _is_default_page(best)
+        row.web_vnc = looks_like_web_vnc(None, best.title, best.server_header)
+        # Prefer hashes already computed on the page row when present; otherwise hash title+server.
+        if not row.html_hash:
+            row.html_hash = html_hash(f"{best.title or ''}|{best.server_header or ''}|{best.http_status or ''}")
+        if not row.header_set_hash and best.server_header:
+            row.header_set_hash = header_set_hash({"server": best.server_header})
         row.last_seen = now
         touched.add(device_id)
+        port_row = db.get(DevicePort, port_id)
+        if port_row is not None:
+            sync_http_cpes(db, port_row, row)
     db.flush()
     return touched

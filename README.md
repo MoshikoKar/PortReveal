@@ -132,13 +132,22 @@ network. The Devices search box accepts the same syntax.
 port:3389 net:10.0.0.0/8          RDP inside 10/8
 tag:camera -zone:iot              cameras outside the IoT zone
 http.login:true http.status:200   web login pages
+has:tls ssl.cert.expired:true     expired TLS certificates
+has:screenshot product:OpenSSH    hosts with a captured still
 product:nginx -version:1.25*      nginx not on 1.25.x
 score:>=60 new:7d                 high-exposure hosts first seen this week
+before:2026-09-01 port:22         point-in-time (daily snapshots)
 ```
 
 The full field list is under **Search → Show field reference** and
-`GET /api/search/fields`. Pick a past date (**As of**) to search the daily
-snapshots instead of current data.
+`GET /api/search/fields`. Pick a past date (**As of**) or use `before:YYYY-MM-DD`
+to search the daily snapshots instead of current data.
+
+Post-scan enrichment (open services only; no credential guessing) stores
+searchable **banners**, **TLS cert** fields, optional read-only **SNMP sys\***,
+and **CPE** with provenance. Web Capture also covers **RDP/VNC** stills when
+FreeRDP / VNC tools are available and the service accepts empty auth; browser
+VNC gateways (noVNC, Guacamole) are classified as `web-vnc`.
 
 Rule-based **tags** and a **device type** (printer, camera, nas, hypervisor,
 domain-controller, database, …) are recomputed after every scan and web
@@ -157,12 +166,16 @@ API (session cookie, or a read-only token from **Settings → API tokens** sent 
 | `GET /api/search/count?q=` | Host and service counts |
 | `GET /api/search/export?q=&format=csv\|ndjson` | Streaming export |
 | `GET /api/search/fields` | Field reference |
-| `GET /api/reports/exposure` · `rare-services` · `version-skew` · `subnets` | Reports |
+| `GET /api/host/{ip}` | One host document (services, TLS, HTTP, screenshots) |
+| `GET /api/reports/exposure` · `rare-services` · `version-skew` · `subnets` · `heatmap` | Reports |
 | `/api/saved-searches` | Watches and policies (CRUD) |
+| `/api/webhooks` | Outbound event webhooks (admin) |
+| `GET /api/events/stream` | SSE event feed |
 
 ```bash
 npm run cli -- search "port:22 product:openssh"
 curl -H "Authorization: Bearer $NF_TOKEN" "localhost:8000/api/search/export?q=tag:camera&format=csv"
+curl -H "Authorization: Bearer $NF_TOKEN" "localhost:8000/api/host/10.0.0.5"
 ```
 
 ### Database
@@ -466,9 +479,10 @@ docker/Dockerfile, docker-compose.yml
 - Continuous discovery and service inventory via nmap (or labelled mock data)
 - Change detection for devices, ports, services, versions, and IP moves
 - Inventory search (`field:value` queries, facets, export), tags, exposure scores, watches and reports
+- Enrichment: banners, TLS certs, SNMP sys*, CPE provenance, SSH host keys, subnet heatmap
 - SOC-style dashboard with devices, ports, changes, scans, and settings
-- Daily categorized HTML email summary of pending changes
-- Optional web capture (HTTP screenshots + RTSP stills / live Watch)
+- Daily categorized HTML email summary of pending changes; optional webhooks and SSE
+- Optional web capture (HTTP / RTSP / RDP / VNC stills; live RTSP Watch)
 - Scheduled night scans plus daytime presence / correlated absence
 - Admin / viewer roles, sessions, CSRF, optional LDAP, audit log
 - CLI for status, scans, users, DB reset, and inventory import/export
@@ -480,7 +494,7 @@ docker/Dockerfile, docker-compose.yml
 - **Backend:** Python 3.10+, FastAPI, Uvicorn, SQLAlchemy 2, Alembic, Pydantic
 - **Database:** SQLite (dev) or PostgreSQL 16 (prod)
 - **Scanner:** Nmap (production); MockScanner (development default)
-- **Enrichment:** Playwright (Chromium), ffmpeg (RTSP)
+- **Enrichment:** Playwright (Chromium), ffmpeg (RTSP/VNC), optional FreeRDP (RDP)
 - **Auth:** Argon2, server-side sessions, optional LDAP (`ldap3`)
 - **Tooling:** Node.js 20.19+ workspaces, Ruff, pytest, Docker Compose
 

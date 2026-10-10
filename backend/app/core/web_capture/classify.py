@@ -297,6 +297,20 @@ def looks_like_login_html(html: str | None, title: str | None) -> bool:
     return False
 
 
+_WEB_VNC_MARKERS = (
+    "novnc", "noVNC", "guacamole", "websockify", "vnc.html", "vnc_lite",
+    "Apache Guacamole", "remote desktop gateway",
+)
+
+
+def looks_like_web_vnc(html: str | None, title: str | None, server: str | None = None) -> bool:
+    """True when the HTTP UI is a browser-based VNC/RDP gateway (noVNC, Guacamole, …)."""
+    blob = f"{title or ''} {server or ''} {html or ''}"[:30_000].lower()
+    if not blob.strip():
+        return False
+    return any(m.lower() in blob for m in _WEB_VNC_MARKERS)
+
+
 def _host_of(url: str) -> str:
     try:
         return (urlparse(url).hostname or "").lower().rstrip(".")

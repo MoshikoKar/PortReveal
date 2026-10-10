@@ -18,6 +18,7 @@ from .api import (
     devices,
     events,
     exclusions,
+    host,
     misc,
     networks,
     reports,
@@ -30,6 +31,7 @@ from .api import (
     users,
     watches,
     web_captures,
+    webhooks,
 )
 from .config import check_production_config, get_settings
 from .core.manager import manager
@@ -96,7 +98,7 @@ app = FastAPI(
 )
 
 for r in (auth, setup, system, dashboard, devices, events, scans, networks, exclusions, settings, users, misc,
-          web_captures, data_transfer, search, watches, reports, tokens):
+          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks):
     app.include_router(r.router)
 
 

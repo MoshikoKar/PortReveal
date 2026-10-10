@@ -33,6 +33,9 @@ from ...models import (
     DeviceTag,
     Network,
     PortHttp,
+    PortSnmp,
+    PortTls,
+    ServiceBanner,
     WebPage,
 )
 from .fields import HAS_HOST_VALUES, HAS_PORT_VALUES, HOST, PORT, FieldSpec, resolve
@@ -91,9 +94,26 @@ _PORT_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "http.location": ("http", lambda: [PortHttp.location]),
     "http.login": ("http", lambda: [PortHttp.login]),
     "http.default_page": ("http", lambda: [PortHttp.default_page]),
+    "http.favicon": ("http", lambda: [PortHttp.favicon_hash]),
+    "http.html_hash": ("http", lambda: [PortHttp.html_hash]),
+    "http.web_vnc": ("http", lambda: [PortHttp.web_vnc]),
+    "ssl.cert.subject.cn": ("tls", lambda: [PortTls.cn]),
+    "ssl.cert.issuer": ("tls", lambda: [PortTls.issuer]),
+    "ssl.cert.fingerprint": ("tls", lambda: [PortTls.fingerprint_sha256]),
+    "ssl.cert.expired": ("tls", lambda: [PortTls.expired]),
+    "ssl.cert.expires_soon": ("tls", lambda: [PortTls.expires_soon]),
+    "ssl.cert.self_signed": ("tls", lambda: [PortTls.self_signed]),
+    "ssl.cert.wildcard": ("tls", lambda: [PortTls.wildcard]),
+    "ssl.cert.weak": ("tls", lambda: [PortTls.weak]),
+    "snmp.sysname": ("snmp", lambda: [PortSnmp.sys_name]),
+    "snmp.sysdescr": ("snmp", lambda: [PortSnmp.sys_descr]),
+    "snmp.vendor": ("snmp", lambda: [PortSnmp.vendor]),
+    "screenshot.text": ("shot", lambda: [WebPage.ocr_text]),
 }
 
 _HAS_NEEDS_HTTP = {"http", "login"}
+_HAS_NEEDS_TLS = {"tls"}
+_HAS_NEEDS_SNMP = {"snmp"}
 
 
 def _spec(term: Term) -> FieldSpec:
@@ -129,33 +149,66 @@ def is_port_pure(node: Node) -> bool:
     return all(is_port_pure(c) for c in node.children)
 
 
-def needs_http(node: Node | None) -> bool:
-    """True when the row condition reads HTTP metadata (so port_http must be joined)."""
+def _needs_join(node: Node | None, table: str, has_vals: set[str]) -> bool:
     if node is None:
         return False
     if isinstance(node, Term):
         if node.field is None:
-            return True
+            return table == "http"  # free text also searches PortHttp.title
         spec = _spec(node)
         if spec.kind == "has":
-            return any(v in _HAS_NEEDS_HTTP for v in _has_items(node))
-        return spec.name in _PORT_COLS and _PORT_COLS[spec.name][0] == "http"
+            return any(v in has_vals for v in _has_items(node))
+        if spec.name == "before":
+            return False
+        return spec.name in _PORT_COLS and _PORT_COLS[spec.name][0] == table
     if isinstance(node, Not):
-        return needs_http(node.child)
-    return any(needs_http(c) for c in node.children)
+        return _needs_join(node.child, table, has_vals)
+    return any(_needs_join(c, table, has_vals) for c in node.children)
 
 
-def service_from(with_http: bool = True):
-    """FROM clause: device_ports, outer-joined with port_http when requested."""
+def needs_http(node: Node | None) -> bool:
+    """True when the row condition reads HTTP metadata (so port_http must be joined)."""
+    return _needs_join(node, "http", _HAS_NEEDS_HTTP)
+
+
+def needs_tls(node: Node | None) -> bool:
+    return _needs_join(node, "tls", _HAS_NEEDS_TLS)
+
+
+def needs_snmp(node: Node | None) -> bool:
+    return _needs_join(node, "snmp", _HAS_NEEDS_SNMP)
+
+
+def needs_shot(node: Node | None) -> bool:
+    return _needs_join(node, "shot", set())
+
+
+def join_flags(node: Node | None) -> tuple[bool, bool, bool, bool]:
+    return needs_http(node), needs_tls(node), needs_snmp(node), needs_shot(node)
+
+
+def service_from(with_http: bool = True, with_tls: bool = False, with_snmp: bool = False,
+                 with_shot: bool = False):
+    """FROM clause: device_ports, outer-joined with enrichment tables when requested."""
     j = DevicePort.__table__
     if with_http:
         j = j.outerjoin(PortHttp.__table__, PortHttp.device_port_id == DevicePort.id)
+    if with_tls:
+        j = j.outerjoin(PortTls.__table__, PortTls.device_port_id == DevicePort.id)
+    if with_snmp:
+        j = j.outerjoin(PortSnmp.__table__, PortSnmp.device_port_id == DevicePort.id)
+    if with_shot:
+        j = j.outerjoin(WebPage.__table__, and_(
+            WebPage.device_port_id == DevicePort.id,
+            WebPage.screenshot_status == SCREENSHOT_CAPTURED,
+        ))
     return j
 
 
-def service_exists(cond: ColumnElement, with_http: bool) -> ColumnElement:
+def service_exists(cond: ColumnElement, with_http: bool, with_tls: bool = False,
+                   with_snmp: bool = False, with_shot: bool = False) -> ColumnElement:
     return exists(
-        select(DevicePort.id).select_from(service_from(with_http))
+        select(DevicePort.id).select_from(service_from(with_http, with_tls, with_snmp, with_shot))
         .where(DevicePort.device_id == Device.id, DevicePort.is_open.is_(True), cond)
     )
 
@@ -302,6 +355,10 @@ def _has_port(value: str) -> ColumnElement:
     if value == "login":
         return or_(PortHttp.login.is_(True), DevicePort.id.in_(select(WebPage.device_port_id).where(
             WebPage.device_port_id.isnot(None), WebPage.kind == WEB_PAGE_LOGIN)))
+    if value == "tls":
+        return PortTls.id.isnot(None)
+    if value == "snmp":
+        return PortSnmp.id.isnot(None)
     raise AssertionError(value)
 
 
@@ -336,6 +393,10 @@ def _free_text_parts(term: Term) -> tuple[ColumnElement, ColumnElement]:
         _nn(DevicePort.version, DevicePort.version.ilike(like, escape="\\")),
         _nn(DevicePort.extra_info, DevicePort.extra_info.ilike(like, escape="\\")),
         _nn(PortHttp.title, PortHttp.title.ilike(like, escape="\\")),
+        DevicePort.id.in_(select(ServiceBanner.device_port_id).where(
+            ServiceBanner.raw_truncated.ilike(like, escape="\\"))),
+        _nn(PortTls.cn, PortTls.cn.ilike(like, escape="\\")),
+        _nn(PortSnmp.sys_descr, PortSnmp.sys_descr.ilike(like, escape="\\")),
     ]
     port_txt = q.lower().removeprefix("tcp/").removeprefix("port:")
     if port_txt.isdigit() and len(port_txt) <= 5:
@@ -361,6 +422,8 @@ def _row_term(term: Term, ctx: Ctx) -> ColumnElement:
         host, row = _free_text_parts(term)
         return or_(host, row)
     spec = _spec(term)
+    if spec.name == "before":
+        return true()  # handled by search API → historical snapshot
     if spec.kind == "has":
         return or_(*[_has_port(v) if v in HAS_PORT_VALUES else _has_host(v) for v in _has_items(term)])
     if spec.name in _PORT_COLS:
@@ -369,6 +432,14 @@ def _row_term(term: Term, ctx: Ctx) -> ColumnElement:
         return _leaf(spec, _PORT_COLS[spec.name][1](), term, ctx)
     wrapper, cols = _HOST_COLS[spec.name]
     return _wrap_host(wrapper, _leaf(spec, cols(), term, ctx))
+
+
+def _exists_for(node: Node | None, cond: ColumnElement) -> ColumnElement:
+    http, tls, snmp, shot = join_flags(node)
+    # Free-text / banner / TLS / SNMP free-text needs enrichment joins when ambiguous
+    if node is not None and isinstance(node, Term) and node.field is None:
+        http = tls = snmp = True
+    return service_exists(cond, http, tls, snmp, shot)
 
 
 # --- host context --------------------------------------------------------------------------------
@@ -381,7 +452,7 @@ def compile_host(node: Node | None, ctx: Ctx) -> ColumnElement:
         return not_(compile_host(node.child, ctx))
     if isinstance(node, Or):
         if is_port_pure(node):
-            return service_exists(compile_row(node, ctx), needs_http(node))
+            return _exists_for(node, compile_row(node, ctx))
         return or_(*[compile_host(c, ctx) for c in node.children])
     # AND: one EXISTS for the port-only parts so they hold on the same service
     group = [c for c in node.children if not isinstance(c, Not) and is_port_pure(c)]
@@ -391,7 +462,7 @@ def compile_host(node: Node | None, ctx: Ctx) -> ColumnElement:
     if group:
         members = group + negs
         sub = And(tuple(members)) if len(members) > 1 else members[0]
-        conds.append(service_exists(compile_row(sub, ctx), needs_http(sub)))
+        conds.append(_exists_for(sub, compile_row(sub, ctx)))
     conds += [compile_host(c, ctx) for c in rest]
     return and_(*conds)
 
@@ -399,16 +470,23 @@ def compile_host(node: Node | None, ctx: Ctx) -> ColumnElement:
 def _host_term(term: Term, ctx: Ctx) -> ColumnElement:
     level = level_of(term)
     if level == PORT:
-        return service_exists(_row_term(term, ctx), needs_http(term))
+        return _exists_for(term, _row_term(term, ctx))
     if term.field is None:
         host, row = _free_text_parts(term)
-        return or_(host, service_exists(row, True))
+        return or_(host, service_exists(row, True, True, True, False))
     spec = _spec(term)
+    if spec.name == "before":
+        return true()
     if spec.kind == "has":
         out = []
         for v in _has_items(term):
             if v in HAS_PORT_VALUES:
-                out.append(service_exists(_has_port(v), v in _HAS_NEEDS_HTTP))
+                out.append(service_exists(
+                    _has_port(v),
+                    v in _HAS_NEEDS_HTTP or v == "login",
+                    v in _HAS_NEEDS_TLS,
+                    v in _HAS_NEEDS_SNMP,
+                ))
             else:
                 out.append(_has_host(v))
         return or_(*out)

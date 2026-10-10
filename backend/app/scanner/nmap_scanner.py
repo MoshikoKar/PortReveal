@@ -55,7 +55,10 @@ _DISCOVERY_RETRIES = 2
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
 # UDP ports for -PU discovery (DNS/NetBIOS/SNMP/IKE/mDNS/SSDP). Helps find hosts that
 # ignore ICMP and have no TCP listeners on the SYN-ping list (common for printers / IoT).
-_DISCOVERY_UDP = "53,67,68,137,161,500,4500,5353,1900"
+# Targeted UDP for discovery (+ IPMI/BMC 623, CoAP 5683). Not a full UDP blast.
+_DISCOVERY_UDP = "53,67,68,137,161,500,4500,5353,1900,623,5683"
+# Optional post-discovery UDP service inventory (privileged -sU), allowlist only.
+_UDP_SERVICE_PORTS = "53,123,137,161,1900,5353,623,5683"
 # Without a MAC, only these nmap "up" reasons count as a real device. TCP "reset" /
 # "conn-refused" are excluded: Docker Desktop NAT often answers that for every IP.
 _TRUSTED_DISCOVERY_REASONS = frozenset({
@@ -172,6 +175,18 @@ def build_fixed_port_args(privileged: bool, profile: PortProfile, ports: tuple[i
     return args
 
 
+def build_udp_service_args(profile: PortProfile) -> list[str]:
+    """Targeted UDP service inventory (-sU). Requires privileged mode; allowlist only."""
+    return [
+        "-Pn", "-n", "-sU", "-sV", "--privileged",
+        "-p", f"U:{_UDP_SERVICE_PORTS}",
+        _TIMING.get(profile.timing, "-T3"),
+        "--max-retries", "1",
+        "--host-timeout", f"{min(10, int(profile.host_timeout_minutes))}m",
+        "--min-hostgroup", str(max(1, int(profile.batch_size))),
+    ]
+
+
 def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     """Union open ports from a follow-up scan into the primary host observation.
 
@@ -246,6 +261,17 @@ class NmapScanner:
                 else:
                     by_ip[h.ip] = h
             port_scope = merge_port_scope(port_scope or extra.port_scope, STANDARD_EXTRA_TCP_PORTS)
+
+        # Targeted UDP service inventory (allowlist). Needs privileged mode; never a UDP blast.
+        if profile.udp_service_scan and bind.privileged:
+            udp_args = build_udp_service_args(profile)
+            udp = self._run(udp_args, ips, min(timeout, EXTRA_PORTS_TIMEOUT_S), ctx, "ports-udp", bind=bind)
+            for h in udp.hosts:
+                if h.ip in by_ip:
+                    _merge_host_ports(by_ip[h.ip], h)
+                else:
+                    by_ip[h.ip] = h
+            # UDP ports are not folded into TCP port_scope (closures stay TCP-only).
 
         # TrueNAS Apps catalog ports (3XXXX) only on hosts identified as TrueNAS / FreeNAS.
         # Also run after full scans: --host-timeout often aborts 1-65535+-sV before high
