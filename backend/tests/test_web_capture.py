@@ -659,6 +659,46 @@ def test_web_hosts_lists_every_usable_service(db, client):
     assert svcs[8080]["page_count"] == 2 and svcs[8080]["has_login"]
 
 
+def test_web_hosts_separates_remote_desktops(db, client):
+    setup_admin(client)
+    dev = _seed_web_host(db, "10.0.0.16", net_name="DeskNet", svc="http", p=80)
+    cap = WebCapture(status=WEB_CAPTURE_COMPLETED, targets="10.0.0.16")
+    db.add(cap)
+    db.flush()
+    db.add(WebPage(
+        capture_id=cap.id, device_id=dev.id, ip="10.0.0.16", port=80, scheme="http",
+        host_used="10.0.0.16", kind="home", url="http://10.0.0.16/", final_url="http://10.0.0.16/",
+        http_status=200, title="Portal", screenshot_status="captured",
+        screenshot_relpath=f"{cap.uuid}/http.webp",
+    ))
+    db.add(WebPage(
+        capture_id=cap.id, device_id=dev.id, ip="10.0.0.16", port=3389, scheme="rdp",
+        host_used="10.0.0.16", kind="stream", url="rdp://10.0.0.16:3389", final_url="rdp://10.0.0.16:3389",
+        http_status=None, title="RDP desktop", screenshot_status="skipped",
+        capture_error="freerdp unavailable",
+    ))
+    db.add(WebPage(
+        capture_id=cap.id, device_id=dev.id, ip="10.0.0.16", port=5900, scheme="vnc",
+        host_used="10.0.0.16", kind="stream", url="vnc://10.0.0.16:5900", final_url="vnc://10.0.0.16:5900",
+        http_status=None, title="VNC desktop", screenshot_status="skipped",
+        capture_error="vnc tools unavailable",
+    ))
+    db.commit()
+
+    web = next(h for h in client.get("/api/web-hosts", params={"kind": "web"}).json()["hosts"]
+               if h["device_uuid"] == dev.uuid)
+    assert {s["port"] for s in web["services"]} == {80}
+    assert all(s["scheme"] == "http" for s in web["services"])
+
+    remote = next(h for h in client.get("/api/web-hosts", params={"kind": "remote"}).json()["hosts"]
+                  if h["device_uuid"] == dev.uuid)
+    assert {s["port"] for s in remote["services"]} == {3389, 5900}
+    assert {s["scheme"] for s in remote["services"]} == {"rdp", "vnc"}
+    rdp_page = next(s["page"] for s in remote["services"] if s["scheme"] == "rdp")
+    assert rdp_page["can_live"] is False
+    assert rdp_page["error_reason"] is None
+
+
 def test_auto_web_capture_after_scan_for_new_web_host(db):
     put_section(db, WebCaptureSettings(enabled=True, auto_after_scan=True, auto_only_new_or_changed=True,
                                        force_mock=True))

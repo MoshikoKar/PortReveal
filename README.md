@@ -101,9 +101,10 @@ port/service/IP/absence changes → quiet steps). Reset with `npm run mock:reset
 
 Post-scan stills of remote UIs found in inventory: **HTTP(S)** (Playwright),
 **RTSP** (ffmpeg), **RDP** (FreeRDP), and **VNC** (ffmpeg or `vncsnapshot`).
-Same job and **Web** gallery — not an nmap stage. Auto-queue after standard/full
-scans is under **Settings → Web capture**. Manual jobs from Device details,
-Devices multi-select, or **Scans → Web captures**.
+One Web Capture job; galleries are split — **Web** (HTTP/RTSP) and **Remote**
+(RDP/VNC). Not an nmap stage. Auto-queue after standard/full scans is under
+**Settings → Web capture**. Manual jobs from Device details, Devices multi-select,
+or **Scans → Web captures**.
 
 | Target | Tool on `PATH` | Install |
 |---|---|---|

@@ -16,7 +16,10 @@ export const KIND_LABELS: Record<WebPageKind, string> = {
 export const shotUrl = (p: WebPage) => `/api/web-pages/${p.id}/screenshot`;
 
 export const isRtspPage = (p: WebPage) =>
-  p.can_live === true || p.kind === 'stream' || p.scheme === 'rtsp' || p.scheme === 'rtsps';
+  p.can_live === true || p.scheme === 'rtsp' || p.scheme === 'rtsps';
+
+/** Native RDP / VNC stills from web capture (not HTTP or RTSP). */
+export const isDesktopPage = (p: WebPage) => p.scheme === 'rdp' || p.scheme === 'vnc';
 
 /** A screenshot worth showing: captured, and not of an error page (older captures kept those). */
 export const isUsefulShot = (p: WebPage) => p.has_screenshot && !p.error_reason;
@@ -40,14 +43,15 @@ function hostOf(url: string | null): string | null {
   }
 }
 
-/** The address a person would open for this endpoint (browser or RTSP client). */
+/** The address a person would open for this endpoint (browser, RTSP, or RDP/VNC client). */
 export function endpointUrl(p: WebPage): string {
-  if (isRtspPage(p)) return p.final_url || p.url;
+  if (isRtspPage(p) || isDesktopPage(p)) return p.final_url || p.url;
   const def = (p.scheme === 'https' && p.port === 443) || (p.scheme === 'http' && p.port === 80);
   return `${p.scheme}://${p.host_used}${def ? '' : `:${p.port}`}/`;
 }
 
-export function HttpBadge({ status, rtsp }: { status: number | null; rtsp?: boolean }) {
+export function HttpBadge({ status, rtsp, desktop }: { status: number | null; rtsp?: boolean; desktop?: string }) {
+  if (desktop) return <span className="badge outline">{desktop.toUpperCase()}</span>;
   if (rtsp) return <span className="badge outline">RTSP</span>;
   if (status == null) return <span className="badge outline">no response</span>;
   const cls = status < 300 ? 'ok' : status < 400 ? 'low' : status === 401 || status === 403 ? 'medium' : 'high';
@@ -56,6 +60,13 @@ export function HttpBadge({ status, rtsp }: { status: number | null; rtsp?: bool
 
 /** Why a page has no screenshot, in words. */
 export function shotNote(p: WebPage): string {
+  if (isDesktopPage(p)) {
+    if (p.capture_error === 'freerdp unavailable') return 'freerdp unavailable';
+    if (p.capture_error === 'vnc tools unavailable') return 'vnc tools unavailable';
+    if (p.screenshot_status === 'failed') return p.capture_error ?? 'Desktop frame failed';
+    if (p.screenshot_status === 'skipped') return p.capture_error ?? 'No desktop frame';
+    return p.capture_error ?? 'No desktop frame';
+  }
   if (isRtspPage(p)) {
     if (p.capture_error === 'ffmpeg unavailable') return 'ffmpeg unavailable at capture time';
     if (p.screenshot_status === 'failed') return p.capture_error ?? 'RTSP frame failed';
@@ -95,6 +106,7 @@ export function ShotTile({ p, onOpen }: { p: WebPage; onOpen?: () => void }) {
   const finalPath = pathOf(p.final_url);
   const redirected = p.final_url && p.final_url !== p.url;
   const rtsp = isRtspPage(p);
+  const desktop = isDesktopPage(p);
   return (
     <article className="shot">
       {isUsefulShot(p) ? (
@@ -108,12 +120,12 @@ export function ShotTile({ p, onOpen }: { p: WebPage; onOpen?: () => void }) {
       <div className="shot-meta">
         <div className="row wrap" style={{ gap: 6 }}>
           <span className="badge accent">{KIND_LABELS[p.kind] ?? p.kind}</span>
-          <HttpBadge status={p.http_status} rtsp={rtsp} />
+          <HttpBadge status={p.http_status} rtsp={rtsp} desktop={desktop ? p.scheme : undefined} />
           <PageFlags p={p} />
         </div>
         <div className="shot-title" title={p.title ?? undefined}>{p.title ?? <span className="muted">Untitled</span>}</div>
         <div className="mono small muted shot-path" title={p.url}>
-          {rtsp ? (p.final_url || p.url) : <>{pathOf(p.url)}{redirected && <> → {hostOf(p.final_url) !== hostOf(p.url) ? p.final_url : finalPath}</>}</>}
+          {rtsp || desktop ? (p.final_url || p.url) : <>{pathOf(p.url)}{redirected && <> → {hostOf(p.final_url) !== hostOf(p.url) ? p.final_url : finalPath}</>}</>}
         </div>
       </div>
     </article>

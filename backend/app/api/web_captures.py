@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -31,7 +32,6 @@ from ..models import (
     WEB_CAPTURE_QUEUED,
     WEB_PAGE_HOME,
     WEB_PAGE_LOGIN,
-    WEB_PAGE_STREAM,
     Device,
     User,
     WebCapture,
@@ -55,7 +55,12 @@ class WebCaptureRequest(BaseModel):
 
 
 def _is_rtsp_page(p: WebPage) -> bool:
-    return (p.scheme or "").lower() in ("rtsp", "rtsps") or p.kind == WEB_PAGE_STREAM
+    # Scheme only — RDP/VNC also use kind=stream but are not live RTSP.
+    return (p.scheme or "").lower() in ("rtsp", "rtsps")
+
+
+def _is_desktop_page(p: WebPage) -> bool:
+    return (p.scheme or "").lower() in ("rdp", "vnc")
 
 
 def web_page_out(p: WebPage) -> dict:
@@ -113,8 +118,8 @@ def _error_reason(p: WebPage) -> str | None:
     """
     if p.external_redirect:
         return "redirects outside target"
-    # RTSP streams have no HTTP status; they are usable when we have a URL (live and/or still).
-    if _is_rtsp_page(p):
+    # RTSP / RDP / VNC have no HTTP status; usable when inventory recorded the endpoint.
+    if _is_rtsp_page(p) or _is_desktop_page(p):
         return None
     # Prefer a classification reason stored at capture time (body/JS evidence is not on the row)
     classified = _classification_capture_error(p.capture_error)
@@ -489,8 +494,18 @@ def live_rtsp_by_port(
 
 
 @router.get("/api/web-hosts")
-def web_hosts(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    """Every device with captured pages, summarised from its latest capture."""
+def web_hosts(
+    kind: Literal["web", "remote"] = Query(
+        "web",
+        description="web = HTTP(S)/RTSP gallery; remote = RDP/VNC desktops only",
+    ),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Every device with captured pages, summarised from its latest capture.
+
+    ``kind=web`` (default) excludes RDP/VNC; ``kind=remote`` returns only those.
+    """
     latest = (
         select(WebPage.device_id, func.max(WebPage.capture_id).label("cid"))
         .join(WebCapture, WebCapture.id == WebPage.capture_id)
@@ -505,6 +520,11 @@ def web_hosts(db: Session = Depends(get_db), user: User = Depends(current_user))
     ).all()
     by_dev: dict[int, list[WebPage]] = {}
     for p in pages:
+        desktop = _is_desktop_page(p)
+        if kind == "remote" and not desktop:
+            continue
+        if kind == "web" and desktop:
+            continue
         by_dev.setdefault(p.device_id, []).append(p)
     hosts = []
     for dev_pages in by_dev.values():

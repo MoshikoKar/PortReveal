@@ -83,7 +83,7 @@ function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number
 }
 
 export default function WebHosts() {
-  const { data, error } = useApi<{ hosts: WebHost[] }>('/web-hosts', undefined, 15000);
+  const { data, error } = useApi<{ hosts: WebHost[] }>('/web-hosts', { kind: 'web' }, 15000);
   // Filter state lives in the URL (q, noapp=1, hide=kind,kind) so reload, Back and shared links keep it.
   const [sp, setSp] = useSearchParams();
   const q = sp.get('q') ?? '';
@@ -135,7 +135,7 @@ export default function WebHosts() {
       <div className="page-head">
         <div>
           <h1>Web interfaces</h1>
-          <p>Every web service serving a real application, from the latest Web Capture — one card per service, so a host with several apps shows each. Default server pages, errors, blank pages and redirects are set aside.</p>
+          <p>HTTP(S) and RTSP services from the latest Web Capture — one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Default server pages, errors, blank pages and redirects are set aside.</p>
         </div>
         <input type="search" placeholder="Filter by host, IP, title, port…" value={q} onChange={(e) => update({ q: e.target.value || null }, true)} style={{ width: 260 }} />
       </div>

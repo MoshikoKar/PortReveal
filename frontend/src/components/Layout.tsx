@@ -14,6 +14,7 @@ const ICONS = {
   ports: 'M5 4h14v11H5zM9 15v5M15 15v5M8 8h2M14 8h2M8 11h8',
   changes: 'M3 12h4l3 8 4-16 3 8h4',
   web: 'M3 5h18v14H3zM3 9h18M6.5 7h.01M9 7h.01',
+  remote: 'M2 6h20v10H2zM8 20h8M12 16v4',
   scans: 'M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12l7-7',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5',
   watches: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
@@ -32,6 +33,7 @@ const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean 
   { to: '/watches', label: 'Watches', icon: 'watches' },
   { to: '/reports', label: 'Reports', icon: 'reports' },
   { to: '/web', label: 'Web', icon: 'web' },
+  { to: '/remote', label: 'Remote', icon: 'remote' },
   { to: '/scans', label: 'Scans', icon: 'scans' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
