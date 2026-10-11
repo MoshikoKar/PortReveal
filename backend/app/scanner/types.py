@@ -81,7 +81,6 @@ class PortProfile:
     host_timeout_minutes: int = 15
     os_detection: bool = False
     batch_size: int = 32
-    udp_service_scan: bool = False  # privileged -sU allowlist after TCP
 
 
 class ScanCancelled(Exception):

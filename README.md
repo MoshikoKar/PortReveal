@@ -151,8 +151,8 @@ The full field list is under **Search → Show field reference** and
 to search the daily snapshots instead of current data.
 
 Post-scan enrichment (open services only; no credential guessing) stores
-searchable **banners**, **TLS cert** fields, optional read-only **SNMP sys\***,
-and **CPE** with provenance. Web Capture also covers **RDP/VNC** stills when
+searchable **banners**, **TLS cert** fields, SSH host keys, and **CPE** with
+provenance (TCP only; previously stored SNMP sys\* data stays searchable). Web Capture also covers **RDP/VNC** stills when
 FreeRDP / VNC tools are available and the service accepts empty auth; browser
 VNC gateways (noVNC, Guacamole) are classified as `web-vnc`.
 
@@ -480,9 +480,11 @@ still queued or running, so a long scan never stacks the next day's jobs.
 Large CIDRs are chunked with bounded parallelism; failed/partial scans never
 remove inventory. Discovery caps probe RTT, uses one retry and a minimum probe
 rate, so silent or filtered address space (routed/VPN paths without ARP) does
-not dominate scan time — duration follows live hosts, not CIDR size. Remote
-scans (no local L2/ARP bind) skip UDP discovery probes; LAN-bound scans keep
-them for ICMP-silent printers/IoT. Device identity prefers unique MAC, then IP/hostname rules.
+not dominate scan time — duration follows live hosts, not CIDR size. Discovery
+uses ICMP/TCP (and rate-capped ARP on local segments). No scan or enrichment
+stage sends UDP. Service detection runs `--version-light` and never probes
+telephony signaling ports (H.323 1720, SCCP 2000/2443, CTI 2748, SIP
+5060/5061), which can crash Cisco CUCM and similar call managers. Device identity prefers unique MAC, then IP/hostname rules.
 History and compressed daily snapshots are retained (default 365 days). What is
 stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy/data-and-privacy.md).
 

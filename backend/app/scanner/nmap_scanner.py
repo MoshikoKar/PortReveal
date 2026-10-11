@@ -51,7 +51,10 @@ DISCOVERY_TIMEOUT_S = 12 * 60
 # nothing answers (empty subnets behind a router/VPN), so an empty /22 crawls for over an hour and the
 # chunk times out, leaving every scan of that network partial (no removals, no baseline).
 # Remote (no ARP) uses higher floors: silent routed ranges must not dominate wall time.
-_DISCOVERY_MIN_RATE = {"polite": 200, "normal": 500, "fast": 1000}
+# Local L2 is ARP-only (nmap skips IP probes there); a low floor and a hard ceiling keep the
+# broadcast load on the segment light.
+_DISCOVERY_MIN_RATE = {"polite": 50, "normal": 100, "fast": 200}
+_DISCOVERY_MAX_RATE_LOCAL = {"polite": 150, "normal": 300, "fast": 600}
 _DISCOVERY_MIN_RATE_REMOTE = {"polite": 400, "normal": 1200, "fast": 2500}
 # RTT caps (initial, max) so probes to silent/filtered addresses are given up quickly instead of
 # waiting out nmap's adaptive timeouts; live hosts answer well inside these on routed/VPN paths.
@@ -60,12 +63,11 @@ _DISCOVERY_RTT_MS_REMOTE = {"polite": (200, 800), "normal": (100, 400), "fast": 
 _DISCOVERY_RETRIES = 1
 _DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
-# UDP ports for -PU discovery (DNS/NetBIOS/SNMP/IKE/mDNS/SSDP). Helps find hosts that
-# ignore ICMP and have no TCP listeners on the SYN-ping list (common for printers / IoT).
-# Only used when a local L2/ARP bind exists — on remote/VPN paths unanswered UDP dominates time.
-_DISCOVERY_UDP = "53,67,68,137,161,500,4500,5353,1900,623,5683"
-# Optional post-discovery UDP service inventory (privileged -sU), allowlist only.
-_UDP_SERVICE_PORTS = "53,123,137,161,1900,5353,623,5683"
+# No scan stage sends UDP: unanswered UDP dominates scan time, and fragile embedded UDP
+# services (SNMP/IPMI/CoAP/SSDP/TFTP) can misbehave when probed.
+# Telephony signaling ports are never probed: -sV probes into SCCP/SIP/H.323/CTI listeners have
+# repeatedly crashed Cisco CUCM and similar call servers. H.323, SCCP, SCCP-TLS, CTI, SIP, SIP-TLS.
+_NEVER_PROBE_TCP_PORTS = "1720,2000,2443,2748,5060,5061"
 # Without a MAC, only these nmap "up" reasons count as a real device. TCP "reset" /
 # "conn-refused" are excluded: Docker Desktop NAT often answers that for every IP.
 _TRUSTED_DISCOVERY_REASONS = frozenset({
@@ -108,12 +110,9 @@ def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = Fals
     # -sn: host discovery only. Reverse DNS stays on (nmap default) for hostnames of live hosts.
     # TCP probes stay enabled even behind Docker NAT; discovery_host_is_live() drops
     # RST/conn-refused false positives that have no MAC.
-    # UDP (-PU) only on local L2: unanswered UDP on routed/VPN paths dominates discovery time.
     args = ["-sn"]
     if privileged:
         args += ["--privileged", "-PE", "-PP", f"-PS{_DISCOVERY_TCP}", "-PA80,443,3389"]
-        if local_l2:
-            args.append(f"-PU{_DISCOVERY_UDP}")
     else:
         args += ["--unprivileged", f"-PS{_DISCOVERY_TCP}"]
     initial_rtt, max_rtt = discovery_rtt_ms(timing, local_l2=local_l2)
@@ -121,10 +120,13 @@ def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = Fals
         _TIMING.get(timing, "-T3"),
         "--max-retries", str(_DISCOVERY_RETRIES),
         "--min-rate", str(discovery_min_rate(timing, local_l2=local_l2)),
-        "--min-parallelism", str(_DISCOVERY_MIN_PARALLELISM),
         "--initial-rtt-timeout", f"{initial_rtt}ms",
         "--max-rtt-timeout", f"{max_rtt}ms",
     ]
+    if local_l2:
+        args += ["--max-rate", str(_DISCOVERY_MAX_RATE_LOCAL.get(timing, _DISCOVERY_MAX_RATE_LOCAL["normal"]))]
+    else:
+        args += ["--min-parallelism", str(_DISCOVERY_MIN_PARALLELISM)]
     return args
 
 
@@ -157,22 +159,27 @@ def discovery_timeout(targets: list[str], timing: str, *, local_l2: bool = False
             addresses += ipaddress.ip_network(t, strict=False).num_addresses
         except ValueError:
             addresses += 1  # hostname
-    # TCP SYN list + echo/timestamp + 3 ACK (+ UDP list only on local L2)
+    # TCP SYN list + echo/timestamp + 3 ACK
     probes = len(_DISCOVERY_TCP.split(",")) + 5
-    if local_l2:
-        probes += len(_DISCOVERY_UDP.split(","))
     worst = addresses * probes * (_DISCOVERY_RETRIES + 1) / discovery_min_rate(timing, local_l2=local_l2)
     return max(DISCOVERY_TIMEOUT_S, worst * 1.5)
 
 
-def build_port_args(privileged: bool, profile: PortProfile) -> list[str]:
-    args = ["-Pn", "-n", "-sV"]
+def _service_scan_base(privileged: bool) -> list[str]:
+    # --version-light: only the most likely probes per port, far fewer malformed payloads.
+    args = ["-Pn", "-n", "-sV", "--version-light"]
     args += ["--privileged", "-sS"] if privileged else ["--unprivileged", "-sT"]
+    return args
+
+
+def build_port_args(privileged: bool, profile: PortProfile) -> list[str]:
+    args = _service_scan_base(privileged)
     if profile.full:
         args += ["-p", "1-65535"]
     else:
         args += ["--top-ports", str(int(profile.top_ports))]
     args += [
+        "--exclude-ports", _NEVER_PROBE_TCP_PORTS,
         _TIMING.get(profile.timing, "-T3"),
         "--max-retries", "2",
         "--host-timeout", f"{int(profile.host_timeout_minutes)}m",
@@ -187,28 +194,16 @@ def build_fixed_port_args(privileged: bool, profile: PortProfile, ports: tuple[i
     """Service scan a fixed TCP port list (used for AI/LLM ports outside --top-ports)."""
     spec = PortScope.from_ports(ports)
     assert spec, "fixed port list must not be empty"
-    args = ["-Pn", "-n", "-sV"]
-    args += ["--privileged", "-sS"] if privileged else ["--unprivileged", "-sT"]
+    args = _service_scan_base(privileged)
     args += [
         "-p", spec,
+        "--exclude-ports", _NEVER_PROBE_TCP_PORTS,
         _TIMING.get(profile.timing, "-T3"),
         "--max-retries", "2",
         "--host-timeout", f"{int(profile.host_timeout_minutes)}m",
         "--min-hostgroup", str(max(1, int(profile.batch_size))),
     ]
     return args
-
-
-def build_udp_service_args(profile: PortProfile) -> list[str]:
-    """Targeted UDP service inventory (-sU). Requires privileged mode; allowlist only."""
-    return [
-        "-Pn", "-n", "-sU", "-sV", "--privileged",
-        "-p", f"U:{_UDP_SERVICE_PORTS}",
-        _TIMING.get(profile.timing, "-T3"),
-        "--max-retries", "1",
-        "--host-timeout", f"{min(10, int(profile.host_timeout_minutes))}m",
-        "--min-hostgroup", str(max(1, int(profile.batch_size))),
-    ]
 
 
 def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
@@ -253,7 +248,7 @@ class NmapScanner:
             log.warning(
                 "scan %s: no local ethernet overlaps targets — ARP/MAC unavailable "
                 "(typical on Docker Desktop / remote VPS). Using remote discovery "
-                "(no UDP probes); only hosts that answer ICMP/TCP are reported; "
+                "(higher rate, tighter RTT); only hosts that answer ICMP/TCP are reported; "
                 "silent phones/IoT need a LAN/host-network scan.",
                 ctx.scan_id,
             )
@@ -289,17 +284,6 @@ class NmapScanner:
                 else:
                     by_ip[h.ip] = h
             port_scope = merge_port_scope(port_scope or extra.port_scope, STANDARD_EXTRA_TCP_PORTS)
-
-        # Targeted UDP service inventory (allowlist). Needs privileged mode; never a UDP blast.
-        if profile.udp_service_scan and bind.privileged:
-            udp_args = build_udp_service_args(profile)
-            udp = self._run(udp_args, ips, min(timeout, EXTRA_PORTS_TIMEOUT_S), ctx, "ports-udp", bind=bind)
-            for h in udp.hosts:
-                if h.ip in by_ip:
-                    _merge_host_ports(by_ip[h.ip], h)
-                else:
-                    by_ip[h.ip] = h
-            # UDP ports are not folded into TCP port_scope (closures stay TCP-only).
 
         # TrueNAS Apps catalog ports (3XXXX) only on hosts identified as TrueNAS / FreeNAS.
         # Also run after full scans: --host-timeout often aborts 1-65535+-sV before high

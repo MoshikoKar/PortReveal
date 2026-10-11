@@ -237,7 +237,6 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                 host_timeout_minutes=cfg.full_host_timeout_minutes if full else cfg.host_timeout_minutes,
                 os_detection=cfg.os_detection,
                 batch_size=min(cfg.port_batch_size, 16) if full else cfg.port_batch_size,
-                udp_service_scan=bool(getattr(cfg, "udp_service_scan", False)),
             )
             ips = sorted(live, key=ip_sort_key)
             batches = [ips[i:i + profile.batch_size] for i in range(0, len(ips), profile.batch_size)]

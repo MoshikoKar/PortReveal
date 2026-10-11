@@ -46,18 +46,17 @@ def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | No
 
 
 def _enrich_open_services(db: Session, device_ids: list[int]) -> None:
-    """Best-effort TLS / SNMP / banner / CPE / SSH enrichment for devices touched by a scan."""
+    """Best-effort TLS / banner / CPE / SSH enrichment for devices touched by a scan (TCP only)."""
     from ..models import Device, DevicePort
     from ..scanner import scanner_status
     from .banners import sync_nmap_banners
-    from .cpe import sync_nmap_cpes, sync_snmp_cpes
-    from .snmp_probe import enrich_device_snmp
+    from .cpe import sync_nmap_cpes
     from .ssh_keys import enrich_device_ssh
     from .tls_probe import enrich_device_tls
 
     if not device_ids:
         return
-    # Live probes (TLS/SNMP/SSH) need real sockets — skip in mock/tests so scripts stay fast.
+    # Live probes (TLS/SSH) need real sockets — skip in mock/tests so scripts stay fast.
     live = scanner_status().effective_mode != "mock"
     devices = {d.id: d for d in db.scalars(select(Device).where(Device.id.in_(device_ids)))}
     for did, dev in devices.items():
@@ -66,15 +65,6 @@ def _enrich_open_services(db: Session, device_ids: list[int]) -> None:
                 enrich_device_tls(db, did, dev.current_ip)
             except Exception:
                 log.debug("tls enrich failed for device %s", did, exc_info=True)
-            try:
-                if enrich_device_snmp(db, did, dev.current_ip):
-                    from ..models import PortSnmp
-                    for snmp in db.scalars(select(PortSnmp).where(PortSnmp.device_id == did)):
-                        p = db.get(DevicePort, snmp.device_port_id)
-                        if p is not None:
-                            sync_snmp_cpes(db, p, snmp)
-            except Exception:
-                log.debug("snmp enrich failed for device %s", did, exc_info=True)
             try:
                 enrich_device_ssh(db, did, dev.current_ip)
             except Exception:
