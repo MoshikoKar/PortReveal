@@ -8,7 +8,7 @@ import { HttpBadge, KIND_LABELS, isUsefulShot, shotNote, shotUrl } from '../comp
 import { Card, Empty, ErrorBox, Loading, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import type { Paged, Scan, SnapshotInfo, WebCapture } from '../types';
-import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, useApi, useInFlight } from '../util';
+import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, scanStageFraction, useApi, useInFlight } from '../util';
 
 interface MockState { mock_active: boolean; last_step: number; steps: string[]; networks: { id: number; name: string; step: number }[] }
 
@@ -380,7 +380,7 @@ export default function Scans() {
                   <td>{SCAN_TYPE_LABELS[s.scan_type]} {s.scan_type === 'full' && <span className="badge medium">deep</span>} <MockBadge mode={s.scanner_mode} /></td>
                   <td><ScanScope s={s} /><div className="muted small">{s.target_count.toLocaleString()} addresses · {s.trigger}</div></td>
                   <td><ScanStatusBadge status={s.status} /></td>
-                  <td>{s.status === 'running' ? <><Progress value={s.progress} /><div className="muted small" style={{ marginTop: 4 }}>{s.stage} · {Math.round(s.progress * 100)}%</div></> : <span className="muted small">waiting for the current scan</span>}</td>
+                  <td>{s.status === 'running' ? <><Progress value={s.progress} /><div className="muted small" style={{ marginTop: 4 }}>{s.stage} · {Math.round(scanStageFraction(s) * 100)}% of stage</div></> : <span className="muted small">waiting for the current scan</span>}</td>
                   <td className="small">{s.hosts_discovered} found · {s.hosts_scanned} scanned</td>
                   <td className="small">{s.started_at ? `${fmtTime(s.started_at)} (${duration(s.started_at, null)})` : fmtTime(s.created_at)}</td>
                   {isAdmin && (

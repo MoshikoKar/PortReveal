@@ -275,7 +275,7 @@ exclusions → schedule → SMTP → optional LDAP → recipients → baseline s
 **Rollback (Windows):** stop the app (`.\scripts\run.ps1 -Stop`). If the new revision
 applied a schema migration (or startup failed mid-migration), restore the matching
 pre-upgrade backup set and check out the recorded prior revision, then start with
-`-SkipBuild` in the foreground — see [docs/runbook.md](docs/runbook.md)
+`-SkipBuild` in the foreground — see [docs/runbook/runbook.md](docs/runbook/runbook.md)
 (Deployment rollback / Failed migration). If the failure was app-only and the database
 schema did not change, `git checkout <prior-sha>` and restart is enough. Do **not** run
 `alembic downgrade` against production.
@@ -355,7 +355,7 @@ docker compose up -d --no-build app
 
 If the schema did not change, retagging/starting `network-finder:previous` alone is
 enough. Full restore steps and migration policy:
-[docs/runbook.md](docs/runbook.md) (Deployment rollback / Failed migration). Do **not**
+[docs/runbook/runbook.md](docs/runbook/runbook.md) (Deployment rollback / Failed migration). Do **not**
 run `alembic downgrade` against production. Practice the path on a disposable host or
 DB copy before you need it.
 
@@ -400,7 +400,7 @@ cp .env.production /secure/backup/location/
 ```
 
 Restore steps, validation checklist, and quarterly restore drill:
-[operations runbook — Backup set and restore](docs/runbook.md#backup-set-and-restore).
+[operations runbook — Backup set and restore](docs/runbook/runbook.md#backup-set-and-restore).
 
 **Migrate inventory from dev to production** (ZIP export; users/settings/web-capture
 screenshots are not included):
@@ -480,9 +480,11 @@ still queued or running, so a long scan never stacks the next day's jobs.
 Large CIDRs are chunked with bounded parallelism; failed/partial scans never
 remove inventory. Discovery caps probe RTT, uses one retry and a minimum probe
 rate, so silent or filtered address space (routed/VPN paths without ARP) does
-not dominate scan time — duration follows live hosts, not CIDR size. Device identity prefers unique MAC, then IP/hostname rules.
+not dominate scan time — duration follows live hosts, not CIDR size. Remote
+scans (no local L2/ARP bind) skip UDP discovery probes; LAN-bound scans keep
+them for ICMP-silent printers/IoT. Device identity prefers unique MAC, then IP/hostname rules.
 History and compressed daily snapshots are retained (default 365 days). What is
-stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy.md).
+stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy/data-and-privacy.md).
 
 Layout overview:
 
@@ -523,7 +525,7 @@ docker/Dockerfile, docker-compose.yml
 ## Troubleshooting
 
 For incident triage, database restore, secret rotation, and failed-migration
-recovery, see the [operations runbook](docs/runbook.md).
+recovery, see the [operations runbook](docs/runbook/runbook.md).
 
 | Symptom | Fix |
 |---|---|

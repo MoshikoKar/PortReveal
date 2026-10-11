@@ -6,7 +6,7 @@ import { EventFeed } from '../components/EventFeed';
 import { Trend } from '../components/Trend';
 import { Card, ErrorBox, Kpi, Loading, MockBadge, Progress, ScanStatusBadge, ScoreBadge } from '../components/ui';
 import type { Dashboard as DashboardData, EventType, Network } from '../types';
-import { EVENT_LABELS, SCAN_TYPE_LABELS, SCORE_HIGH, SCORE_MEDIUM, duration, fmtTime, quoteValue, relTime, useApi } from '../util';
+import { EVENT_LABELS, SCAN_TYPE_LABELS, SCORE_HIGH, SCORE_MEDIUM, duration, fmtTime, quoteValue, relTime, scanStageFraction, useApi } from '../util';
 
 const TYPE_COLORS: Record<EventType, string> = {
   device_discovered: 'var(--high)', port_opened: 'var(--high)', service_changed: 'var(--medium)',
@@ -115,7 +115,7 @@ export default function Dashboard() {
                   </div>
                   <Progress value={current.progress} />
                   <div className="muted small">
-                    {current.stage} · {Math.round(current.progress * 100)}% · {current.hosts_discovered} hosts found · {current.hosts_scanned} scanned · {duration(current.started_at, null)}
+                    {current.stage} · {Math.round(scanStageFraction(current) * 100)}% of stage · {current.hosts_discovered} hosts found · {current.hosts_scanned} scanned · {duration(current.started_at, null)}
                   </div>
                 </div>
               ) : (

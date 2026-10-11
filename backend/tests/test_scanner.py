@@ -60,18 +60,24 @@ def test_parse_rejects_garbage_and_incomplete_output():
 
 
 def test_nmap_arguments_are_fixed_and_safe():
+    # Remote (no ARP): no UDP — unanswered -PU dominates silent routed ranges.
     disc = build_discovery_args(privileged=True, timing="normal")
     assert disc[0] == "-sn" and "-PE" in disc and any(a.startswith("-PS") for a in disc)
-    assert any(a.startswith("-PU") for a in disc)
+    assert not any(a.startswith("-PU") for a in disc)
     unpriv = build_discovery_args(privileged=False, timing="normal")
     assert "-PE" not in unpriv and "--unprivileged" in unpriv
-    # rate floor + RTT caps + one retry keep silent/filtered ranges from dominating discovery time
-    assert disc[disc.index("--min-rate") + 1] == "500" and "--min-rate" in unpriv
+    assert disc[disc.index("--min-rate") + 1] == "1200" and "--min-rate" in unpriv
     assert disc[disc.index("--max-retries") + 1] == "1"
-    assert disc[disc.index("--initial-rtt-timeout") + 1] == "200ms"
-    assert disc[disc.index("--max-rtt-timeout") + 1] == "800ms" and "--max-rtt-timeout" in unpriv
+    assert disc[disc.index("--min-parallelism") + 1] == "32"
+    assert disc[disc.index("--initial-rtt-timeout") + 1] == "100ms"
+    assert disc[disc.index("--max-rtt-timeout") + 1] == "400ms" and "--max-rtt-timeout" in unpriv
     fast = build_discovery_args(privileged=True, timing="fast")
-    assert fast[fast.index("--max-rtt-timeout") + 1] == "400ms"
+    assert fast[fast.index("--max-rtt-timeout") + 1] == "250ms"
+    # Local L2: keep UDP discovery for printers/IoT that ignore ICMP/TCP.
+    local = build_discovery_args(privileged=True, timing="normal", local_l2=True)
+    assert any(a.startswith("-PU") for a in local)
+    assert local[local.index("--min-rate") + 1] == "500"
+    assert local[local.index("--max-rtt-timeout") + 1] == "800ms"
     std = build_port_args(True, PortProfile(full=False, top_ports=3000, host_timeout_minutes=15))
     assert "--top-ports" in std and "3000" in std and "-sV" in std and "-Pn" in std
     assert "-A" not in std and "--script" not in " ".join(std)

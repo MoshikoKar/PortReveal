@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useApp } from '../context';
 import type { SystemStatus } from '../types';
-import { SCAN_TYPE_LABELS } from '../util';
+import { SCAN_TYPE_LABELS, scanStageFraction } from '../util';
 import { Progress } from './ui';
 
 const Icon = ({ d }: { d: string }) => (
@@ -170,7 +170,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <span className="badge accent pulse"><span className="dot" />Scanning</span>
               <span className="small">{SCAN_TYPE_LABELS[current.scan_type]} · {current.network_name ?? 'targets'} · {current.stage}</span>
               <span style={{ width: 120 }}><Progress value={current.progress} /></span>
-              <span className="small muted">{Math.round(current.progress * 100)}%</span>
+              <span className="small muted">{Math.round(scanStageFraction(current) * 100)}%</span>
             </Link>
           ) : (
             <span className="title muted small">{system?.scans.queued ? `${system.scans.queued} scan(s) queued` : 'No scan running'}</span>

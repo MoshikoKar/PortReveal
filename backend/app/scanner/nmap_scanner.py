@@ -50,15 +50,19 @@ DISCOVERY_TIMEOUT_S = 12 * 60
 # Floor for the discovery probe rate. Without it nmap's congestion window never grows on ranges where
 # nothing answers (empty subnets behind a router/VPN), so an empty /22 crawls for over an hour and the
 # chunk times out, leaving every scan of that network partial (no removals, no baseline).
+# Remote (no ARP) uses higher floors: silent routed ranges must not dominate wall time.
 _DISCOVERY_MIN_RATE = {"polite": 200, "normal": 500, "fast": 1000}
+_DISCOVERY_MIN_RATE_REMOTE = {"polite": 400, "normal": 1200, "fast": 2500}
 # RTT caps (initial, max) so probes to silent/filtered addresses are given up quickly instead of
 # waiting out nmap's adaptive timeouts; live hosts answer well inside these on routed/VPN paths.
 _DISCOVERY_RTT_MS = {"polite": (300, 1200), "normal": (200, 800), "fast": (100, 400)}
+_DISCOVERY_RTT_MS_REMOTE = {"polite": (200, 800), "normal": (100, 400), "fast": (50, 250)}
 _DISCOVERY_RETRIES = 1
+_DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
 # UDP ports for -PU discovery (DNS/NetBIOS/SNMP/IKE/mDNS/SSDP). Helps find hosts that
 # ignore ICMP and have no TCP listeners on the SYN-ping list (common for printers / IoT).
-# Targeted UDP for discovery (+ IPMI/BMC 623, CoAP 5683). Not a full UDP blast.
+# Only used when a local L2/ARP bind exists — on remote/VPN paths unanswered UDP dominates time.
 _DISCOVERY_UDP = "53,67,68,137,161,500,4500,5353,1900,623,5683"
 # Optional post-discovery UDP service inventory (privileged -sU), allowlist only.
 _UDP_SERVICE_PORTS = "53,123,137,161,1900,5353,623,5683"
@@ -100,31 +104,38 @@ def nmap_version(nmap_path: str) -> str | None:
     return "unknown" if out.returncode == 0 else None
 
 
-def build_discovery_args(privileged: bool, timing: str) -> list[str]:
+def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = False) -> list[str]:
     # -sn: host discovery only. Reverse DNS stays on (nmap default) for hostnames of live hosts.
-    # TCP/UDP probes stay enabled even behind Docker NAT; discovery_host_is_live() drops
+    # TCP probes stay enabled even behind Docker NAT; discovery_host_is_live() drops
     # RST/conn-refused false positives that have no MAC.
+    # UDP (-PU) only on local L2: unanswered UDP on routed/VPN paths dominates discovery time.
     args = ["-sn"]
     if privileged:
-        args += [
-            "--privileged", "-PE", "-PP",
-            f"-PS{_DISCOVERY_TCP}", "-PA80,443,3389", f"-PU{_DISCOVERY_UDP}",
-        ]
+        args += ["--privileged", "-PE", "-PP", f"-PS{_DISCOVERY_TCP}", "-PA80,443,3389"]
+        if local_l2:
+            args.append(f"-PU{_DISCOVERY_UDP}")
     else:
         args += ["--unprivileged", f"-PS{_DISCOVERY_TCP}"]
-    initial_rtt, max_rtt = discovery_rtt_ms(timing)
-    args += [_TIMING.get(timing, "-T3"), "--max-retries", str(_DISCOVERY_RETRIES),
-             "--min-rate", str(discovery_min_rate(timing)),
-             "--initial-rtt-timeout", f"{initial_rtt}ms", "--max-rtt-timeout", f"{max_rtt}ms"]
+    initial_rtt, max_rtt = discovery_rtt_ms(timing, local_l2=local_l2)
+    args += [
+        _TIMING.get(timing, "-T3"),
+        "--max-retries", str(_DISCOVERY_RETRIES),
+        "--min-rate", str(discovery_min_rate(timing, local_l2=local_l2)),
+        "--min-parallelism", str(_DISCOVERY_MIN_PARALLELISM),
+        "--initial-rtt-timeout", f"{initial_rtt}ms",
+        "--max-rtt-timeout", f"{max_rtt}ms",
+    ]
     return args
 
 
-def discovery_min_rate(timing: str) -> int:
-    return _DISCOVERY_MIN_RATE.get(timing, _DISCOVERY_MIN_RATE["normal"])
+def discovery_min_rate(timing: str, *, local_l2: bool = False) -> int:
+    table = _DISCOVERY_MIN_RATE if local_l2 else _DISCOVERY_MIN_RATE_REMOTE
+    return table.get(timing, table["normal"])
 
 
-def discovery_rtt_ms(timing: str) -> tuple[int, int]:
-    initial, maximum = _DISCOVERY_RTT_MS.get(timing, _DISCOVERY_RTT_MS["normal"])
+def discovery_rtt_ms(timing: str, *, local_l2: bool = False) -> tuple[int, int]:
+    table = _DISCOVERY_RTT_MS if local_l2 else _DISCOVERY_RTT_MS_REMOTE
+    initial, maximum = table.get(timing, table["normal"])
     assert 0 < initial <= maximum, "discovery RTT caps must be positive and ordered"
     return initial, maximum
 
@@ -138,7 +149,7 @@ def discovery_host_is_live(host: HostObservation) -> bool:
     return host.reason in _TRUSTED_DISCOVERY_REASONS
 
 
-def discovery_timeout(targets: list[str], timing: str) -> float:
+def discovery_timeout(targets: list[str], timing: str, *, local_l2: bool = False) -> float:
     """Worst case for a chunk where no address answers (every probe sent with all retries), plus margin."""
     addresses = 0
     for t in targets:
@@ -146,9 +157,11 @@ def discovery_timeout(targets: list[str], timing: str) -> float:
             addresses += ipaddress.ip_network(t, strict=False).num_addresses
         except ValueError:
             addresses += 1  # hostname
-    # TCP SYN list + echo/timestamp + 3 ACK + UDP list
-    probes = len(_DISCOVERY_TCP.split(",")) + 5 + len(_DISCOVERY_UDP.split(","))
-    worst = addresses * probes * (_DISCOVERY_RETRIES + 1) / discovery_min_rate(timing)
+    # TCP SYN list + echo/timestamp + 3 ACK (+ UDP list only on local L2)
+    probes = len(_DISCOVERY_TCP.split(",")) + 5
+    if local_l2:
+        probes += len(_DISCOVERY_UDP.split(","))
+    worst = addresses * probes * (_DISCOVERY_RETRIES + 1) / discovery_min_rate(timing, local_l2=local_l2)
     return max(DISCOVERY_TIMEOUT_S, worst * 1.5)
 
 
@@ -235,16 +248,20 @@ class NmapScanner:
 
     def discover(self, targets: list[str], ctx: ScanContext) -> StageResult:
         bind = resolve_bind(self.exe, targets, self.privileged)
-        if bind.device is None:
+        local_l2 = bind.device is not None
+        if not local_l2:
             log.warning(
                 "scan %s: no local ethernet overlaps targets — ARP/MAC unavailable "
-                "(typical on Docker Desktop bridge). Only hosts that answer ICMP/TCP/UDP "
-                "probes are reported; silent phones/IoT need a LAN/host-network scan.",
+                "(typical on Docker Desktop / remote VPS). Using remote discovery "
+                "(no UDP probes); only hosts that answer ICMP/TCP are reported; "
+                "silent phones/IoT need a LAN/host-network scan.",
                 ctx.scan_id,
             )
-        args = build_discovery_args(bind.privileged, self.timing)
-        run = self._run(args, targets, discovery_timeout(targets, self.timing), ctx, "discovery",
-                        bind=bind)
+        args = build_discovery_args(bind.privileged, self.timing, local_l2=local_l2)
+        run = self._run(
+            args, targets, discovery_timeout(targets, self.timing, local_l2=local_l2),
+            ctx, "discovery", bind=bind,
+        )
         hosts = [h for h in run.hosts if discovery_host_is_live(h)]
         dropped = len(run.hosts) - len(hosts)
         if dropped:

@@ -68,4 +68,4 @@ git rev-parse HEAD > "$OUT/git-revision.txt" 2>/dev/null || true
 find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -mtime "+$KEEP_DAYS" -exec rm -rf {} +
 
 echo "[backup] done: $OUT"
-echo "[backup] copy $OUT off-box; see docs/runbook.md for restore drill and RPO/RTO"
+echo "[backup] copy $OUT off-box; see docs/runbook/runbook.md for restore drill and RPO/RTO"

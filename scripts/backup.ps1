@@ -73,4 +73,4 @@ Get-ChildItem -Path $BackupRoot -Directory -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force
 
 Write-Host "[backup] done: $Out"
-Write-Host "[backup] copy $Out off-box; see docs/runbook.md for restore drill and RPO/RTO"
+Write-Host "[backup] copy $Out off-box; see docs/runbook/runbook.md for restore drill and RPO/RTO"

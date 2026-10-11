@@ -40,6 +40,27 @@ export function duration(start: string | null, end: string | null): string {
   return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
 }
 
+/** Must match backend runner disc_weight for standard/full scans. */
+const SCAN_DISCOVERY_WEIGHT = 0.2;
+
+/** Stage-local 0..1 for labels. Overall `progress` stays weighted for the bar. */
+export function scanStageFraction(s: {
+  scan_type: string;
+  stage: string | null;
+  progress: number;
+}): number {
+  const p = Math.min(1, Math.max(0, s.progress ?? 0));
+  const stage = (s.stage || '').toLowerCase();
+  if (stage.startsWith('discovery')) {
+    if (s.scan_type === 'discovery') return p;
+    return Math.min(1, p / SCAN_DISCOVERY_WEIGHT);
+  }
+  if (stage.includes('port') || stage.includes('service')) {
+    return Math.min(1, Math.max(0, (p - SCAN_DISCOVERY_WEIGHT) / (1 - SCAN_DISCOVERY_WEIGHT)));
+  }
+  return p;
+}
+
 export const EVENT_LABELS: Record<EventType, string> = {
   device_discovered: 'New device',
   device_disappeared: 'Device not detected',

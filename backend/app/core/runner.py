@@ -190,10 +190,13 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
         log.info("scan %s started: %s, %d addresses, scanner=%s", scan_id, scan_type, len(targets), scanner.mode)
 
         has_ports = scan_type in (SCAN_STANDARD, SCAN_FULL)
+        # Discovery is 20% of overall progress on standard/full; UI shows stage-local % separately.
         disc_weight = 0.2 if has_ports else 1.0
 
         # ---- Stage 1: discovery ------------------------------------------------
         chunks = targets.chunks(cfg.discovery_chunk_size)
+        n_chunks = max(len(chunks), 1)
+        _update(scan_id, stage=f"discovery (0/{n_chunks})")
         live: dict[str, HostObservation] = {}
 
         merged: list[StageResult] = []
@@ -209,7 +212,12 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                     else:
                         live[h.ip] = h
             done_n = len(run.results) + len(run.failures)
-            _update(scan_id, progress=disc_weight * done_n / len(chunks), hosts_discovered=len(live))
+            _update(
+                scan_id,
+                stage=f"discovery ({done_n}/{n_chunks})",
+                progress=disc_weight * done_n / n_chunks,
+                hosts_discovered=len(live),
+            )
 
         disc = _run_parallel(chunks, lambda c: scanner.discover(c, ctx), cfg.parallelism, ctx, disc_done)
         if disc.failures and not disc.results:
@@ -233,12 +241,17 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             )
             ips = sorted(live, key=ip_sort_key)
             batches = [ips[i:i + profile.batch_size] for i in range(0, len(ips), profile.batch_size)]
-            _update(scan_id, stage="full port scan" if full else "service scan", progress=disc_weight,
+            port_stage = "full port scan" if full else "service scan"
+            _update(scan_id, stage=f"{port_stage} (0/{len(ips)})", progress=disc_weight,
                     hosts_discovered=len(live))
             def port_done(run: _StageRun) -> None:
                 done_hosts = sum(len(r.hosts) for r in run.results) + sum(len(i) for i in run.failed_items)
-                _update(scan_id, hosts_scanned=done_hosts,
-                        progress=disc_weight + (1 - disc_weight) * done_hosts / max(len(ips), 1))
+                _update(
+                    scan_id,
+                    stage=f"{port_stage} ({done_hosts}/{len(ips)})",
+                    hosts_scanned=done_hosts,
+                    progress=disc_weight + (1 - disc_weight) * done_hosts / max(len(ips), 1),
+                )
 
             ports = _run_parallel(batches, lambda b: scanner.scan_ports(b, profile, ctx), cfg.parallelism, ctx, port_done)
             for r in ports.results:
