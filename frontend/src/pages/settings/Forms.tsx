@@ -195,9 +195,10 @@ export function WebCaptureForm({ onDirtyChange }: { onDirtyChange?: (dirty: bool
     <Card title="Web capture">
       <div className="stack">
         <div className="muted small">
-          Inventory enrichment for known HTTP(S) and RTSP services. Jobs can be started manually or queued
-          automatically after a standard/full scan finds web app services. Not a vulnerability scanner.
-          HTTP screenshots need Chromium (<code>playwright install chromium</code>). RTSP stills and live viewing need <code>ffmpeg</code> on PATH.
+          Inventory enrichment for HTTP(S), RTSP, RDP and VNC UIs. Jobs can be started manually or queued
+          automatically after a standard/full scan. Not a vulnerability scanner.
+          HTTP needs Chromium (<code>playwright install chromium</code>); RTSP/VNC need <code>ffmpeg</code>;
+          RDP needs FreeRDP (<code>wfreerdp</code> on Windows host production, <code>xfreerdp</code> in Linux Docker).
         </div>
         <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable new Web Capture jobs</label>
         <label className="check">

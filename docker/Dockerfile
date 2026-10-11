@@ -50,8 +50,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # nmap is installed here; file capabilities let the non-root app user send raw
 # packets (ARP/ICMP/SYN) when the container is granted NET_RAW/NET_ADMIN.
+# ffmpeg = RTSP/VNC stills; freerdp2-x11 provides xfreerdp for optional RDP stills.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends nmap ffmpeg libcap2-bin tzdata ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      nmap ffmpeg freerdp2-x11 libcap2-bin tzdata ca-certificates \
  && setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip "$(readlink -f /usr/bin/nmap)" \
  && rm -rf /var/lib/apt/lists/*
 

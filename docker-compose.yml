@@ -58,7 +58,7 @@ services:
     cap_add:
       - NET_RAW
       - NET_ADMIN
-    # nmap workers + headless Chromium (screenshots) + ffmpeg (RTSP stills) + the API itself.
+    # nmap workers + Chromium (HTTP) + ffmpeg (RTSP/VNC) + FreeRDP (RDP) + the API itself.
     mem_limit: ${APP_MEM_LIMIT:-3g}
     cpus: ${APP_CPUS:-4}
     shm_size: 256m  # Chromium renders into /dev/shm; Docker's 64 MB default can crash large pages

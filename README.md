@@ -9,7 +9,7 @@ No exploits, brute force, authentication attempts, or intrusive NSE scripts are 
 
 | | Development | Production (Windows host) | Production (Linux Docker) |
 |---|---|---|---|
-| Start | `npm install && npm run dev` | `.\scripts\run.ps1 -Mode production -Background` | `docker compose up -d` |
+| Start | `npm install && npm run setup` then Playwright Chromium, then `npm run dev` | `.\scripts\run.ps1 -Mode production -Background` | `docker compose up -d` |
 | Database | SQLite `./data/dev.db` | PostgreSQL (Compose `db` only) | PostgreSQL (container) |
 | Scanner | mock (default) or local nmap | host nmap + Npcap | nmap in the app image |
 | Docker | not required | Postgres only | app + db |
@@ -32,11 +32,14 @@ in development (required for real scans).
 git clone https://github.com/MoshikoKar/network_finder.git
 cd network_finder
 npm install
+npm run setup
+backend\.venv\Scripts\python.exe -m playwright install chromium
 npm run dev
 ```
 
-The first `npm run dev` creates `.env` from `.env.example`, sets up
-`backend/.venv`, installs Python dependencies, and migrates the database.
+`npm run setup` creates `.env` from `.env.example`, sets up `backend/.venv`,
+installs Python dependencies, and migrates the database. Install Playwright
+Chromium before the first run (needed for web-capture screenshots).
 
 Open **http://localhost:5173** and sign in with **admin / admin** (development
 seed). The seed also creates the network *Mock Lab* (`10.99.0.0/24`) and queues a
@@ -44,7 +47,7 @@ baseline scan so the dashboard fills within seconds.
 
 | Task | Command |
 |---|---|
-| Install | `npm install` (or `npm run setup` for Python/DB only) |
+| Install | `npm install` + `npm run setup` + `backend\.venv\Scripts\python.exe -m playwright install chromium` |
 | Configure | edit `.env` (safe defaults; created from `.env.example`) |
 | Start both sides | `npm run dev` |
 | Backend / frontend only | `npm run dev:backend` / `npm run dev:frontend` |
@@ -96,18 +99,21 @@ port/service/IP/absence changes → quiet steps). Reset with `npm run mock:reset
 
 ### Web capture (optional)
 
-Enrichment for known HTTP(S) and RTSP services (not part of nmap). Auto-queue
-after standard/full scans is toggled under **Settings → Web capture**. Manual jobs
-from Device details, Devices multi-select, or **Scans → Web captures**.
+Post-scan stills of remote UIs found in inventory: **HTTP(S)** (Playwright),
+**RTSP** (ffmpeg), **RDP** (FreeRDP), and **VNC** (ffmpeg or `vncsnapshot`).
+Same job and **Web** gallery — not an nmap stage. Auto-queue after standard/full
+scans is under **Settings → Web capture**. Manual jobs from Device details,
+Devices multi-select, or **Scans → Web captures**.
 
-Needs Chromium (Playwright) for HTTP screenshots and **ffmpeg** for RTSP stills /
-live MJPEG:
+| Target | Tool on `PATH` | Install |
+|---|---|---|
+| HTTP(S) screenshots | Playwright Chromium | `backend\.venv\Scripts\python.exe -m playwright install chromium` |
+| RTSP stills / live MJPEG, VNC stills | `ffmpeg` | Windows: [ffmpeg.org](https://ffmpeg.org/download.html) or `winget install ffmpeg`. Linux: `sudo apt-get install -y ffmpeg`. **Preinstalled in Docker.** |
+| RDP stills | `wfreerdp` (Windows) or `xfreerdp` (Linux) | Windows: install a FreeRDP build so `wfreerdp` is on `PATH` (e.g. [FreeRDP releases](https://github.com/FreeRDP/FreeRDP/releases)). Linux: `sudo apt-get install -y freerdp2-x11`. **Preinstalled in Docker.** |
 
-```bash
-cd backend
-.\.venv\Scripts\playwright.exe install chromium   # Windows
-# or: playwright install chromium
-```
+Empty credentials only — hosts that require NLA/passwords are recorded without a
+frame. Confirm tools with `ffmpeg -version` and `wfreerdp /version` or
+`xfreerdp --version`, then restart the app.
 
 Any inventory port identified as **rtsp** is treated as a stream page; use
 **Watch live** on the host preview for the server-side RTSP→MJPEG proxy.
@@ -205,16 +211,19 @@ frontend typecheck/eslint, `npm run build`, and (separately) Alembic upgrade +
 Recommended when the scanner is a **Windows PC on the LAN** (Npc + Npcap).
 Docker Desktop runs **Postgres only**; the app and nmap stay on the host.
 
-Requirements: Node.js 20.19+, Python 3.10+, nmap+Npc, Docker Desktop, ffmpeg
-on `PATH`. Copy `.env.production.example` → `.env.production` and set at least
+Requirements: Node.js 20.19+, Python 3.10+, nmap+Npc, Docker Desktop, and on
+`PATH`: **ffmpeg** (RTSP/VNC) plus **FreeRDP** as `wfreerdp` if you want RDP
+stills. Copy `.env.production.example` → `.env.production` and set at least
 `POSTGRES_PASSWORD` and `APP_SECRET_KEY`.
 
 Install Chromium for the same user that runs the app (Playwright pip package
-does not download the browser):
+does not download the browser), then put ffmpeg / FreeRDP on `PATH`:
 
 ```powershell
 npm run setup
 backend\.venv\Scripts\python.exe -m playwright install chromium
+# ffmpeg: winget install ffmpeg   (or add a portable build to PATH)
+# FreeRDP: install a Windows build so `wfreerdp` resolves (see Web capture above)
 ```
 
 | Task | Command |
@@ -310,9 +319,9 @@ docker compose logs -f app
 ```
 
 Compose provides PostgreSQL 16 (`pgdata`) and the app image (frontend + FastAPI +
-nmap + Playwright Chromium + ffmpeg) with host networking and `NET_RAW` /
-`NET_ADMIN`. One app process only (queue + scheduler live inside it); see
-[Availability and capacity](#availability-and-capacity).
+nmap + Playwright Chromium + ffmpeg + FreeRDP) with host networking and
+`NET_RAW` / `NET_ADMIN`. One app process only (queue + scheduler live inside it);
+see [Availability and capacity](#availability-and-capacity).
 
 `APP_SECRET_KEY` is required in production: the app refuses to start while it is
 empty or still the example placeholder. Installs that previously ran without it
@@ -502,7 +511,7 @@ docker/Dockerfile, docker-compose.yml
 - **Backend:** Python 3.10+, FastAPI, Uvicorn, SQLAlchemy 2, Alembic, Pydantic
 - **Database:** SQLite (dev) or PostgreSQL 16 (prod)
 - **Scanner:** Nmap (production); MockScanner (development default)
-- **Enrichment:** Playwright (Chromium), ffmpeg (RTSP/VNC), optional FreeRDP (RDP)
+- **Enrichment:** Playwright (Chromium), ffmpeg (RTSP/VNC), FreeRDP (RDP; optional on host, in Docker image)
 - **Auth:** Argon2, server-side sessions, optional LDAP (`ldap3`)
 - **Tooling:** Node.js 20.19+ workspaces, Ruff, pytest, Docker Compose
 
@@ -526,6 +535,7 @@ recovery, see the [operations runbook](docs/runbook.md).
 | Stale Python deps | `npm run setup -- --force` |
 | Browser unavailable at capture time | `backend\.venv\Scripts\python.exe -m playwright install chromium` as the app user, then restart. |
 | ffmpeg unavailable | Install ffmpeg; confirm `ffmpeg -version`, then restart. Preinstalled in Docker. |
+| freerdp unavailable | Install FreeRDP (`wfreerdp` on Windows, `xfreerdp` via `freerdp2-x11` on Debian/Ubuntu); confirm on `PATH`, then restart. Preinstalled in Docker. |
 | Scan stuck after restart | In-flight scans are marked failed; start a new one. |
 | App exits at start: `APP_SECRET_KEY must be set` | Production needs an explicit key. Set it in `.env.production` / `.env` (`openssl rand -hex 32`), or copy `data/.secret_key` from an earlier run to keep stored SMTP/LDAP passwords. |
 | Login HTTP 429 | Wait out the login window (`LOGIN_WINDOW_MINUTES`, default 15). |

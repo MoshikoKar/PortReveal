@@ -515,6 +515,15 @@ if ($Mode -eq "dev") {
 # production
 Write-Log "Starting production on ${listenHost}:${listenPort} (env: .env.production, DB: Docker Postgres)"
 
+# Web-capture tools stay on the host (Postgres is the only container). Soft-warn so
+# RDP/RTSP stills do not fail silently after deploy.
+if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+    Write-Log "ffmpeg not on PATH — RTSP/VNC web-capture stills will soft-skip" "WARN"
+}
+if (-not (Get-Command wfreerdp -ErrorAction SilentlyContinue)) {
+    Write-Log "wfreerdp not on PATH — RDP web-capture stills will soft-skip (install FreeRDP for Windows)" "WARN"
+}
+
 Start-DockerDb
 
 $distIndex = Join-Path $Root "frontend\dist\index.html"
