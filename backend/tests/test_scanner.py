@@ -65,8 +65,13 @@ def test_nmap_arguments_are_fixed_and_safe():
     assert any(a.startswith("-PU") for a in disc)
     unpriv = build_discovery_args(privileged=False, timing="normal")
     assert "-PE" not in unpriv and "--unprivileged" in unpriv
-    # a rate floor keeps empty (silent) ranges from crawling past the chunk timeout
-    assert disc[disc.index("--min-rate") + 1] == "300" and "--min-rate" in unpriv
+    # rate floor + RTT caps + one retry keep silent/filtered ranges from dominating discovery time
+    assert disc[disc.index("--min-rate") + 1] == "500" and "--min-rate" in unpriv
+    assert disc[disc.index("--max-retries") + 1] == "1"
+    assert disc[disc.index("--initial-rtt-timeout") + 1] == "200ms"
+    assert disc[disc.index("--max-rtt-timeout") + 1] == "800ms" and "--max-rtt-timeout" in unpriv
+    fast = build_discovery_args(privileged=True, timing="fast")
+    assert fast[fast.index("--max-rtt-timeout") + 1] == "400ms"
     std = build_port_args(True, PortProfile(full=False, top_ports=3000, host_timeout_minutes=15))
     assert "--top-ports" in std and "3000" in std and "-sV" in std and "-Pn" in std
     assert "-A" not in std and "--script" not in " ".join(std)

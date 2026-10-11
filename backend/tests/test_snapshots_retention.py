@@ -180,6 +180,27 @@ def test_schedule_next_run_and_tick(db):
     assert enqueue_scheduled_scans(db) == []  # already queued for that network
 
 
+def test_schedule_defers_while_any_scan_is_active(db):
+    cfg = ScheduleSettings(enabled=True, time="02:00", days=[0, 1, 2, 3, 4, 5, 6],
+                           discovery_before_standard=False)
+    net = make_network(db)
+    other = make_network(db, cidr="10.1.0.0/16", name="Other Net")
+    busy = Scan(scan_type="standard", trigger="manual", status="running", network_id=other.id, target_count=65536)
+    db.add(busy)
+    put_section(db, cfg)
+    db.commit()
+    now = datetime(2026, 10, 5, 1, 0).astimezone()
+    tick(now)
+    tick(now.replace(hour=2, minute=1))  # another network's scan is running: nothing queued
+    assert db.scalar(select(func.count(Scan.id)).where(Scan.network_id == net.id)) == 0
+
+    busy.status = "completed"
+    db.commit()
+    tick(now.replace(hour=2, minute=30))  # queue idle, still inside the catch-up window
+    queued = db.scalars(select(Scan).where(Scan.network_id == net.id)).all()
+    assert [(s.scan_type, s.trigger) for s in queued] == [("standard", "scheduled")]
+
+
 def test_schedule_skips_discovery_when_disabled(db):
     cfg = ScheduleSettings(enabled=True, time="02:00", days=[0, 1, 2, 3, 4, 5, 6],
                            discovery_before_standard=False)

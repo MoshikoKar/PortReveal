@@ -12,7 +12,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 
 from ..db import session_scope, utcnow
-from ..models import SCAN_DISCOVERY, SCAN_STANDARD, TRIGGER_PRESENCE, TRIGGER_SCHEDULED, Network, Scan
+from ..models import (
+    SCAN_ACTIVE_STATES,
+    SCAN_DISCOVERY,
+    SCAN_STANDARD,
+    TRIGGER_PRESENCE,
+    TRIGGER_SCHEDULED,
+    Network,
+    Scan,
+)
 from ..settings_store import (
     NotificationSettings,
     PresenceSettings,
@@ -95,6 +103,10 @@ def _enqueue_network_scans(db, net: Network, *, discovery_before: bool) -> list[
     return ids
 
 
+def any_scan_active(db) -> bool:
+    return db.scalar(select(Scan.id).where(Scan.status.in_(SCAN_ACTIVE_STATES)).limit(1)) is not None
+
+
 def enqueue_presence_scans(db) -> list[int]:
     """Queue one discovery-only presence scan per enabled network (no port stage, no web capture)."""
     ids = []
@@ -161,7 +173,12 @@ def tick(now: datetime | None = None) -> None:
             changed = True
         elif cfg.enabled and now.weekday() in cfg.days and state.get("last_scan_date") != today:
             due = _due_today(cfg, now)
-            if due <= now < due + CATCH_UP_WINDOW:
+            if due <= now < due + CATCH_UP_WINDOW and any_scan_active(db):
+                if state.get("deferred_scan_date") != today:
+                    state["deferred_scan_date"] = today
+                    changed = True
+                    log.info("scheduled scan deferred: another scan is still queued/running")
+            elif due <= now < due + CATCH_UP_WINDOW:
                 queued = enqueue_scheduled_scans(db, cfg)
                 state["last_scan_date"] = today
                 changed = True

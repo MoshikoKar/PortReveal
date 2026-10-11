@@ -475,8 +475,12 @@ starts the app again and restart recovery applies.
 
 Daily schedule (optional discovery then standard), daytime presence scans, and
 correlated absence thresholds are configured under **Settings → Schedule**.
+The daily schedule is deferred (within its catch-up window) while any scan is
+still queued or running, so a long scan never stacks the next day's jobs.
 Large CIDRs are chunked with bounded parallelism; failed/partial scans never
-remove inventory. Device identity prefers unique MAC, then IP/hostname rules.
+remove inventory. Discovery caps probe RTT, uses one retry and a minimum probe
+rate, so silent or filtered address space (routed/VPN paths without ARP) does
+not dominate scan time — duration follows live hosts, not CIDR size. Device identity prefers unique MAC, then IP/hostname rules.
 History and compressed daily snapshots are retained (default 365 days). What is
 stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy.md).
 

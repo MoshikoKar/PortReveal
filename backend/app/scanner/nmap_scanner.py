@@ -46,12 +46,15 @@ _DISCOVERY_BASE_TCP = (
     "3306,3389,5000,5900,8000,8080,8443,8554,9100,32400"
 )
 _DISCOVERY_TCP = merge_port_scope(_DISCOVERY_BASE_TCP, AI_LLM_DISCOVERY_TCP_PORTS) or _DISCOVERY_BASE_TCP
-DISCOVERY_TIMEOUT_S = 30 * 60
+DISCOVERY_TIMEOUT_S = 12 * 60
 # Floor for the discovery probe rate. Without it nmap's congestion window never grows on ranges where
 # nothing answers (empty subnets behind a router/VPN), so an empty /22 crawls for over an hour and the
 # chunk times out, leaving every scan of that network partial (no removals, no baseline).
-_DISCOVERY_MIN_RATE = {"polite": 100, "normal": 300, "fast": 600}
-_DISCOVERY_RETRIES = 2
+_DISCOVERY_MIN_RATE = {"polite": 200, "normal": 500, "fast": 1000}
+# RTT caps (initial, max) so probes to silent/filtered addresses are given up quickly instead of
+# waiting out nmap's adaptive timeouts; live hosts answer well inside these on routed/VPN paths.
+_DISCOVERY_RTT_MS = {"polite": (300, 1200), "normal": (200, 800), "fast": (100, 400)}
+_DISCOVERY_RETRIES = 1
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
 # UDP ports for -PU discovery (DNS/NetBIOS/SNMP/IKE/mDNS/SSDP). Helps find hosts that
 # ignore ICMP and have no TCP listeners on the SYN-ping list (common for printers / IoT).
@@ -109,13 +112,21 @@ def build_discovery_args(privileged: bool, timing: str) -> list[str]:
         ]
     else:
         args += ["--unprivileged", f"-PS{_DISCOVERY_TCP}"]
+    initial_rtt, max_rtt = discovery_rtt_ms(timing)
     args += [_TIMING.get(timing, "-T3"), "--max-retries", str(_DISCOVERY_RETRIES),
-             "--min-rate", str(discovery_min_rate(timing))]
+             "--min-rate", str(discovery_min_rate(timing)),
+             "--initial-rtt-timeout", f"{initial_rtt}ms", "--max-rtt-timeout", f"{max_rtt}ms"]
     return args
 
 
 def discovery_min_rate(timing: str) -> int:
     return _DISCOVERY_MIN_RATE.get(timing, _DISCOVERY_MIN_RATE["normal"])
+
+
+def discovery_rtt_ms(timing: str) -> tuple[int, int]:
+    initial, maximum = _DISCOVERY_RTT_MS.get(timing, _DISCOVERY_RTT_MS["normal"])
+    assert 0 < initial <= maximum, "discovery RTT caps must be positive and ordered"
+    return initial, maximum
 
 
 def discovery_host_is_live(host: HostObservation) -> bool:
