@@ -67,7 +67,8 @@ def exclusion_set(db) -> AddressSet:
         return AddressSet()
 
 
-def scan_targets(db, scan: Scan) -> AddressSet:
+def scan_targets(db, scan: Scan) -> tuple[AddressSet, int]:
+    """Return (targets after exclusions, number of addresses removed by exclusions)."""
     if scan.network_id is not None:
         net = db.get(Network, scan.network_id)
         if net is None:
@@ -75,7 +76,9 @@ def scan_targets(db, scan: Scan) -> AddressSet:
         base = AddressSet.from_specs(net.cidr)
     else:
         base = AddressSet.from_specs(scan.targets or "")
-    return base.subtract(exclusion_set(db))
+    excluded = exclusion_set(db)
+    targets = base.subtract(excluded)
+    return targets, len(base) - len(targets)
 
 
 def mock_step_key(network_id: int) -> str:
@@ -167,7 +170,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             if scan is None:
                 return SCAN_FAILED
             cfg = get_section(db, ScanSettings)
-            targets = scan_targets(db, scan)
+            targets, excluded_n = scan_targets(db, scan)
             if not targets:
                 raise ScanStageError("no addresses to scan (all targets are excluded or empty)")
             if len(targets) > MAX_SCAN_ADDRESSES:
@@ -187,7 +190,10 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             scan.target_count, scan.stage, scan.progress, scan.error = len(targets), "discovery", 0.0, None
         if cfg.keep_raw_xml and scanner.mode == "nmap":
             ctx.raw_dir = settings.data_path / "raw" / f"scan_{scan_id}"
-        log.info("scan %s started: %s, %d addresses, scanner=%s", scan_id, scan_type, len(targets), scanner.mode)
+        log.info(
+            "scan %s started: %s, %d addresses (%d excluded), scanner=%s",
+            scan_id, scan_type, len(targets), excluded_n, scanner.mode,
+        )
 
         has_ports = scan_type in (SCAN_STANDARD, SCAN_FULL)
         # Discovery is 20% of overall progress on standard/full; UI shows stage-local % separately.

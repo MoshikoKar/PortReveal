@@ -478,12 +478,12 @@ correlated absence thresholds are configured under **Settings → Schedule**.
 The daily schedule is deferred (within its catch-up window) while any scan is
 still queued or running, so a long scan never stacks the next day's jobs.
 Large CIDRs are chunked with bounded parallelism; failed/partial scans never
-remove inventory. Discovery caps probe RTT, uses one retry and a minimum probe
-rate, so silent or filtered address space (routed/VPN paths without ARP) does
-not dominate scan time — duration follows live hosts, not CIDR size. Discovery
-uses ICMP/TCP (and rate-capped ARP on local segments). No scan or enrichment
-stage sends UDP. Service detection runs `--version-light` and never probes
-telephony signaling ports (H.323 1720, SCCP 2000/2443, CTI 2748, SIP
+remove inventory. Discovery caps probe RTT, uses one retry, and bounds probe
+rate (min and max) on both local and routed/VPN paths so silent ranges finish
+without flooding a remote site — duration follows live hosts, not CIDR size.
+Discovery uses ICMP/TCP (rate-capped ARP on local segments). No scan or
+enrichment stage sends UDP. Service detection runs `--version-light` and never
+probes telephony signaling ports (H.323 1720, SCCP 2000/2443, CTI 2748, SIP
 5060/5061), which can crash Cisco CUCM and similar call managers. Device identity prefers unique MAC, then IP/hostname rules.
 History and compressed daily snapshots are retained (default 365 days). What is
 stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy/data-and-privacy.md).

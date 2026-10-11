@@ -55,7 +55,11 @@ DISCOVERY_TIMEOUT_S = 12 * 60
 # broadcast load on the segment light.
 _DISCOVERY_MIN_RATE = {"polite": 50, "normal": 100, "fast": 200}
 _DISCOVERY_MAX_RATE_LOCAL = {"polite": 150, "normal": 300, "fast": 600}
-_DISCOVERY_MIN_RATE_REMOTE = {"polite": 400, "normal": 1200, "fast": 2500}
+# Remote (routed/VPN) discovery: floor keeps empty ranges from crawling; ceiling stops nmap from
+# bursting unbounded into a site. Without a max-rate, parallel chunks can flood a WAN/VPN path and
+# knock over fragile appliances (e.g. Cisco CUCM) even when their IPs are excluded from targets.
+_DISCOVERY_MIN_RATE_REMOTE = {"polite": 200, "normal": 500, "fast": 1000}
+_DISCOVERY_MAX_RATE_REMOTE = {"polite": 400, "normal": 1000, "fast": 2000}
 # RTT caps (initial, max) so probes to silent/filtered addresses are given up quickly instead of
 # waiting out nmap's adaptive timeouts; live hosts answer well inside these on routed/VPN paths.
 _DISCOVERY_RTT_MS = {"polite": (300, 1200), "normal": (200, 800), "fast": (100, 400)}
@@ -124,15 +128,26 @@ def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = Fals
         "--max-rtt-timeout", f"{max_rtt}ms",
     ]
     if local_l2:
-        args += ["--max-rate", str(_DISCOVERY_MAX_RATE_LOCAL.get(timing, _DISCOVERY_MAX_RATE_LOCAL["normal"]))]
+        args += ["--max-rate", str(discovery_max_rate(timing, local_l2=True))]
     else:
-        args += ["--min-parallelism", str(_DISCOVERY_MIN_PARALLELISM)]
+        args += [
+            "--min-parallelism", str(_DISCOVERY_MIN_PARALLELISM),
+            "--max-rate", str(discovery_max_rate(timing, local_l2=False)),
+        ]
     return args
 
 
 def discovery_min_rate(timing: str, *, local_l2: bool = False) -> int:
     table = _DISCOVERY_MIN_RATE if local_l2 else _DISCOVERY_MIN_RATE_REMOTE
     return table.get(timing, table["normal"])
+
+
+def discovery_max_rate(timing: str, *, local_l2: bool = False) -> int:
+    table = _DISCOVERY_MAX_RATE_LOCAL if local_l2 else _DISCOVERY_MAX_RATE_REMOTE
+    maximum = table.get(timing, table["normal"])
+    minimum = discovery_min_rate(timing, local_l2=local_l2)
+    assert maximum >= minimum, "discovery max-rate must be >= min-rate"
+    return maximum
 
 
 def discovery_rtt_ms(timing: str, *, local_l2: bool = False) -> tuple[int, int]:

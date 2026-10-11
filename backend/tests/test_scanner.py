@@ -66,18 +66,20 @@ def test_nmap_arguments_are_fixed_and_safe():
     assert not any(a.startswith("-PU") for a in disc)
     unpriv = build_discovery_args(privileged=False, timing="normal")
     assert "-PE" not in unpriv and "--unprivileged" in unpriv
-    assert disc[disc.index("--min-rate") + 1] == "1200" and "--min-rate" in unpriv
+    assert disc[disc.index("--min-rate") + 1] == "500" and "--min-rate" in unpriv
+    assert disc[disc.index("--max-rate") + 1] == "1000" and "--max-rate" in unpriv
     assert disc[disc.index("--max-retries") + 1] == "1"
     assert disc[disc.index("--min-parallelism") + 1] == "32"
     assert disc[disc.index("--initial-rtt-timeout") + 1] == "100ms"
     assert disc[disc.index("--max-rtt-timeout") + 1] == "400ms" and "--max-rtt-timeout" in unpriv
     fast = build_discovery_args(privileged=True, timing="fast")
     assert fast[fast.index("--max-rtt-timeout") + 1] == "250ms"
+    assert fast[fast.index("--max-rate") + 1] == "2000"
     local = build_discovery_args(privileged=True, timing="normal", local_l2=True)
     assert not any(a.startswith("-PU") for a in local)
     assert local[local.index("--min-rate") + 1] == "100"
     assert local[local.index("--max-rate") + 1] == "300"
-    assert "--min-parallelism" not in local and "--max-rate" not in disc
+    assert "--min-parallelism" not in local
     assert local[local.index("--max-rtt-timeout") + 1] == "800ms"
     std = build_port_args(True, PortProfile(full=False, top_ports=3000, host_timeout_minutes=15))
     assert "--top-ports" in std and "3000" in std and "-sV" in std and "-Pn" in std
