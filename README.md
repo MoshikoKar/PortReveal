@@ -231,8 +231,16 @@ Production start loads `.env.production`, starts Compose `db` only, builds the
 frontend, migrates, and serves on `APP_PORT` (default **8081**). Background mode
 logs to `data/logs/production.log`.
 
+The production host **supervises** uvicorn: app stderr is teed into the log without
+killing the PowerShell process (a Windows PowerShell 5.1 pitfall with
+`$ErrorActionPreference = Stop`), and if uvicorn or Docker Postgres exits
+unexpectedly the script brings Postgres back up and restarts the app until you
+`-Stop`. For boot/logon survival, also register Task Scheduler as noted in
+`scripts/run.ps1`.
+
 `-Stop` (and `-ForceRestart`) first asks the app to shut down gracefully by creating
-`data/network-finder.stop`; the app stops its scheduler, scan worker and web-capture
+`data/network-finder.stop` (and a no-restart marker so the supervisor does not
+bring the app back); the app stops its scheduler, scan worker and web-capture
 worker and exits. If it has not exited within 45 seconds (hung, or a build older than
 this feature), the script falls back to `Stop-Process -Force`. A hard kill is safe for
 data: an interrupted scan or capture is marked failed on the next start, its partial

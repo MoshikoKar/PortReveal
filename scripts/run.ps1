@@ -24,7 +24,10 @@
 
 .PARAMETER Background
   production only: start in a hidden window and return once the app is listening.
-  Output goes to data\logs\production.log; stop with -Stop
+  Output goes to data\logs\production.log; stop with -Stop.
+  The production host supervises uvicorn: stderr from the app no longer kills the
+  process (PowerShell 5.1 + ErrorActionPreference Stop bug), and unexpected exits
+  restart Docker Postgres + uvicorn until -Stop.
 
 .PARAMETER Stop
   Stop the production app process (leaves Docker `db` running). Asks the app to shut down
@@ -57,6 +60,8 @@ $LogDir = Join-Path $DataDir "logs"
 $PidFile = Join-Path $DataDir "network-finder-prod.pid"
 # The app watches this file (NETWORK_FINDER_STOP_FILE) and shuts down gracefully when it appears.
 $StopFile = Join-Path $DataDir "network-finder.stop"
+# Written by -Stop / ForceRestart so the supervisor loop does not bring uvicorn back up.
+$NoRestartFile = Join-Path $DataDir "network-finder.no-restart"
 $GracefulStopTimeoutS = 45
 # If the stop file is still present after this many seconds, the app is not watching
 # NETWORK_FINDER_STOP_FILE (older process / env not set) — force-kill instead of waiting.
@@ -65,6 +70,8 @@ $LogFile = Join-Path $LogDir "production.log"
 $ComposeFile = Join-Path $Root "docker-compose.yml"
 $ProdEnvFile = Join-Path $Root ".env.production"
 $BackgroundStartTimeoutS = 300
+$SupervisorRestartDelayS = 5
+$SupervisorDockerRetryDelayS = 30
 
 function Write-Log {
     param([string] $Message, [string] $Level = "INFO")
@@ -160,6 +167,8 @@ function Request-GracefulStop {
     if ($appPids.Count -eq 0) { return $true }
     Write-Log "Requesting graceful stop of PID(s) $($appPids -join ', ') (up to ${GracefulStopTimeoutS}s)"
     New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+    # Prevent the production supervisor from restarting uvicorn while we are stopping.
+    Set-Content -LiteralPath $NoRestartFile -Value (Get-Date -Format o) -Encoding ascii
     Set-Content -LiteralPath $StopFile -Value (Get-Date -Format o) -Encoding ascii
 
     # The app watcher deletes the stop file when it sees it; if the file is still here
@@ -193,6 +202,10 @@ function Request-GracefulStop {
 
 function Stop-ProductionInstance {
     param([int] $Port)
+
+    New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+    # Always set this first: the supervisor may be between uvicorn restarts (port free).
+    Set-Content -LiteralPath $NoRestartFile -Value (Get-Date -Format o) -Encoding ascii
 
     $wrapperPid = $null
     if (Test-Path -LiteralPath $PidFile) {
@@ -296,6 +309,98 @@ function Start-DockerDb {
         throw "Postgres did not become ready within 2 minutes"
     }
     Write-Log "Postgres container is healthy"
+}
+
+function Write-ProdTeeLine {
+    # Tee one stdout/stderr line into the console and production.log without throwing.
+    param($Line)
+    if ($null -eq $Line) { return }
+    if ($Line -is [System.Management.Automation.ErrorRecord]) {
+        $text = $Line.ToString()
+    } else {
+        $text = "$Line"
+    }
+    if ([string]::IsNullOrEmpty($text)) { return }
+    Write-Host $text
+    try {
+        Add-Content -LiteralPath $LogFile -Value $text -Encoding UTF8 -ErrorAction Continue
+    } catch {
+        # Never let log I/O kill the supervised app process.
+    }
+}
+
+function Invoke-UvicornOnce {
+    # Run uvicorn once. Native stderr must NOT terminate this script: with
+    # $ErrorActionPreference=Stop, PowerShell 5.1 turns 2>&1 ErrorRecords into
+    # terminating errors (seen in production.log as "[ERROR] --- Logging error ---"),
+    # which tears down the hidden -Background host and kills the app hours after a scan.
+    param([string[]] $UvArgs)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & node @UvArgs 2>&1 | ForEach-Object { Write-ProdTeeLine $_ }
+        if ($null -eq $LASTEXITCODE) { return 0 }
+        return [int]$LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+
+function Test-NoRestartRequested {
+    return (Test-Path -LiteralPath $NoRestartFile)
+}
+
+function Clear-NoRestartRequest {
+    Remove-Item -LiteralPath $NoRestartFile -Force -ErrorAction SilentlyContinue
+}
+
+function Start-ProductionServeLoop {
+    # Keep uvicorn up across stderr noise, Docker blips, and unexpected exits.
+    # -Stop / ForceRestart writes network-finder.no-restart so this loop exits cleanly.
+    param(
+        [string] $ListenHost,
+        [int] $ListenPort,
+        [string] $Forwarded,
+        [string] $PostgresPort
+    )
+    $uvArgs = @(
+        "scripts/py.mjs", "-m", "uvicorn", "app.main:app",
+        "--host", $ListenHost,
+        "--port", "$ListenPort",
+        "--proxy-headers",
+        "--forwarded-allow-ips", $Forwarded,
+        "--log-level", "warning"
+    )
+
+    Clear-NoRestartRequest
+    while ($true) {
+        if (Test-NoRestartRequested) {
+            Write-Log "Stop requested; supervisor not restarting"
+            Clear-NoRestartRequest
+            return 0
+        }
+
+        try {
+            Start-DockerDb
+        } catch {
+            Write-Log "Postgres unavailable: $($_.Exception.Message); retry in ${SupervisorDockerRetryDelayS}s" "WARN"
+            Start-Sleep -Seconds $SupervisorDockerRetryDelayS
+            continue
+        }
+
+        Write-Log "uvicorn app.main:app (host nmap + Docker Postgres:$PostgresPort)"
+        $code = Invoke-UvicornOnce -UvArgs $uvArgs
+        Write-Log "uvicorn exited with code $code" $(if ($code -eq 0) { "INFO" } else { "ERROR" })
+
+        if (Test-NoRestartRequested) {
+            Write-Log "Stop requested; supervisor exiting"
+            Clear-NoRestartRequest
+            return $code
+        }
+
+        Write-Log "Restarting production app in ${SupervisorRestartDelayS}s (use -Stop to halt)" "WARN"
+        Start-Sleep -Seconds $SupervisorRestartDelayS
+    }
 }
 
 # --- resolve env file / port -------------------------------------------------
@@ -434,25 +539,11 @@ Invoke-Checked -Label "database migrate" -FilePath $npmCmd -ArgumentList @("run"
 $PID | Set-Content -LiteralPath $PidFile -Encoding ascii
 Write-Log "PID file $PidFile <- $PID"
 
-Write-Log "uvicorn app.main:app (host nmap + Docker Postgres:$($env:POSTGRES_PORT))"
-$uvArgs = @(
-    "scripts/py.mjs", "-m", "uvicorn", "app.main:app",
-    "--host", $listenHost,
-    "--port", "$listenPort",
-    "--proxy-headers",
-    "--forwarded-allow-ips", $forwarded,
-    "--log-level", "warning"
-)
-
 try {
-    & node @uvArgs 2>&1 | ForEach-Object {
-        $text = "$_"
-        Write-Host $text
-        Add-Content -LiteralPath $LogFile -Value $text -Encoding UTF8
-    }
-    $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
-    Write-Log "uvicorn exited with code $code" $(if ($code -eq 0) { "INFO" } else { "ERROR" })
+    $code = Start-ProductionServeLoop -ListenHost $listenHost -ListenPort $listenPort `
+        -Forwarded $forwarded -PostgresPort "$($env:POSTGRES_PORT)"
     exit $code
 } finally {
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+    Clear-NoRestartRequest
 }
