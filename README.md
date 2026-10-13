@@ -1,4 +1,4 @@
-# Network Finder
+# PortReveal
 
 Continuous network discovery, service inventory, and change detection for internal
 networks. Nmap does the scanning; this app orchestrates it, stores normalized
@@ -16,7 +16,7 @@ No exploits, brute force, authentication attempts, or intrusive NSE scripts are 
 
 ## Description
 
-Network Finder is for operators who need a clear answer to: *what is on the
+PortReveal is for operators who need a clear answer to: *what is on the
 network, what does each device expose, and what changed since the last scan?*
 
 Use it on a machine that can see the LAN you care about. Development defaults to
@@ -103,7 +103,7 @@ port/service/IP/absence changes → quiet steps). Reset with `npm run mock:reset
 ### Web capture (optional)
 
 Post-scan stills of remote UIs found in inventory: **HTTP(S)** (Playwright),
-**RTSP** (ffmpeg), **RDP** (FreeRDP), and **VNC** (ffmpeg or `vncsnapshot`).
+**RTSP** (ffmpeg), **RDP** (FreeRDP), and **VNC** (built-in RFB client; `vncsnapshot` optional fallback).
 One Web Capture job; galleries are split — **Web** (HTTP/RTSP) and **Remote**
 (RDP/VNC). Not an nmap stage. Auto-queue after standard/full scans is under
 **Settings → Web capture**. Manual jobs from Device details, Devices multi-select,
@@ -113,7 +113,8 @@ or **Scans → Web captures**. On **Remote**, admins can **Recapture remotes**
 | Target | Tool on `PATH` | Install |
 |---|---|---|
 | HTTP(S) screenshots | Playwright Chromium | Windows: included in `npm run setup` / `npm run setup:capture-tools`. Manual: `backend\.venv\Scripts\python.exe -m playwright install chromium` |
-| RTSP stills / live MJPEG, VNC stills | `ffmpeg` | Windows: `npm run setup:capture-tools` (winget) or `winget install ffmpeg` then ensure the `bin` folder is on `PATH`. Linux: `sudo apt-get install -y ffmpeg`. **Preinstalled in Docker.** |
+| RTSP stills / live MJPEG | `ffmpeg` | Windows: `npm run setup:capture-tools` (winget) or `winget install ffmpeg` then ensure the `bin` folder is on `PATH`. Linux: `sudo apt-get install -y ffmpeg`. **Preinstalled in Docker.** |
+| VNC stills | None (built-in RFB client). `vncsnapshot`, if on `PATH`, is tried when the built-in client cannot read a server's framebuffer | Optional: `sudo apt-get install -y vncsnapshot` |
 | RDP stills | `wfreerdp` / `sdl-freerdp` (Windows) or `xfreerdp` (Linux) | Windows: `npm run setup:capture-tools` (Scoop `freerdp-nightly` + `wfreerdp` shim). Official FreeRDP does not ship Windows release zips. Linux: `sudo apt-get install -y freerdp2-x11`. **Preinstalled in Docker.** |
 
 Empty credentials only — no password guessing. RDP stills use FreeRDP `/sec:tls`
@@ -161,7 +162,7 @@ to search the daily snapshots instead of current data.
 Post-scan enrichment (open services only; no credential guessing) stores
 searchable **banners**, **TLS cert** fields, SSH host keys, and **CPE** with
 provenance (TCP only; previously stored SNMP sys\* data stays searchable). Web Capture also covers **RDP/VNC** stills when
-FreeRDP / VNC tools are available and the service accepts empty auth; browser
+FreeRDP is available (VNC needs no tool) and the service accepts empty auth; browser
 VNC gateways (noVNC, Guacamole) are classified as `web-vnc`.
 
 Rule-based **tags** and a **device type** (printer, camera, nas, hypervisor,
@@ -221,7 +222,7 @@ Recommended when the scanner is a **Windows PC on the LAN** (Npc + Npcap).
 Docker Desktop runs **Postgres only**; the app and nmap stay on the host.
 
 Requirements: Node.js 20.19+, Python 3.10+, nmap+Npc, Docker Desktop, and on
-`PATH`: **ffmpeg** (RTSP/VNC) plus **FreeRDP** (`wfreerdp` / `sdl-freerdp`) if you
+`PATH`: **ffmpeg** (RTSP) plus **FreeRDP** (`wfreerdp` / `sdl-freerdp`) if you
 want RDP stills. Copy `.env.production.example` → `.env.production` and set at
 least `POSTGRES_PASSWORD` and `APP_SECRET_KEY`.
 
@@ -260,7 +261,7 @@ unexpectedly the script brings Postgres back up and restarts the app until you
 `scripts/run.ps1`.
 
 `-Stop` (and `-ForceRestart`) first asks the app to shut down gracefully by creating
-`data/network-finder.stop` (and a no-restart marker so the supervisor does not
+`data/portreveal.stop` (and a no-restart marker so the supervisor does not
 bring the app back); the app stops its scheduler, scan worker and web-capture
 worker and exits. If it has not exited within 45 seconds (hung, or a build older than
 this feature), the script falls back to `Stop-Process -Force`. A hard kill is safe for
@@ -342,15 +343,15 @@ file's contents into `APP_SECRET_KEY` so stored SMTP/LDAP passwords stay readabl
 
 **Upgrade and image tags**
 
-Compose builds `network-finder:latest`. Before each upgrade, keep a rollback handle:
+Compose builds `portreveal:latest`. Before each upgrade, keep a rollback handle:
 
 ```bash
 ./scripts/backup.sh                                          # Postgres + appdata + env + revision
-docker tag network-finder:latest network-finder:previous     # keep last good image
+docker tag portreveal:latest portreveal:previous     # keep last good image
 git pull
 SHA=$(git rev-parse --short HEAD)
 docker compose build
-docker tag network-finder:latest "network-finder:${SHA}"     # immutable release tag
+docker tag portreveal:latest "portreveal:${SHA}"     # immutable release tag
 docker compose up -d
 # Confirm /api/health (JSON status ok), sign-in, smoke inventory
 ```
@@ -360,11 +361,11 @@ failed, restore the pre-upgrade backup set (Postgres + `appdata`) from the same 
 then retag and start the prior image:
 
 ```bash
-docker tag network-finder:previous network-finder:latest
+docker tag portreveal:previous portreveal:latest
 docker compose up -d --no-build app
 ```
 
-If the schema did not change, retagging/starting `network-finder:previous` alone is
+If the schema did not change, retagging/starting `portreveal:previous` alone is
 enough. Full restore steps and migration policy:
 [docs/runbook/runbook.md](docs/runbook/runbook.md) (Deployment rollback / Failed migration). Do **not**
 run `alembic downgrade` against production. Practice the path on a disposable host or
@@ -441,17 +442,20 @@ therefore a single point of failure, mitigated by:
   failed ("Interrupted by an application restart") and their partial results are
   discarded, so inventory stays at the last completed scan. Queued jobs are kept and
   run normally. Covered by `backend/tests/test_ops.py`.
-- **Monitoring:** watch `/api/health` and `/api/metrics` (below) from outside the host.
+- **Monitoring:** watch `/api/live` (process up, no database check), `/api/health`
+  (readiness: database reachable, `503` otherwise) and `/api/metrics` (below) from
+  outside the host. The runbook explains which probe drives restarts and which drives paging.
 
-**Metrics.** `GET /api/metrics` returns Prometheus text format: API requests by method
-and status, request latency, scans finished by type and status, scan duration, scan
-and web-capture queue depth, and devices by status. Counters reset when the process
+**Metrics.** `GET /api/metrics` returns Prometheus text format: API requests and latency
+by method, route template (`/api/devices/{uuid}`) and status, scans finished by type and
+status, scan duration, scan and web-capture queue depth, devices by status, and failed
+enrichment probes (TLS, SSH, screenshot hash, OCR). Counters reset when the process
 restarts. It requires authentication, so scrape it with a read-only API token
 (Settings → API tokens):
 
 ```yaml
 scrape_configs:
-  - job_name: network-finder
+  - job_name: portreveal
     metrics_path: /api/metrics
     authorization: { credentials: nf_xxxxxxxx }   # API token
     static_configs: [{ targets: ["netfinder-host:8081"] }]
@@ -473,6 +477,15 @@ retention period. Linux Compose enforces `APP_MEM_LIMIT` / `APP_CPUS` (defaults 
 `4`) and `DB_MEM_LIMIT` / `DB_CPUS` (`1g` / `2`); raise them together with parallelism or
 screenshot concurrency. An out-of-memory kill behaves like a crash: the restart policy
 starts the app again and restart recovery applies.
+
+### API
+
+Integrations should call the versioned prefix `/api/v1/...`, which serves the
+same routes as `/api/...`. Within v1, changes are additive only; a breaking change
+ships as `/api/v2`. Status codes, PUT vs PATCH, action endpoints and paging are
+described in [`docs/api/conventions.md`](docs/api/conventions.md). Every response carries
+an `X-Request-Id` header, which also appears in JSON logs (`LOG_FORMAT=json`, recommended
+for production).
 
 ### Behaviour notes
 
@@ -535,7 +548,7 @@ docker/Dockerfile, docker-compose.yml
 - **Backend:** Python 3.10+, FastAPI, Uvicorn, SQLAlchemy 2, Alembic, Pydantic
 - **Database:** SQLite (dev) or PostgreSQL 16 (prod)
 - **Scanner:** Nmap (production); MockScanner (development default)
-- **Enrichment:** Playwright (Chromium), ffmpeg (RTSP/VNC), FreeRDP (RDP; optional on host, in Docker image)
+- **Enrichment:** Playwright (Chromium), ffmpeg (RTSP), FreeRDP (RDP; optional on host, in Docker image), built-in RFB client (VNC)
 - **Auth:** Argon2, server-side sessions, optional LDAP (`ldap3`)
 - **Tooling:** Node.js 20.19+ workspaces, Ruff, pytest, Docker Compose
 
@@ -568,14 +581,38 @@ recovery, see the [operations runbook](docs/runbook/runbook.md).
 ## Contributing
 
 Pull requests are welcome. For substantial changes, open an issue first to discuss
-the approach. Prefer matching existing patterns; run `npm test` and `npm run lint`
-before submitting. UI changes should also pass `npm run test:e2e` (builds the frontend,
-then signs in and opens the dashboard and devices list in headless Chromium; needs
-`python -m playwright install chromium` once).
+the approach. Prefer matching existing patterns; run `npm test`, `npm run test:frontend`
+and `npm run lint` before submitting.
+
+### Testing
+
+| Command | What runs | Needs |
+|---|---|---|
+| `npm test` | Backend pytest suite | Nothing beyond `npm run setup` |
+| `npm run test:frontend` | Vitest unit tests in `frontend/src/**/*.test.ts` (fetch wrapper, scan dialog rules) | `npm install` |
+| `npm run test:e2e` | Builds the frontend, then signs in and opens the dashboard and devices list in headless Chromium | `python -m playwright install chromium` once |
+
+- **Offline by default.** Each backend test gets its own migrated SQLite database
+  and the **mock scanner** (`SCANNER_MODE=mock`, no delay, no background workers;
+  see `backend/tests/conftest.py`). No nmap, network access or real hosts are needed,
+  and `npm test` never runs nmap. Run one file with
+  `cd backend && .venv/Scripts/python -m pytest -q tests/test_api.py` (Linux/macOS:
+  `.venv/bin/python`).
+- **End-to-end.** The `e2e` test is excluded from `npm test`. CI runs it in its own job
+  on every push and pull request.
+- **Scan-command safety.** Anything that changes how an nmap or capture-tool command
+  line is built (targets, scan settings, interface binding, extra ports) needs a test.
+  `backend/tests/test_nmap_command_integrity.py` lists the invariants and links to every
+  test that covers them. Add new cases there, or link to them from its docstring.
+  Capture-tool argv (vncsnapshot, FreeRDP, ffmpeg) is covered in
+  `backend/tests/test_web_capture_argv.py`; the built-in VNC (RFB) client is tested against
+  a scripted local server in `backend/tests/test_vnc_rfb.py`.
+- **Coverage.** CI prints a coverage summary and uploads `coverage.xml` as an artifact.
+  It is not a gate yet. Locally: `cd backend && .venv/Scripts/python -m pytest --cov=app`.
 
 ## License
 
-See [LICENSE](LICENSE). Network Finder is **free for non-commercial internal use**
+See [LICENSE](LICENSE). PortReveal is **free for non-commercial internal use**
 (and personal non-commercial use). It is **not** open source: commercial use,
 redistribution, or re-publishing as open source requires a separate written
 agreement. Publication of this repo does not change those terms.
@@ -583,7 +620,7 @@ agreement. Publication of this repo does not change those terms.
 ### Third-party tools (separate licenses)
 
 This app orchestrates tools you install yourself (or that ship in the Docker
-image). Those tools keep their own licenses — Network Finder’s grant does **not**
+image). Those tools keep their own licenses — PortReveal’s grant does **not**
 cover them. Comply with each vendor’s terms, especially for commercial deployments:
 
 | Tool | Used for | License (verify upstream) |
@@ -592,7 +629,7 @@ cover them. Comply with each vendor’s terms, especially for commercial deploym
 | [Npc](https://npcap.com/) (Windows) | Packet capture for privileged scans | Nmap/Npc terms; commercial use may need an OEM license |
 | [PostgreSQL](https://www.postgresql.org/) | Production database | PostgreSQL License |
 | [Playwright](https://playwright.dev/) / Chromium | HTTP(S) web-capture screenshots | Apache-2.0 / Chromium BSD-related |
-| [FFmpeg](https://ffmpeg.org/) | RTSP / VNC stills and live MJPEG | LGPL/GPL (depends on build) |
+| [FFmpeg](https://ffmpeg.org/) | RTSP stills and live MJPEG | LGPL/GPL (depends on build) |
 | [FreeRDP](https://www.freerdp.com/) | RDP stills | Apache-2.0 |
 | Node.js / Python packages | App runtime | See each package’s license metadata |
 

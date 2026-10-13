@@ -2,7 +2,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
-import { Logo } from '../components/Layout';
+import { BrandLockup, Logo } from '../components/Layout';
 import { ErrorBox } from '../components/ui';
 import type { Network, SetupStatus, User } from '../types';
 import { ExclusionsSettings } from './settings/Exclusions';
@@ -147,7 +147,7 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
     <div className="login-wrap" style={{ alignItems: 'start', paddingTop: 40 }}>
       <div className="card wizard">
         <div className="card-head">
-          <div className="row"><Logo /><div><div className="brand-name">NETWORK FINDER</div><div className="brand-sub">First-run setup</div></div></div>
+          <div className="row"><Logo /><BrandLockup subtitle="First-run setup" /></div>
           {status.dev_mode && <span className="badge medium">DEV</span>}
         </div>
         <div className="steps">

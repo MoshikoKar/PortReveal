@@ -144,7 +144,7 @@ def _dict_to_kwargs(model, data: dict) -> dict:
 
 def default_export_path(directory: Path | None = None) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
-    name = f"network-finder-inventory-{stamp}.zip"
+    name = f"portreveal-inventory-{stamp}.zip"
     return (directory or Path.cwd()) / name
 
 

@@ -42,6 +42,7 @@ from .db import init_engine
 from .logging_setup import setup_logging
 from .migrate import upgrade
 from .netutils import TargetError
+from .request_context import REQUEST_ID_HEADER, bind_request_id, request_id_from, unbind_request_id
 from .scanner import scanner_status
 from .seed import seed_dev
 from .stopfile import watcher_from_env
@@ -56,7 +57,7 @@ async def lifespan(app: FastAPI):
     setup_logging()
     check_production_config(s)
     s.data_path.mkdir(parents=True, exist_ok=True)
-    log.info("Network Finder %s starting (env=%s, db=%s)", __version__, s.app_env, s.db_type)
+    log.info("PortReveal %s starting (env=%s, db=%s)", __version__, s.app_env, s.db_type)
     try:
         upgrade()
     except Exception:
@@ -83,14 +84,30 @@ async def lifespan(app: FastAPI):
     scheduler.stop()
     web_capture_manager.stop()
     manager.stop()
-    log.info("Network Finder stopped")
+    log.info("PortReveal stopped")
 
+
+API_VERSION = "1"
+API_PREFIX = "/api"
+API_VERSIONED_PREFIX = f"/api/v{API_VERSION}"
+API_DESCRIPTION = f"""PortReveal REST API (version {API_VERSION}).
+
+**Versioning.** `{API_VERSIONED_PREFIX}/...` is the stable, versioned path for integrations; `/api/...` is the
+same API (the bundled UI uses it). Within v{API_VERSION}, changes are additive only: no field is removed, renamed
+or retyped and no status code changes meaning. A breaking change ships as `/api/v2` alongside v1.
+
+**Conventions.** `PUT` replaces a whole settings section or resource (send every field), `PATCH` updates only
+the fields sent. Creates answer `201`, deletes `204` with no body. Actions are `POST` verbs under their resource
+(`/api/scans/{{id}}/cancel`). Lists page with `?page=` and `?page_size=`. Every response carries
+`{REQUEST_ID_HEADER}`; quote it when reporting a problem. Full rules: `docs/api/conventions.md`.
+"""
 
 _settings = get_settings()
 _docs_enabled = _settings.app_env != "production"
 app = FastAPI(
-    title="Network Finder",
+    title="PortReveal",
     version=__version__,
+    description=API_DESCRIPTION,
     lifespan=lifespan,
     docs_url="/api/docs" if _docs_enabled else None,
     openapi_url="/api/openapi.json" if _docs_enabled else None,
@@ -124,11 +141,15 @@ async def request_timing(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     ms = (time.perf_counter() - start) * 1000
-    metrics.observe_request(request.method, response.status_code, ms / 1000)
+    # The matched route's template (/api/devices/{uuid}) keeps metric labels low-cardinality.
+    route = getattr(request.scope.get("route"), "path", None) or "unmatched"
+    metrics.observe_request(request.method, route, response.status_code, ms / 1000)
     response.headers.setdefault("Server-Timing", f"app;dur={ms:.1f}")
     slow = ms >= get_settings().slow_request_ms
     if slow or perf_log.isEnabledFor(logging.DEBUG):
-        target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        # Parameter names only: values (search text, filters) stay out of the rotating log files.
+        names = sorted({k for k, _ in request.query_params.multi_items()})
+        target = request.url.path + (f"?{'&'.join(names)}" if names else "")
         perf_log.log(logging.WARNING if slow else logging.DEBUG, "%s %s -> %s in %.0f ms%s",
                      request.method, target, response.status_code, ms, " (slow)" if slow else "")
     return response
@@ -151,6 +172,40 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """Correlate a request across UI, response and logs: accept or create X-Request-Id, echo it back."""
+    request_id = request_id_from(request.headers.get(REQUEST_ID_HEADER))
+    token = bind_request_id(request_id)
+    try:
+        response = await call_next(request)
+    finally:
+        unbind_request_id(token)
+    response.headers[REQUEST_ID_HEADER] = request_id
+    return response
+
+
+class VersionedPathAlias:
+    """Serve ``/api/v1/...`` as ``/api/...``: one set of routes, reachable under the versioned prefix.
+
+    Outermost middleware, so routing, metrics (route templates) and logs see the canonical path.
+    """
+
+    def __init__(self, app_):
+        self.app = app_
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            path: str = scope["path"]
+            if path == API_VERSIONED_PREFIX or path.startswith(API_VERSIONED_PREFIX + "/"):
+                canonical = API_PREFIX + path[len(API_VERSIONED_PREFIX):]
+                scope = {**scope, "path": canonical, "raw_path": canonical.encode()}
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(VersionedPathAlias)
+
+
 # --- built frontend (production). In development Vite serves the UI on :5173. ----
 _dist: Path = get_settings().frontend_dist_path
 if (_dist / "index.html").exists():
@@ -169,7 +224,7 @@ else:
     @app.get("/", include_in_schema=False)
     async def root():
         body = {
-            "app": "Network Finder API",
+            "app": "PortReveal API",
             "version": __version__,
             "ui": "Frontend not built here. In development open http://localhost:5173 (npm run dev).",
         }

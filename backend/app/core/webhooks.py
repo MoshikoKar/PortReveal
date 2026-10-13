@@ -43,7 +43,7 @@ def deliver_event(db: Session, event: Event) -> None:
         types = hook.event_types or []
         if types and event.event_type not in types:
             continue
-        headers = {"Content-Type": "application/json", "User-Agent": "NetworkFinder-Webhook/1.0"}
+        headers = {"Content-Type": "application/json", "User-Agent": "PortReveal-Webhook/1.0"}
         secret = decrypt_secret(hook.secret_enc) if hook.secret_enc else ""
         if secret:
             headers["X-NF-Signature"] = _sign(secret, body)

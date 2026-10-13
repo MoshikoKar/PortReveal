@@ -213,7 +213,7 @@ def probe_endpoint(
     base = _build_url(scheme, host, port, "/")
     limits = httpx.Limits(max_connections=4, max_keepalive_connections=2)
     with httpx.Client(timeout=timeout, verify=verify_tls, follow_redirects=False,
-                      limits=limits, headers={"User-Agent": "NetworkFinder-WebCapture/1.0"}) as client:
+                      limits=limits, headers={"User-Agent": "PortReveal-WebCapture/1.0"}) as client:
         home = probe_url(client, base, allowed_hosts=allowed_hosts, allowed_ips=allowed_ips,
                          max_bytes=max_bytes, verify_tls=verify_tls)
         home.tls_verified = tls_flag

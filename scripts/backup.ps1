@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Backup Compose Postgres + host data/ (+ .env.production) for Network Finder.
+  Backup Compose Postgres + host data/ (+ .env.production) for PortReveal.
 
 .DESCRIPTION
   For Windows host-nmap production (Postgres in Docker, app on the host).

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import logoMark from '../assets/logo-mark-56.png';
 import { useApp } from '../context';
 import type { SystemStatus } from '../types';
 import { SCAN_TYPE_LABELS, scanStageFraction } from '../util';
@@ -26,25 +27,28 @@ const ICONS = {
 
 const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean }[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
-  { to: '/search', label: 'Search', icon: 'search' },
+  { to: '/scans', label: 'Scans', icon: 'scans' },
   { to: '/devices', label: 'Devices', icon: 'devices' },
   { to: '/ports', label: 'Ports', icon: 'ports' },
   { to: '/changes', label: 'Changes', icon: 'changes' },
   { to: '/watches', label: 'Watches', icon: 'watches' },
-  { to: '/reports', label: 'Reports', icon: 'reports' },
+  { to: '/search', label: 'Search', icon: 'search' },
   { to: '/web', label: 'Web', icon: 'web' },
   { to: '/remote', label: 'Remote', icon: 'remote' },
-  { to: '/scans', label: 'Scans', icon: 'scans' },
+  { to: '/reports', label: 'Reports', icon: 'reports' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
 
 export function Logo() {
+  return <img className="brand-logo" src={logoMark} width={28} height={28} alt="" aria-hidden />;
+}
+
+export function BrandLockup({ subtitle = 'Network discovery' }: { subtitle?: string }) {
   return (
-    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden>
-      <circle cx="16" cy="16" r="12" fill="none" stroke="var(--accent)" strokeWidth="2" />
-      <circle cx="16" cy="16" r="6" fill="none" stroke="var(--accent)" strokeWidth="2" opacity=".55" />
-      <circle cx="24" cy="9" r="3" fill="var(--medium)" />
-    </svg>
+    <div>
+      <div className="brand-name"><span className="brand-port">Port</span><span className="brand-reveal">Reveal</span></div>
+      <div className="brand-sub">{subtitle}</div>
+    </div>
   );
 }
 
@@ -124,10 +128,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="brand">
           <Link className="brand-home" to="/">
             <Logo />
-            <div>
-              <div className="brand-name">NETWORK FINDER</div>
-              <div className="brand-sub">Discovery · Change detection</div>
-            </div>
+            <BrandLockup subtitle="Network discovery" />
           </Link>
           {activeNav && <span className="nav-current"><Icon d={ICONS[activeNav.icon]} />{activeNav.label}</span>}
           <button className="btn ghost icon nav-toggle" onClick={() => setNavOpen((o) => !o)}

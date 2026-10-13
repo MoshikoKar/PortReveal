@@ -1,15 +1,15 @@
-Network Finder License
+PortReveal License
 
-Copyright (c) Network Finder contributors
+Copyright (c) PortReveal contributors
 
 Summary
 -------
-Network Finder is free for non-commercial internal use. It is not open source.
+PortReveal is free for non-commercial internal use. It is not open source.
 Commercial use requires a separate written agreement with the copyright holder.
 
 1. Grant (non-commercial internal use)
 
-You may install, run, copy, and modify Network Finder solely for non-commercial
+You may install, run, copy, and modify PortReveal solely for non-commercial
 internal operations of your organization (or for personal non-commercial use),
 including evaluating it and operating it on networks you are authorized to manage.
 
@@ -17,10 +17,10 @@ including evaluating it and operating it on networks you are authorized to manag
 
 Without prior written permission from the copyright holder, you may not:
 
-- Use Network Finder for commercial purposes (including selling, renting,
+- Use PortReveal for commercial purposes (including selling, renting,
   hosting as a paid service, bundling into a commercial product, or using it
   as a material part of a revenue-generating offering)
-- Redistribute Network Finder, modified or unmodified, to third parties
+- Redistribute PortReveal, modified or unmodified, to third parties
 - Sublicense, sell, or publicly re-publish the source as if it were open source
 - Remove or alter this license notice
 
@@ -31,7 +31,7 @@ repository (for example on GitHub) does not change these terms.
 
 4. Third-party software
 
-Network Finder depends on separate tools and libraries that remain under their
+PortReveal depends on separate tools and libraries that remain under their
 own licenses. Installing or using those components does not grant you rights
 beyond each component’s license. Notable runtime tools include:
 

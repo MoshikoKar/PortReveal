@@ -380,11 +380,11 @@ export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onD
         <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable LDAP login</label>
         <div className="form-grid">
           <label className="field">Server URI<input type="text" value={s.server_uri} onChange={(e) => set({ server_uri: e.target.value })} placeholder="ldaps://dc01.corp.local" /></label>
-          <label className="field">Bind DN (service account)<input type="text" value={s.bind_dn} onChange={(e) => set({ bind_dn: e.target.value })} placeholder="CN=svc-netfinder,OU=Service,DC=corp,DC=local" /></label>
+          <label className="field">Bind DN (service account)<input type="text" value={s.bind_dn} onChange={(e) => set({ bind_dn: e.target.value })} placeholder="CN=svc-portreveal,OU=Service,DC=corp,DC=local" /></label>
           <label className="field">Bind password<input type="password" value={password ?? ''} placeholder={s.bind_password_set ? '•••••• (unchanged)' : ''} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" /></label>
           <label className="field">User base DN<input type="text" value={s.user_base_dn} onChange={(e) => set({ user_base_dn: e.target.value })} placeholder="OU=Users,DC=corp,DC=local" /></label>
           <label className="field">User filter<input type="text" value={s.user_filter} onChange={(e) => set({ user_filter: e.target.value })} /><span className="hint">Must contain {'{username}'}</span></label>
-          <label className="field">Admin group DN<input type="text" value={s.admin_group_dn} onChange={(e) => set({ admin_group_dn: e.target.value })} placeholder="CN=NetFinder-Admins,OU=Groups,DC=corp,DC=local" /></label>
+          <label className="field">Admin group DN<input type="text" value={s.admin_group_dn} onChange={(e) => set({ admin_group_dn: e.target.value })} placeholder="CN=PortReveal-Admins,OU=Groups,DC=corp,DC=local" /></label>
           <label className="field">Viewer group DN (optional)<input type="text" value={s.viewer_group_dn} onChange={(e) => set({ viewer_group_dn: e.target.value })} /></label>
           <Num label="Timeout (seconds)" value={s.timeout_seconds} min={1} max={60} onChange={(v) => set({ timeout_seconds: v })} />
         </div>

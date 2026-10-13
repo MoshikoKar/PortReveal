@@ -53,7 +53,7 @@ def export_data(request: Request, db: Session = Depends(get_db), user: User = De
         raise
     buf.seek(0)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
-    filename = f"network-finder-inventory-{stamp}.zip"
+    filename = f"portreveal-inventory-{stamp}.zip"
     audit(db, user.username, "data.export", filename, None, client_ip(request))
     db.commit()
     return StreamingResponse(

@@ -133,7 +133,7 @@ export default function Search() {
     setActionError(null);
     setExporting(format);
     try {
-      await downloadBlob(`/search/export${query({ q, format })}`, `network-finder-search.${format}`);
+      await downloadBlob(`/search/export${query({ q, format })}`, `portreveal-search.${format}`);
     } catch (e: any) {
       setActionError(`Export failed: ${e.message}`);
     } finally {

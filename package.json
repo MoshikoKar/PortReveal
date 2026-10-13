@@ -1,8 +1,8 @@
 {
-  "name": "network-finder",
+  "name": "portreveal",
   "version": "1.0.0",
   "private": true,
-  "description": "Continuous network discovery, service inventory and change detection built around Nmap",
+  "description": "PortReveal — continuous network discovery, service inventory and change detection built around Nmap",
   "workspaces": [
     "frontend"
   ],
@@ -20,6 +20,7 @@
     "stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run.ps1 -Mode production -Stop",
     "test": "node scripts/py.mjs -m pytest -q",
     "test:e2e": "npm run build && node scripts/py.mjs -m pytest -q -m e2e",
+    "test:frontend": "npm run test -w frontend",
     "lint": "node scripts/py.mjs -m ruff check . && tsc -p frontend && eslint -c frontend/eslint.config.js frontend/src",
     "build": "tsc -p frontend && vite build frontend",
     "db:migrate": "node scripts/py.mjs -m app.cli migrate",

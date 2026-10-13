@@ -19,7 +19,7 @@ export function DataTransferPanel() {
     setMsg(null);
     setBusy('export');
     try {
-      await downloadBlob('/data/export', `network-finder-inventory-${new Date().toISOString().slice(0, 10)}.zip`);
+      await downloadBlob('/data/export', `portreveal-inventory-${new Date().toISOString().slice(0, 10)}.zip`);
       setMsg({ ok: true, text: 'Export downloaded.' });
     } catch (e: unknown) {
       setMsg({ ok: false, text: e instanceof ApiError ? e.message : 'Export failed.' });

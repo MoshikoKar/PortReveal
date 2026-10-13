@@ -9,7 +9,7 @@
   or Scoop cannot run. Use -Strict to exit non-zero on failure.
 
   FreeRDP nightlies currently ship `sdl-freerdp.exe` (not `wfreerdp.exe`). This script
-  installs Scoop's freerdp-nightly and ensures a `wfreerdp` shim so Network Finder and
+  installs Scoop's freerdp-nightly and ensures a `wfreerdp` shim so PortReveal and
   PATH checks resolve a client binary.
 
 .PARAMETER SkipPlaywright

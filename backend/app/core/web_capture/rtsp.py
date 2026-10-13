@@ -58,7 +58,7 @@ def looks_like_rtsp(url: str, *, timeout: float = 4.0) -> tuple[bool, str]:
     req = (
         f"OPTIONS {parsed.scheme}://{host}:{port}{path} RTSP/1.0\r\n"
         f"CSeq: 1\r\n"
-        f"User-Agent: NetworkFinder/1.0\r\n"
+        f"User-Agent: PortReveal/1.0\r\n"
         f"\r\n"
     ).encode("ascii", errors="ignore")
     try:

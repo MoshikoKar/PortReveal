@@ -28,12 +28,16 @@ from ..core.query.search import (
 )
 from ..db import SessionLocal, get_db
 from ..models import User
+from .common import Paging, paging_with
 from .devices import MAX_UUIDS
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 
 MAX_QUERY_LEN = 1000
+# Search pages are costlier than plain lists (scoring, nested services), so the ceiling is 100, not 500.
+SEARCH_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
+SearchPaging = paging_with(SEARCH_PAGE_SIZE, MAX_PAGE_SIZE)
 EXPORT_FORMATS = ("csv", "ndjson")
 CSV_COLUMNS = ("ip", "hostname", "mac", "vendor", "os", "status", "network", "type", "score", "tags",
                "first_seen", "last_seen", "services")
@@ -49,11 +53,11 @@ def search(
     sort: str = Query("score", pattern="^(" + "|".join(HOST_SORTS) + ")$"),
     order: str | None = Query(None, pattern="^(asc|desc)$"),
     at: date | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=MAX_PAGE_SIZE),
+    paging: Paging = Depends(SearchPaging),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
+    page, page_size = paging.page, paging.page_size
     node = prepare(q)
     node, before = extract_before(node)
     hist_at = at or before
@@ -159,5 +163,5 @@ def search_export(
     return StreamingResponse(
         _export_lines(q, format),
         media_type=f"{media}; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="network-finder-search-{stamp}.{format}"'},
+        headers={"Content-Disposition": f'attachment; filename="portreveal-search-{stamp}.{format}"'},
     )

@@ -66,6 +66,7 @@ def live_app(tmp_path_factory) -> Iterator[str]:
         "FRONTEND_DIST": str(DIST),
         "LOG_LEVEL": "WARNING",
     }
+    env.pop("PORTREVEAL_STOP_FILE", None)
     env.pop("NETWORK_FINDER_STOP_FILE", None)
     log = (work / "app.log").open("wb")
     proc = subprocess.Popen(

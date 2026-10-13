@@ -50,7 +50,7 @@ if (which === 'all' || which === 'frontend') {
 }
 
 const { default: concurrently } = await import('concurrently');
-console.log(c.bold('\nNetwork Finder development environment'));
+console.log(c.bold('\nPortReveal development environment'));
 if (which !== 'backend') console.log(`  UI:      ${c.green(`http://localhost:${frontendPort}`)}`);
 if (which !== 'frontend') console.log(`  API:     ${c.green(`http://${backendHost}:${backendPort}/api/health`)}`);
 console.log(`  Login:   ${env.DEV_ADMIN_USERNAME || 'admin'} / ${env.DEV_ADMIN_PASSWORD || 'admin'} (dev seed)`);

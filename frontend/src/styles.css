@@ -1,4 +1,5 @@
 :root {
+  /* PortReveal brand: cyan accent, cobalt secondary, deep navy surfaces */
   --bg: #070b14;
   --panel: #0c1322;
   --panel-2: #101a2e;
@@ -8,9 +9,10 @@
   --text: #d6deee;
   --text-2: #aab6cc;
   --muted: #74819b;
-  --accent: #2dd4bf;
-  --accent-dim: #134e4a;
-  --accent-ink: #04201d; /* text on solid --accent fills */
+  --accent: #00c2cb;
+  --accent-dim: #0a4d52;
+  --accent-ink: #031a1c; /* text on solid --accent fills */
+  --brand-blue: #1b6bff;
   --high: #f87171;
   --high-bg: rgba(248, 113, 113, 0.12);
   --medium: #fbbf24;
@@ -76,8 +78,10 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 18px 18px 16px; border-bottom: 1px solid var(--border); }
 .brand-home { display: flex; align-items: center; gap: 10px; color: inherit; }
 .brand-home:hover { color: inherit; text-decoration: none; }
-.brand-name { font-weight: 700; letter-spacing: 0.04em; }
-/* Intentional exception: the NETWORK FINDER lockup and .brand-sub eyebrow are the only uppercase UI chrome. */
+.brand-logo { display: block; border-radius: 6px; flex-shrink: 0; }
+.brand-name { font-weight: 700; letter-spacing: 0.02em; font-size: 15px; line-height: 1.15; }
+.brand-name .brand-reveal { color: var(--accent); }
+/* Intentional exception: the PortReveal lockup and .brand-sub eyebrow are the only uppercase UI chrome. */
 .brand-sub { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; }
 .nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
 .nav a {

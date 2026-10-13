@@ -18,8 +18,15 @@ _SECRETS_DIR = "/run/secrets" if Path("/run/secrets").is_dir() else None
 
 
 def _settings_env_file() -> str:
-    """Env file for boot settings. `NETWORK_FINDER_ENV_FILE` overrides (used by scripts/run.ps1)."""
-    override = (os.environ.get("NETWORK_FINDER_ENV_FILE") or "").strip()
+    """Env file for boot settings. `PORTREVEAL_ENV_FILE` overrides (used by scripts/run.ps1).
+
+    Legacy `NETWORK_FINDER_ENV_FILE` is still accepted.
+    """
+    override = (
+        os.environ.get("PORTREVEAL_ENV_FILE")
+        or os.environ.get("NETWORK_FINDER_ENV_FILE")
+        or ""
+    ).strip()
     if override:
         return override
     return str(PROJECT_ROOT / ".env")

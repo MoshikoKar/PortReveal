@@ -1,9 +1,11 @@
 """Graceful stop request by file, for hosts without a usable stop signal (Windows `run.ps1 -Stop`).
 
 Windows cannot deliver Ctrl+C / SIGTERM to a process in another (hidden) console, so
-`scripts/run.ps1` sets NETWORK_FINDER_STOP_FILE and creates that file to ask for a stop. The
+`scripts/run.ps1` sets PORTREVEAL_STOP_FILE and creates that file to ask for a stop. The
 watcher then raises SIGINT inside this process; uvicorn treats it like Ctrl+C and runs the normal
 shutdown (scheduler, scan worker and web-capture worker stop before the process exits).
+
+Legacy `NETWORK_FINDER_STOP_FILE` is still accepted.
 """
 from __future__ import annotations
 
@@ -14,7 +16,8 @@ import threading
 from pathlib import Path
 
 log = logging.getLogger(__name__)
-ENV_VAR = "NETWORK_FINDER_STOP_FILE"
+ENV_VAR = "PORTREVEAL_STOP_FILE"
+LEGACY_ENV_VAR = "NETWORK_FINDER_STOP_FILE"
 POLL_SECONDS = 1.0
 
 
@@ -44,5 +47,5 @@ class StopFileWatcher:
 
 
 def watcher_from_env() -> StopFileWatcher | None:
-    raw = (os.environ.get(ENV_VAR) or "").strip()
+    raw = (os.environ.get(ENV_VAR) or os.environ.get(LEGACY_ENV_VAR) or "").strip()
     return StopFileWatcher(Path(raw)) if raw else None

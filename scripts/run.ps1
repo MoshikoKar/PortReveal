@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Run Network Finder on Windows with host nmap (Npc) and Docker Postgres only.
+  Run PortReveal on Windows with host nmap (Npc) and Docker Postgres only.
 
 .DESCRIPTION
   production  - loads .env.production, starts Compose `db` only, builds frontend,
@@ -57,14 +57,14 @@ Set-Location -LiteralPath $Root
 
 $DataDir = Join-Path $Root "data"
 $LogDir = Join-Path $DataDir "logs"
-$PidFile = Join-Path $DataDir "network-finder-prod.pid"
-# The app watches this file (NETWORK_FINDER_STOP_FILE) and shuts down gracefully when it appears.
-$StopFile = Join-Path $DataDir "network-finder.stop"
+$PidFile = Join-Path $DataDir "portreveal-prod.pid"
+# The app watches this file (PORTREVEAL_STOP_FILE) and shuts down gracefully when it appears.
+$StopFile = Join-Path $DataDir "portreveal.stop"
 # Written by -Stop / ForceRestart so the supervisor loop does not bring uvicorn back up.
-$NoRestartFile = Join-Path $DataDir "network-finder.no-restart"
+$NoRestartFile = Join-Path $DataDir "portreveal.no-restart"
 $GracefulStopTimeoutS = 45
 # If the stop file is still present after this many seconds, the app is not watching
-# NETWORK_FINDER_STOP_FILE (older process / env not set) — force-kill instead of waiting.
+# PORTREVEAL_STOP_FILE (older process / env not set) — force-kill instead of waiting.
 $StopFileAckTimeoutS = 5
 $LogFile = Join-Path $LogDir "production.log"
 $ComposeFile = Join-Path $Root "docker-compose.yml"
@@ -187,7 +187,7 @@ function Request-GracefulStop {
             if (-not (Test-Path -LiteralPath $StopFile)) {
                 $acked = $true
             } elseif ((Get-Date) -ge $ackDeadline) {
-                Write-Log "Stop file not acknowledged within ${StopFileAckTimeoutS}s (app likely missing NETWORK_FINDER_STOP_FILE); forcing." "WARN"
+                Write-Log "Stop file not acknowledged within ${StopFileAckTimeoutS}s (app likely missing PORTREVEAL_STOP_FILE); forcing." "WARN"
                 Remove-Item -LiteralPath $StopFile -Force -ErrorAction SilentlyContinue
                 return $false
             }
@@ -356,7 +356,7 @@ function Clear-NoRestartRequest {
 
 function Start-ProductionServeLoop {
     # Keep uvicorn up across stderr noise, Docker blips, and unexpected exits.
-    # -Stop / ForceRestart writes network-finder.no-restart so this loop exits cleanly.
+    # -Stop / ForceRestart writes portreveal.no-restart so this loop exits cleanly.
     param(
         [string] $ListenHost,
         [int] $ListenPort,
@@ -414,10 +414,10 @@ if ($Mode -eq "production") {
     Import-DotEnv -Path $envFile
 
     # Make Python Settings load .env.production instead of .env (see app/config.py).
-    $env:NETWORK_FINDER_ENV_FILE = $ProdEnvFile
+    $env:PORTREVEAL_ENV_FILE = $ProdEnvFile
     $env:APP_ENV = "production"
     $env:DEV_SEED = "false"
-    $env:NETWORK_FINDER_STOP_FILE = $StopFile  # graceful -Stop (see Request-GracefulStop)
+    $env:PORTREVEAL_STOP_FILE = $StopFile  # graceful -Stop (see Request-GracefulStop)
     if (-not (Test-EnvSet "SCANNER_MODE")) { $env:SCANNER_MODE = "nmap" }
     if (-not (Test-EnvSet "NMAP_PATH")) { $env:NMAP_PATH = "nmap" }
     if (-not (Test-EnvSet "POSTGRES_DB")) { $env:POSTGRES_DB = "netfinder" }
@@ -478,16 +478,16 @@ if ($Background) {
     )
     if ($SkipBuild) { $childArgs += "-SkipBuild" }
     $child = Start-Process -FilePath "powershell.exe" -ArgumentList $childArgs -WindowStyle Hidden -PassThru
-    Write-Host "Starting Network Finder in background (PID $($child.Id)) ..."
+    Write-Host "Starting PortReveal in background (PID $($child.Id)) ..."
     $deadline = (Get-Date).AddSeconds($BackgroundStartTimeoutS)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
         if (@(Get-ListenPids -Port $listenPort).Count -gt 0) {
-            Write-Host "Network Finder is running on http://localhost:$listenPort  (log: $LogFile, stop: .\scripts\run.ps1 -Stop)"
+            Write-Host "PortReveal is running on http://localhost:$listenPort  (log: $LogFile, stop: .\scripts\run.ps1 -Stop)"
             exit 0
         }
         if ($child.HasExited) {
-            Write-Host "Network Finder failed to start (exit $($child.ExitCode)). See $LogFile" -ForegroundColor Red
+            Write-Host "PortReveal failed to start (exit $($child.ExitCode)). See $LogFile" -ForegroundColor Red
             exit 1
         }
     }
@@ -552,7 +552,7 @@ if ((-not $haveFfmpeg -or -not $haveFreerdp -or -not $havePlaywrightMarker) -and
     }
 }
 if (-not $haveFfmpeg) {
-    Write-Log "ffmpeg not on PATH — RTSP/VNC web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
+    Write-Log "ffmpeg not on PATH — RTSP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
 }
 if (-not $haveFreerdp) {
     Write-Log "FreeRDP not on PATH — RDP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"

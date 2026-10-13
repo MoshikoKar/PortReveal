@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     se.add_argument("--limit", type=int, default=100, help="maximum hosts to print (default 100)")
     se.set_defaults(fn=cmd_search)
     ex = sub.add_parser("export-data", help="export inventory ZIP (networks, devices, scans, history)")
-    ex.add_argument("path", nargs="?", help="output zip path (default: network-finder-inventory-YYYYMMDD.zip)")
+    ex.add_argument("path", nargs="?", help="output zip path (default: portreveal-inventory-YYYYMMDD.zip)")
     ex.set_defaults(fn=cmd_export_data)
     im = sub.add_parser("import-data", help="replace inventory from ZIP (destructive; keeps users/settings)")
     im.add_argument("path", help="input zip path")

@@ -118,7 +118,8 @@ def test_metrics_require_auth_and_export_counters_and_gauges(client, db):
     assert "nf_scan_duration_seconds_count{type=\"standard\"} 1" in lines
     assert 'nf_scan_queue{state="queued"} 1' in lines
     assert 'nf_devices{status="active"} 1' in lines
-    assert 'nf_http_requests_total{method="GET",status="401"} 1' in lines
+    assert 'nf_http_requests_total{method="GET",route="/api/metrics",status="401"} 1' in lines
+    assert 'nf_http_request_duration_seconds_count{method="GET",route="/api/metrics"} 1' in lines
     assert "# TYPE nf_http_requests_total counter" in lines
 
 
@@ -131,7 +132,7 @@ def test_stop_file_raises_sigint_once_and_ignores_a_stale_request(tmp_path, monk
 
     raised: list[int] = []
     monkeypatch.setattr(stopfile.signal, "raise_signal", raised.append)
-    path = tmp_path / "network-finder.stop"
+    path = tmp_path / "portreveal.stop"
     path.write_text("left over from an earlier run")
     watcher = stopfile.StopFileWatcher(path, poll_seconds=0.02)
     watcher.start()

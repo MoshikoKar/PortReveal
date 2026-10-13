@@ -1,6 +1,6 @@
 # Data and privacy
 
-What Network Finder stores, where, for how long, who can see it, and how to remove it.
+What PortReveal stores, where, for how long, who can see it, and how to remove it.
 It is an internal tool; this note gives the operator what a data-protection review or an
 offboarding checklist needs. It is not legal advice; map it onto your organization's own
 classification and retention policy.

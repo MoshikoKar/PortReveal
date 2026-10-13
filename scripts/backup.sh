@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Backup Compose Postgres + appdata volume (+ production env) for Network Finder.
+# Backup Compose Postgres + appdata volume (+ production env) for PortReveal.
 # Intended for the Linux Docker host. Schedule with cron, for example:
 #   15 2 * * * cd /opt/network_finder && ./scripts/backup.sh >> data/logs/backup.log 2>&1
 #

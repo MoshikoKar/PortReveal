@@ -5,6 +5,7 @@ import html
 import logging
 import re
 import smtplib
+import socket
 import ssl
 from collections import defaultdict
 from email.message import EmailMessage
@@ -36,7 +37,7 @@ from ..security import decrypt_secret
 from ..settings_store import NotificationSettings, get_section
 
 log = logging.getLogger(__name__)
-SUBJECT_PREFIX = "[Network Monitor]"
+SUBJECT_PREFIX = "[PortReveal]"
 # Keep each category short so the daily mail stays scannable.
 MAX_LINES_PER_SECTION = 8
 # Cap one digest load so a large notify backlog cannot grow memory unboundedly;
@@ -180,7 +181,7 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
 
     # --- plain text ---
     plain_lines = [
-        f"Network Finder — {day}",
+        f"PortReveal — {day}",
         f"{n} change{'s' if n != 1 else ''}: {summary}",
         "",
     ]
@@ -246,7 +247,7 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
 <tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
 <tr><td style="background:#0f172a;padding:16px 20px;">
-  <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#94a3b8;">Network Finder</div>
+  <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#94a3b8;">PortReveal</div>
   <div style="font-size:18px;font-weight:600;color:#ffffff;margin-top:2px;">Daily summary</div>
   <div style="font-size:13px;color:#cbd5e1;margin-top:4px;">{_esc(day)} · {n} change{'s' if n != 1 else ''}</div>
 </td></tr>
@@ -268,7 +269,7 @@ def format_sample_digest() -> tuple[str, str, str]:
     day = utcnow().astimezone().strftime("%Y-%m-%d")
     subject = f"{SUBJECT_PREFIX} Daily summary — sample ({day})"
     plain = (
-        f"Network Finder — {day}\n"
+        f"PortReveal — {day}\n"
         "1 change: 1 ports opened\n\n"
         "Ports (1)\n"
         "  Ports opened\n"
@@ -281,7 +282,7 @@ def format_sample_digest() -> tuple[str, str, str]:
 <tr><td align="center">
 <table role="presentation" width="100%" style="max-width:560px;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;">
 <tr><td style="background:#0f172a;padding:16px 20px;">
-  <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#94a3b8;">Network Finder</div>
+  <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#94a3b8;">PortReveal</div>
   <div style="font-size:18px;font-weight:600;color:#ffffff;margin-top:2px;">Daily summary</div>
   <div style="font-size:13px;color:#cbd5e1;margin-top:4px;">{_esc(day)} · sample</div>
 </td></tr>
@@ -292,17 +293,51 @@ def format_sample_digest() -> tuple[str, str, str]:
   <ul style="margin:4px 0 0;padding:0 0 0 18px;font-size:13px;"><li>server01 (10.20.15.22) — TCP/8080</li></ul>
 </td></tr>
 <tr><td style="padding:12px 20px;background:#f1f5f9;font-size:12px;color:#64748b;border-top:1px solid #e2e8f0;">
-  Test email from Network Finder settings.
+  Test email from PortReveal settings.
 </td></tr>
 </table></td></tr></table></body></html>"""
     return subject, plain, html_body
 
 
+class SmtpConfigError(RuntimeError):
+    """Settings are incomplete; the message is safe to show."""
+
+
+def smtp_failure_reason(exc: BaseException) -> str:
+    """A short, stable reason for the UI and audit log. Raw exception text (server replies, host names,
+    library internals) stays in the application log only."""
+    if isinstance(exc, SmtpConfigError):
+        return str(exc)
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return "authentication failed (check username and password)"
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        return "the server refused the recipient address"
+    if isinstance(exc, smtplib.SMTPSenderRefused):
+        return "the server refused the sender address"
+    if isinstance(exc, smtplib.SMTPNotSupportedError):
+        return "the server does not support the selected security mode or authentication"
+    if isinstance(exc, smtplib.SMTPServerDisconnected):
+        return "the server closed the connection"
+    if isinstance(exc, smtplib.SMTPException):
+        return "the server rejected the message"
+    if isinstance(exc, ssl.SSLError):
+        return "TLS handshake or certificate verification failed"
+    if isinstance(exc, TimeoutError):
+        return "timed out connecting to the SMTP server"
+    if isinstance(exc, socket.gaierror):
+        return "the SMTP host name could not be resolved"
+    if isinstance(exc, ConnectionRefusedError):
+        return "the SMTP server refused the connection"
+    if isinstance(exc, OSError):
+        return "could not connect to the SMTP server"
+    return "unexpected error (details in the application log)"
+
+
 def send_email(cfg: NotificationSettings, subject: str, body: str, html_body: str | None = None) -> None:
     if not cfg.smtp_host:
-        raise RuntimeError("SMTP host is not configured")
+        raise SmtpConfigError("SMTP host is not configured")
     if not cfg.recipients:
-        raise RuntimeError("No recipients configured")
+        raise SmtpConfigError("No recipients configured")
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = cfg.sender

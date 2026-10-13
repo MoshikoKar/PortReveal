@@ -1,4 +1,4 @@
-# Network Finder operations runbook
+# PortReveal operations runbook
 
 This runbook covers production incidents for the Linux Docker Compose deployment
 and the Windows host-nmap deployment. Commands assume the repository root and the
@@ -145,12 +145,12 @@ the role and env value together if the application cannot reconnect.
 Supported rollback is **retarget the previous application revision (or Docker image
 tag) and, when the schema changed, restore the pre-upgrade backup set**. Image
 tagging and the Windows/Linux upgrade checklists live in `README.md` (Upgrade
-sections). Record the Git SHA (and `network-finder:<sha>` / `network-finder:previous`
+sections). Record the Git SHA (and `portreveal:<sha>` / `portreveal:previous`
 tags on Linux) with every backup stamp.
 
 | Situation | Action |
 |---|---|
-| App bug; Alembic revision unchanged | Retag/`checkout` the prior revision or `network-finder:previous`, restart; no DB restore |
+| App bug; Alembic revision unchanged | Retag/`checkout` the prior revision or `portreveal:previous`, restart; no DB restore |
 | Migration applied or failed mid-upgrade | Restore pre-upgrade Postgres + appdata from the same stamp, then start the prior revision/image |
 | Unsure whether schema changed | Treat as migration case: restore backup + prior revision |
 
@@ -193,15 +193,26 @@ reports `DATABASE MIGRATION FAILED`:
 
 ## Monitoring and alerting
 
-Network Finder does not ship paging or an alert manager. Product email digests
+PortReveal does not ship paging or an alert manager. Product email digests
 (Settings → Notifications / watches) report inventory and watch matches; they are
 **not** a substitute for external ops monitoring. Point an outside probe or
 Prometheus/Alertmanager (or equivalent) at the host, and page on the conditions
 below.
 
-### Readiness and degraded database
+### Liveness, readiness and degraded database
 
-Probe `GET /api/health` (unauthenticated). Example body:
+Two unauthenticated probes answer different questions:
+
+| Probe | Question | Touches the DB | Failure means | Use it for |
+|---|---|---|---|---|
+| `GET /api/live` | Is the process up and serving HTTP? | No | Process hung or dead | Restart decisions (orchestrator liveness probe, process supervisor) |
+| `GET /api/health` | Can the app serve users? | Yes | Database unreachable (HTTP 503) | Readiness / load-balancer membership, paging on outages, the image `HEALTHCHECK` |
+
+Do not restart the app on a failing `/api/health` alone: when the database is
+down, a restart does not help and `/api/live` stays `200`. Page on readiness,
+restart on liveness. `/api/live` returns `{"status": "ok", "version": "…"}`.
+
+Probe `GET /api/health` for readiness. Example body:
 
 ```json
 {"status": "ok", "database": "ok", "version": "…"}
@@ -226,7 +237,13 @@ if ($h.status -ne 'ok') { throw "health degraded: $($h | ConvertTo-Json -Compres
 
 Optional scrape of authenticated `GET /api/metrics` (API token) is documented in
 `README.md` (Availability and capacity). Use it for trends; keep the unauthenticated
-health probe as the liveness/readiness signal for “is the app usable?”
+probes for “is the process up?” (`/api/live`) and “is the app usable?” (`/api/health`).
+HTTP metrics are labelled by method, route template (`/api/devices/{uuid}`) and
+status, so latency and error rate can be charted per endpoint.
+
+Every API response carries an `X-Request-Id` header, and JSON logs
+(`LOG_FORMAT=json`) carry the same `request_id`. When a user reports an error
+with a reference id, search the logs for it.
 
 ### Container and process restarts
 
@@ -235,7 +252,7 @@ Alert when the app or database keeps coming back up after crashes:
 | Deploy | Signal |
 |---|---|
 | Linux Compose | `docker compose ps` / `docker events` restart storms; Compose `restart: unless-stopped` masking a crash loop; Docker `HEALTHCHECK` failing repeatedly on `app` |
-| Windows host | Task Scheduler task failures, missing `data/network-finder-prod.pid`, or unexpected process exit in `data/logs/production.log` |
+| Windows host | Task Scheduler task failures, missing `data/portreveal-prod.pid`, or unexpected process exit in `data/logs/production.log` |
 
 A single restart after a planned upgrade is normal. Page on repeated restarts in a
 short window or on health staying degraded after restart.
