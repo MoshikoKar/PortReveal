@@ -75,6 +75,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   tag_removed: 'Tag removed',
   watch_match: 'Watch match',
   policy_violation: 'Policy violation',
+  banner_changed: 'Banner changed',
 };
 
 export const SCAN_TYPE_LABELS = { discovery: 'Discovery', standard: 'Standard', full: 'Full port' } as const;

@@ -83,7 +83,7 @@ export interface SystemStatus {
 export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
   | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
-  | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation';
+  | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed';
 
 export interface ChangeEvent {
   id: number;
