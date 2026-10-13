@@ -76,8 +76,12 @@ export default function Search() {
   const sort = params.get('sort') ?? 'score';
   const at = params.get('at') ?? '';
   const page = Math.max(1, Number(params.get('page')) || 1);
+  // Hosts vs services (and live vs as-of) return different row shapes; keep the mode the
+  // current `results` were loaded for so we never render the wrong table mid-switch.
+  const resultsMode = at ? `at:${at}` : view;
   const [text, setText] = useState(q);
   const [results, setResults] = useState<Results | null>(null);
+  const [loadedMode, setLoadedMode] = useState<string | null>(null);
   const [error, setError] = useState<{ message: string; pos?: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [showFields, setShowFields] = useState(false);
@@ -95,11 +99,17 @@ export default function Search() {
     let stale = false;
     setLoading(true);
     get<Results>('/search', { q, view, sort, at: at || undefined, page, page_size: PAGE_SIZE })
-      .then((r) => { if (!stale) { setResults(r); setError(null); } })
-      .catch((e: any) => { if (!stale) { setResults(null); setError({ message: e.message, pos: e instanceof ApiError ? e.pos : undefined }); } })
+      .then((r) => { if (!stale) { setResults(r); setLoadedMode(resultsMode); setError(null); } })
+      .catch((e: any) => {
+        if (!stale) {
+          setResults(null);
+          setLoadedMode(null);
+          setError({ message: e.message, pos: e instanceof ApiError ? e.pos : undefined });
+        }
+      })
       .finally(() => { if (!stale) setLoading(false); });
     return () => { stale = true; };
-  }, [q, view, sort, at, page]);
+  }, [q, view, sort, at, page, resultsMode]);
 
   const update = (changes: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
@@ -145,7 +155,8 @@ export default function Search() {
     }
   };
 
-  const facets = at ? results?.facets : live.data;
+  const shown = loadedMode === resultsMode ? results : null;
+  const facets = at ? shown?.facets : live.data;
   const bulkLabel = bulk && `${bulk.uuids.length} host${bulk.uuids.length === 1 ? '' : 's'} matching “${q || 'everything'}”`;
 
   return (
@@ -184,10 +195,10 @@ export default function Search() {
         <div className="stack" style={{ minWidth: 0 }}>
           <div className="spread" style={{ flexWrap: 'wrap' }}>
             <div className="row wrap">
-              <strong>{results ? `${results.total.toLocaleString()} ${at ? 'hosts' : view}` : '…'}</strong>
-              {at && results?.snapshots && (
+              <strong>{shown ? `${shown.total.toLocaleString()} ${at ? 'hosts' : view}` : '…'}</strong>
+              {at && shown?.snapshots && (
                 <span className="muted small">
-                  from {results.snapshots.length ? results.snapshots.map((s) => `${s.network ?? 'network'} @ ${s.snapshot_date}`).join(', ') : 'no snapshots on or before this date'}
+                  from {shown.snapshots.length ? shown.snapshots.map((s) => `${s.network ?? 'network'} @ ${s.snapshot_date}`).join(', ') : 'no snapshots on or before this date'}
                 </span>
               )}
             </div>
@@ -212,10 +223,10 @@ export default function Search() {
               <button className="btn sm" onClick={() => setSaving(true)} disabled={!q || !!error}>Save as watch</button>
               {isAdmin && !at && (
                 <>
-                  <button className="btn sm" onClick={() => openBulk('scan')} disabled={loading || busy !== null || !!error || !results?.total}>
+                  <button className="btn sm" onClick={() => openBulk('scan')} disabled={loading || busy !== null || !!error || !shown?.total}>
                     {busy === 'scan' ? 'Loading hosts…' : 'Scan results'}
                   </button>
-                  <button className="btn sm" onClick={() => openBulk('web')} disabled={loading || busy !== null || !!error || !results?.total}>
+                  <button className="btn sm" onClick={() => openBulk('web')} disabled={loading || busy !== null || !!error || !shown?.total}>
                     {busy === 'web' ? 'Loading hosts…' : 'Capture web'}
                   </button>
                 </>
@@ -223,12 +234,12 @@ export default function Search() {
             </div>
           </div>
 
-          {loading && !results ? <Loading /> : !results ? null : (
+          {loading && !shown ? <Loading /> : !shown ? null : (
             <div
               aria-busy={loading || undefined}
               style={loading ? { opacity: 0.55, pointerEvents: 'none' } : undefined}
             >
-              {!results.items.length ? (
+              {!shown.items.length ? (
                 <Card><Empty>No hosts match this query.</Empty></Card>
               ) : at ? (
                 <Card flush>
@@ -236,7 +247,7 @@ export default function Search() {
                     <table>
                       <thead><tr><th>IP</th><th>Hostname</th><th>Network</th><th>Type</th><th>Score</th><th>Ports</th><th>Tags</th></tr></thead>
                       <tbody>
-                        {(results.items as HistoryHost[]).map((h) => (
+                        {(shown.items as HistoryHost[]).map((h) => (
                           <tr key={`${h.network}-${h.uuid}`} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
                             <td className="mono">{h.ip}</td>
                             <td>{h.hostname ?? '—'}</td>
@@ -257,7 +268,7 @@ export default function Search() {
                     <table>
                       <thead><tr><th>Host</th><th>Port</th><th>Service</th><th>HTTP</th><th>Score</th></tr></thead>
                       <tbody>
-                        {(results.items as SearchServiceRow[]).map((s) => (
+                        {(shown.items as SearchServiceRow[]).map((s) => (
                           <tr key={`${s.host.uuid}-${s.protocol}${s.port}`} className="clickable" onClick={() => nav(`/devices/${s.host.uuid}`)}>
                             <td><span className="mono">{s.host.ip}</span>{s.host.hostname && <div className="muted small">{s.host.hostname}</div>}</td>
                             <td className="mono nowrap">{s.port}/{s.protocol}</td>
@@ -272,11 +283,11 @@ export default function Search() {
                 </Card>
               ) : (
                 <Card flush>
-                  {(results.items as SearchHost[]).map((h) => <HostResult key={h.uuid} h={h} />)}
+                  {(shown.items as SearchHost[]).map((h) => <HostResult key={h.uuid} h={h} />)}
                 </Card>
               )}
-              {results.total > 0 && (
-                <Pager page={page} pageSize={PAGE_SIZE} total={results.total} onPage={(p) => update({ page: p > 1 ? String(p) : null })} />
+              {shown.total > 0 && (
+                <Pager page={page} pageSize={PAGE_SIZE} total={shown.total} onPage={(p) => update({ page: p > 1 ? String(p) : null })} />
               )}
             </div>
           )}
