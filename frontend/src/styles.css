@@ -126,12 +126,15 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .card-body { padding: 14px 16px; flex: 1; min-height: 0; }
 .card-body.flush { padding: 0; }
 .grid { display: grid; gap: var(--space-4); align-items: stretch; }
-.grid.kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-3); }
+.grid.kpis { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--space-3); }
 .grid.two { grid-template-columns: minmax(0, 1.85fr) minmax(280px, 1fr); }
 .grid.halves { grid-template-columns: 1fr 1fr; }
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1400px) {
+  .grid.kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 @media (max-width: 1200px) {
-  .grid.kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid.kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .grid.two, .grid.three { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) { .grid.halves { grid-template-columns: 1fr; } }

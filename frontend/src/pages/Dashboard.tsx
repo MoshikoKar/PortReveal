@@ -93,8 +93,10 @@ export default function Dashboard() {
       <div className="grid kpis">
         <Kpi label="Known hosts" value={devices.total} sub={`${devices.exposed} with open ports`} color="var(--accent)" onClick={() => nav('/devices')} />
         <Kpi label="Currently detected" value={devices.active} sub={devices.not_detected ? `${devices.not_detected} not detected` : devices.unknown ? `${devices.unknown} unconfirmed` : 'seen in latest scans'} color="var(--ok)" onClick={() => nav('/devices?status=active')} />
-        <Kpi label="New hosts (7d)" value={data.new_hosts_7d} sub={`${d1.new_hosts} discovered in last 24h`} color={data.new_hosts_7d ? 'var(--high)' : undefined} onClick={() => nav(searchLink('new:7d'))} />
-        <Kpi label="Open ports" value={data.open_ports_total} sub={`${d7.new_ports} opened in 7d`} color="var(--low)" onClick={() => nav('/ports')} />
+        <Kpi label="New hosts (24h)" value={d1.new_hosts} sub={`${data.new_hosts_7d} in last 7d`} color={d1.new_hosts ? 'var(--high)' : undefined} onClick={() => nav(searchLink('new:24h'))} />
+        <Kpi label="New ports (24h)" value={d1.new_ports} sub={`${d7.new_ports} opened in 7d`} color={d1.new_ports ? 'var(--high)' : undefined} onClick={() => nav('/changes?type=port_opened&range=24h')} />
+        <Kpi label="Service changes (24h)" value={d1.service_changes} sub={`${d7.service_changes} in last 7d`} color={d1.service_changes ? 'var(--medium)' : undefined} onClick={() => nav('/changes?type=service_changed,version_changed&range=24h')} />
+        <Kpi label="Open ports" value={data.open_ports_total} sub={`${d1.closed_ports} closed in 24h`} color="var(--low)" onClick={() => nav('/ports')} />
         <Kpi label="High exposure" value={data.exposure.high} sub={`score ≥ ${SCORE_HIGH} · ${data.exposure.medium} medium`} color={data.exposure.high ? 'var(--high)' : undefined} onClick={() => nav(searchLink(LEVEL_QUERIES.high))} />
         <Kpi label="Alerts (7d)" value={data.watch_alerts.last_7d} sub="watch matches and policy violations" color={data.watch_alerts.last_7d ? 'var(--medium)' : undefined} onClick={() => nav('/changes?type=watch_match,policy_violation&range=7d')} />
       </div>
@@ -202,7 +204,26 @@ export default function Dashboard() {
       </div>
 
       <div className="grid three">
-        <Card title="Exposure trend (30 days)"><Trend points={data.trend} /></Card>
+        <div className="stack" style={{ gap: 16 }}>
+          <Card title="Exposure trend (30 days)"><Trend points={data.trend} /></Card>
+          {data.networks.length > 0 && (
+            <Card title="Networks" flush>
+              <table>
+                <thead><tr><th>Network</th><th>Scope</th><th>Active / known</th><th>Baseline</th></tr></thead>
+                <tbody>
+                  {data.networks.map((n) => (
+                    <tr key={n.id} className="clickable" onClick={() => nav(`/devices?network_id=${n.id}`)}>
+                      <td>{n.name}</td>
+                      <td className="mono">{n.cidr}</td>
+                      <td>{n.active_count} / {n.device_count}</td>
+                      <td><BaselineCell n={n} onStarted={reload} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+        </div>
         <Card title="Most exposed ports" flush actions={<Link to="/ports" className="small">See all{data.exposed_ports_total ? ` ${data.exposed_ports_total}` : ''} →</Link>}>
           {data.top_ports.length === 0 ? <div className="empty">No open ports known yet.</div> : (
             <table>
@@ -232,24 +253,6 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
-
-      {data.networks.length > 0 && (
-        <Card title="Networks" flush>
-          <table>
-            <thead><tr><th>Network</th><th>Scope</th><th>Active / known</th><th>Baseline</th></tr></thead>
-            <tbody>
-              {data.networks.map((n) => (
-                <tr key={n.id} className="clickable" onClick={() => nav(`/devices?network_id=${n.id}`)}>
-                  <td>{n.name}</td>
-                  <td className="mono">{n.cidr}</td>
-                  <td>{n.active_count} / {n.device_count}</td>
-                  <td><BaselineCell n={n} onStarted={reload} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
     </div>
   );
 }
