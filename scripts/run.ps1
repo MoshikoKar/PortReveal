@@ -17,7 +17,8 @@
   production (default) or dev
 
 .PARAMETER SkipBuild
-  production only: skip `npm run build` if frontend/dist/index.html already exists
+  production only: skip `npm run build` if frontend/dist looks current.
+  Ignored when dist is missing or still carries the pre-rebrand "Network Finder" UI.
 
 .PARAMETER ForceRestart
   If the listen port is already in use by a previous instance, stop it first
@@ -64,7 +65,7 @@ $StopFile = Join-Path $DataDir "portreveal.stop"
 $NoRestartFile = Join-Path $DataDir "portreveal.no-restart"
 $GracefulStopTimeoutS = 45
 # If the stop file is still present after this many seconds, the app is not watching
-# PORTREVEAL_STOP_FILE (older process / env not set) — force-kill instead of waiting.
+# PORTREVEAL_STOP_FILE (older process / env not set) - force-kill instead of waiting.
 $StopFileAckTimeoutS = 5
 $LogFile = Join-Path $LogDir "production.log"
 $ComposeFile = Join-Path $Root "docker-compose.yml"
@@ -160,6 +161,83 @@ function Wait-ProcessesExit {
     return (@($Ids | Where-Object { Test-ProcessAlive $_ }).Count -eq 0)
 }
 
+function Wait-PortFree {
+    param([int] $Port, [int] $TimeoutS = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutS)
+    while ((Get-Date) -lt $deadline) {
+        if (@(Get-ListenPids -Port $Port).Count -eq 0) { return $true }
+        Start-Sleep -Milliseconds 500
+    }
+    return (@(Get-ListenPids -Port $Port).Count -eq 0)
+}
+
+function Get-ChildProcessIds {
+    param([int] $ParentId)
+    try {
+        return @(
+            Get-CimInstance Win32_Process -Filter "ParentProcessId = $ParentId" -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty ProcessId
+        )
+    } catch {
+        return @()
+    }
+}
+
+function Stop-ProcessTree {
+    param([int] $ProcId)
+    if ($ProcId -le 0 -or $ProcId -eq $PID) { return }
+    foreach ($child in @(Get-ChildProcessIds -ParentId $ProcId)) {
+        Stop-ProcessTree -ProcId ([int]$child)
+    }
+    if (Test-ProcessAlive $ProcId) {
+        try {
+            Write-Log "Force-stopping PID $ProcId" "WARN"
+            Stop-Process -Id $ProcId -Force -ErrorAction Stop
+        } catch {
+            Write-Log "Could not stop PID ${ProcId}: $($_.Exception.Message)" "WARN"
+        }
+    }
+}
+
+# Hidden -Background hosts and orphaned ForceRestart children. Killing only the listen
+# PID leaves the supervisor restart loop up, which races Clear-FrontendDist and binds again.
+function Get-ProductionSupervisorPids {
+    $scriptPath = $PSCommandPath
+    if (-not $scriptPath) { $scriptPath = $MyInvocation.MyCommand.Path }
+    $leaf = [System.IO.Path]::GetFileName($scriptPath)
+    # Do not name this $matches - that collides with PowerShell's automatic $Matches hashtable.
+    $found = New-Object System.Collections.Generic.List[int]
+    try {
+        $procs = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction SilentlyContinue)
+    } catch {
+        return @()
+    }
+    foreach ($proc in $procs) {
+        if ($proc.ProcessId -eq $PID) { continue }
+        $cmd = $proc.CommandLine
+        if (-not $cmd) { continue }
+        if ($cmd -notmatch [regex]::Escape($leaf)) { continue }
+        if ($cmd -notmatch '(?i)-Mode\s+production') { continue }
+        if ($cmd -match '(?i)-Stop\b') { continue }
+        $found.Add([int]$proc.ProcessId)
+    }
+    return @($found)
+}
+
+function Test-ProductionUiReady {
+    param([int] $Port)
+    try {
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 3
+    } catch {
+        return $false
+    }
+    $body = [string]$resp.Content
+    if ($body -match 'Frontend not built') { return $false }
+    if ($body -match '(?i)PortReveal') { return $true }
+    if ($body -match '(?i)<!doctype html') { return $true }
+    return $false
+}
+
 function Request-GracefulStop {
     # Returns $true once the app process has exited on its own.
     param([int] $Port)
@@ -172,7 +250,7 @@ function Request-GracefulStop {
     Set-Content -LiteralPath $StopFile -Value (Get-Date -Format o) -Encoding ascii
 
     # The app watcher deletes the stop file when it sees it; if the file is still here
-    # after StopFileAckTimeoutS, this process never registered the watcher — force soon.
+    # after StopFileAckTimeoutS, this process never registered the watcher - force soon.
     $started = Get-Date
     $ackDeadline = $started.AddSeconds($StopFileAckTimeoutS)
     $deadline = $started.AddSeconds($GracefulStopTimeoutS)
@@ -213,30 +291,37 @@ function Stop-ProductionInstance {
         if ($raw -match "^\d+$") { $wrapperPid = [int]$raw }
     }
 
-    $hadApp = ($null -ne $wrapperPid) -or (@(Get-ListenPids -Port $Port).Count -gt 0)
+    $supervisorPids = @(Get-ProductionSupervisorPids)
+    $hadApp = ($null -ne $wrapperPid) -or ($supervisorPids.Count -gt 0) -or (@(Get-ListenPids -Port $Port).Count -gt 0)
     if ((Request-GracefulStop -Port $Port) -and $null -ne $wrapperPid) {
         # The launcher (PID file) exits by itself once uvicorn has; give it a moment.
         [void](Wait-ProcessesExit -Ids @($wrapperPid) -TimeoutS 10)
     }
 
-    $pids = New-Object "System.Collections.Generic.HashSet[int]"
-    if ($null -ne $wrapperPid -and (Test-ProcessAlive $wrapperPid)) { [void]$pids.Add($wrapperPid) }
-    foreach ($p in @(Get-ListenPids -Port $Port)) { [void]$pids.Add([int]$p) }
+    $roots = New-Object "System.Collections.Generic.HashSet[int]"
+    if ($null -ne $wrapperPid) { [void]$roots.Add([int]$wrapperPid) }
+    foreach ($p in $supervisorPids) { [void]$roots.Add([int]$p) }
+    foreach ($p in @(Get-ListenPids -Port $Port)) { [void]$roots.Add([int]$p) }
 
-    if ($pids.Count -eq 0) {
+    if ($roots.Count -eq 0) {
         if (-not $hadApp) { Write-Log "No production app found (port $Port / PID file)." }
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     } else {
-        foreach ($procId in @($pids)) {
-            try {
-                Write-Log "Force-stopping PID $procId" "WARN"
-                Stop-Process -Id $procId -Force -ErrorAction Stop
-            } catch {
-                Write-Log "Could not stop PID ${procId}: $($_.Exception.Message)" "WARN"
-            }
+        Write-Log "Stopping production process tree(s): $($roots -join ', ')"
+        foreach ($procId in @($roots)) {
+            Stop-ProcessTree -ProcId $procId
         }
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
+    }
+
+    Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+
+    # Reap any leftover uvicorn that lost its parent but still holds the port.
+    foreach ($p in @(Get-ListenPids -Port $Port)) {
+        Stop-ProcessTree -ProcId ([int]$p)
+    }
+
+    if (-not (Wait-PortFree -Port $Port -TimeoutS 30)) {
+        $left = @(Get-ListenPids -Port $Port)
+        throw "Port $Port still in use by PID(s) $($left -join ', ') after stop"
     }
 
     if ($StopDb) {
@@ -249,7 +334,7 @@ function Stop-ProductionInstance {
 }
 
 function Get-NpmCmd {
-    # Prefer npm.cmd — npm.ps1 breaks under Set-StrictMode ("Statement" property errors).
+    # Prefer npm.cmd - npm.ps1 breaks under Set-StrictMode ("Statement" property errors).
     $cmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     $cmd = Get-Command npm -ErrorAction SilentlyContinue
@@ -275,6 +360,29 @@ function Invoke-Checked {
     }
 }
 
+function Get-FrontendDistIndex {
+    return (Join-Path $Root "frontend\dist\index.html")
+}
+
+# Stale dist (e.g. pre-PortReveal) keeps serving old brand after git pull / hard refresh.
+function Test-FrontendDistCurrent {
+    $index = Get-FrontendDistIndex
+    if (-not (Test-Path -LiteralPath $index)) { return $false }
+    $html = Get-Content -LiteralPath $index -Raw -ErrorAction SilentlyContinue
+    if (-not $html) { return $false }
+    if ($html -match '(?i)Network\s+Finder') { return $false }
+    if ($html -notmatch '(?i)PortReveal') { return $false }
+    return $true
+}
+
+function Clear-FrontendDist {
+    $distDir = Join-Path $Root "frontend\dist"
+    if (Test-Path -LiteralPath $distDir) {
+        Write-Log "Removing stale frontend/dist for a clean rebuild"
+        Remove-Item -LiteralPath $distDir -Recurse -Force
+    }
+}
+
 function Start-DockerDb {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         throw "docker not found on PATH. Install Docker Desktop and ensure it is running."
@@ -287,7 +395,7 @@ function Start-DockerDb {
     }
 
     Write-Log "Starting Docker Compose service: db (Postgres only)"
-    # Only the db service — app stays on the host for Npcap/ARP.
+    # Only the db service - app stays on the host for Npcap/ARP.
     & docker compose -f $ComposeFile --env-file $ProdEnvFile up -d --wait db
     if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         # Older compose without --wait
@@ -424,7 +532,7 @@ if ($Mode -eq "production") {
     if (-not (Test-EnvSet "POSTGRES_USER")) { $env:POSTGRES_USER = "netfinder" }
     if (-not (Test-EnvSet "POSTGRES_PORT")) { $env:POSTGRES_PORT = "5434" }
 
-    # Host app → Docker-published Postgres on localhost (never SQLite in production).
+    # Host app -> Docker-published Postgres on localhost (never SQLite in production).
     # Must set DATABASE_URL explicitly: process env wins over any file, and .env often
     # still has sqlite which would otherwise take precedence over POSTGRES_HOST alone.
     $env:POSTGRES_HOST = "127.0.0.1"
@@ -451,11 +559,16 @@ if ($Stop) {
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
-# --- already running? (wrap in @() — PowerShell unwraps single-element returns) -
+# --- already running? (wrap in @() - PowerShell unwraps single-element returns) -
 $existing = @(Get-ListenPids -Port $listenPort)
 if ($existing.Count -gt 0) {
-    if ($ForceRestart) {
-        Write-Log "Port $listenPort in use by PID(s) $($existing -join ', '); ForceRestart"
+    $uiOk = Test-ProductionUiReady -Port $listenPort
+    if ($ForceRestart -or -not $uiOk) {
+        if (-not $uiOk -and -not $ForceRestart) {
+            Write-Log "Port $listenPort is up but UI is missing/stale (API-only JSON); replacing instance" "WARN"
+        } else {
+            Write-Log "Port $listenPort in use by PID(s) $($existing -join ', '); ForceRestart"
+        }
         Stop-ProductionInstance -Port $listenPort
     } else {
         Write-Log "Already listening on port $listenPort (PID(s) $($existing -join ', ')); exiting."
@@ -472,6 +585,16 @@ if ($Background) {
     if ($Mode -ne "production") {
         throw "-Background is only supported for -Mode production."
     }
+    # A previous ForceRestart can leave a hidden supervisor alive; kill it before spawn
+    # so the child does not race Clear-FrontendDist / bind on APP_PORT.
+    $orphans = @(Get-ProductionSupervisorPids)
+    if ($orphans.Count -gt 0) {
+        Write-Log "Stopping leftover production supervisor(s) before -Background: $($orphans -join ', ')" "WARN"
+        foreach ($procId in $orphans) { Stop-ProcessTree -ProcId $procId }
+        if (-not (Wait-PortFree -Port $listenPort -TimeoutS 30)) {
+            throw "Port $listenPort still busy after clearing leftover supervisors"
+        }
+    }
     $childArgs = @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
         "-File", "`"$PSCommandPath`"", "-Mode", "production"
@@ -482,13 +605,15 @@ if ($Background) {
     $deadline = (Get-Date).AddSeconds($BackgroundStartTimeoutS)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
-        if (@(Get-ListenPids -Port $listenPort).Count -gt 0) {
-            Write-Host "PortReveal is running on http://localhost:$listenPort  (log: $LogFile, stop: .\scripts\run.ps1 -Stop)"
-            exit 0
-        }
         if ($child.HasExited) {
             Write-Host "PortReveal failed to start (exit $($child.ExitCode)). See $LogFile" -ForegroundColor Red
             exit 1
+        }
+        # Port open alone is not enough: a half-started API can answer JSON
+        # "Frontend not built" while dist was wiped for rebuild.
+        if (Test-ProductionUiReady -Port $listenPort) {
+            Write-Host "PortReveal is running on http://localhost:$listenPort  (log: $LogFile, stop: .\scripts\run.ps1 -Stop)"
+            exit 0
         }
     }
     Write-Host "Still starting after ${BackgroundStartTimeoutS}s; check $LogFile" -ForegroundColor Yellow
@@ -541,7 +666,7 @@ $havePlaywrightMarker = Test-Path -LiteralPath (Join-Path $env:USERPROFILE "AppD
 if ((-not $haveFfmpeg -or -not $haveFreerdp -or -not $havePlaywrightMarker) -and $env:NF_SKIP_CAPTURE_TOOLS -ne "1") {
     $captureScript = Join-Path $PSScriptRoot "install-capture-tools.ps1"
     if (Test-Path -LiteralPath $captureScript) {
-        Write-Log "Web-capture tools incomplete — running scripts\install-capture-tools.ps1 (soft-fail)"
+        Write-Log "Web-capture tools incomplete - running scripts\install-capture-tools.ps1 (soft-fail)"
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $captureScript
         $haveFfmpeg = [bool](Get-Command ffmpeg -ErrorAction SilentlyContinue)
         $haveFreerdp = [bool](
@@ -552,18 +677,22 @@ if ((-not $haveFfmpeg -or -not $haveFreerdp -or -not $havePlaywrightMarker) -and
     }
 }
 if (-not $haveFfmpeg) {
-    Write-Log "ffmpeg not on PATH — RTSP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
+    Write-Log "ffmpeg not on PATH - RTSP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
 }
 if (-not $haveFreerdp) {
-    Write-Log "FreeRDP not on PATH — RDP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
+    Write-Log "FreeRDP not on PATH - RDP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
 }
 
 Start-DockerDb
 
-$distIndex = Join-Path $Root "frontend\dist\index.html"
+$distIndex = Get-FrontendDistIndex
+$distCurrent = Test-FrontendDistCurrent
 $needBuild = -not $SkipBuild
 if ($SkipBuild -and -not (Test-Path -LiteralPath $distIndex)) {
     Write-Log "frontend/dist missing; build required despite -SkipBuild" "WARN"
+    $needBuild = $true
+} elseif ($SkipBuild -and -not $distCurrent) {
+    Write-Log "frontend/dist is stale (old Network Finder brand or missing PortReveal); rebuilding despite -SkipBuild" "WARN"
     $needBuild = $true
 }
 
@@ -572,15 +701,23 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root "node_modules"))) {
 }
 
 if ($needBuild) {
+    if (@(Get-ListenPids -Port $listenPort).Count -gt 0) {
+        throw "Refusing to wipe frontend/dist while port $listenPort is still listening (stop the old instance first)"
+    }
+    Clear-FrontendDist
     Invoke-Checked -Label "npm run build" -FilePath $npmCmd -ArgumentList @("run", "build")
+    if (-not (Test-FrontendDistCurrent)) {
+        throw "frontend build finished but dist still looks wrong (expected PortReveal in frontend/dist/index.html)"
+    }
+    Write-Log "Frontend dist ready (PortReveal)"
 } else {
-    Write-Log "Skipping frontend build (-SkipBuild)"
+    Write-Log "Skipping frontend build (-SkipBuild; dist already current)"
 }
 
 Invoke-Checked -Label "database migrate" -FilePath $npmCmd -ArgumentList @("run", "db:migrate")
 
 $PID | Set-Content -LiteralPath $PidFile -Encoding ascii
-Write-Log "PID file $PidFile <- $PID"
+Write-Log "PID file $PidFile = $PID"
 
 try {
     $code = Start-ProductionServeLoop -ListenHost $listenHost -ListenPort $listenPort `

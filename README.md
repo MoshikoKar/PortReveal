@@ -250,15 +250,17 @@ wfreerdp /version
 |---|---|
 | Start (foreground) | `.\scripts\run.ps1 -Mode production` or `npm start` |
 | Start (background) | `.\scripts\run.ps1 -Mode production -Background` |
-| Skip frontend rebuild | add `-SkipBuild` |
+| Skip frontend rebuild | add `-SkipBuild` (ignored if `frontend/dist` is missing or still branded Network Finder) |
 | Force restart | add `-ForceRestart` |
 | Stop app (graceful, then forced) | `.\scripts\run.ps1 -Stop` or `npm run stop` |
 | Stop app + Postgres | `.\scripts\run.ps1 -Stop -StopDb` |
 | Dev via same script | `.\scripts\run.ps1 -Mode dev` or `npm run start:dev` |
 
-Production start loads `.env.production`, starts Compose `db` only, builds the
-frontend, migrates, and serves on `APP_PORT` (default **8081**). Background mode
-logs to `data/logs/production.log`.
+Production start loads `.env.production`, starts Compose `db` only, cleans and
+rebuilds the frontend when needed (stale pre-rebrand dist is forced), migrates, and
+serves on `APP_PORT` (default **8081**). Background mode logs to
+`data/logs/production.log` and reports ready only after the UI HTML responds
+(not merely when the port is open).
 
 The production host **supervises** uvicorn: app stderr is teed into the log without
 killing the PowerShell process (a Windows PowerShell 5.1 pitfall with
@@ -271,10 +273,11 @@ unexpectedly the script brings Postgres back up and restarts the app until you
 `data/portreveal.stop` (and a no-restart marker so the supervisor does not
 bring the app back); the app stops its scheduler, scan worker and web-capture
 worker and exits. If it has not exited within 45 seconds (hung, or a build older than
-this feature), the script falls back to `Stop-Process -Force`. A hard kill is safe for
-data: an interrupted scan or capture is marked failed on the next start, its partial
-results are discarded, and queued jobs run as normal (see
-[Availability and capacity](#availability-and-capacity)).
+this feature), the script force-stops the whole production process tree (hidden
+`-Background` supervisors and their uvicorn children) and waits until `APP_PORT`
+is free. A hard kill is safe for data: an interrupted scan or capture is marked
+failed on the next start, its partial results are discarded, and queued jobs run
+as normal (see [Availability and capacity](#availability-and-capacity)).
 
 Set `LOG_FORMAT=json` for newline-delimited JSON application logs suitable for a
 log collector; the default is human-readable `text`.
@@ -572,10 +575,11 @@ recovery, see the [operations runbook](docs/runbook/runbook.md).
 | `"unk0" is not an ethernet device` | Tunnel stole the LAN route; scanner auto-binds `-e` when a local ethernet overlaps. Restart after updates. |
 | Standard/full scans report 0 ports (VPN on Windows) | Scanner passes `-e` and `-S` for the LAN NIC. Restart production and re-run Standard. |
 | Background start OK but UI down | Check `data/logs/production.log`, Docker Desktop, and `APP_PORT`. Use `-ForceRestart` or foreground mode. |
+| `{"ui":"Frontend not built..."}` on `APP_PORT` | Stale/orphan supervisor or wiped dist. `.\scripts\run.ps1 -Stop` then start again (rebuilds PortReveal UI). |
 | Migration failure | Read `data/logs/app.log`. Dev: `npm run db:reset`. Prod: `docker compose logs db` and `POSTGRES_*`. |
 | Port in use | Free it, or set `BACKEND_PORT` / `FRONTEND_PORT` (dev) or `APP_PORT` (prod). |
 | Backend unavailable in Vite | Check `[backend]` output; `curl localhost:8000/api/health` should return `ok`. |
-| Frontend not loading | `npm install` (Node 20.19+). Production serves UI on `APP_PORT`. |
+| Frontend not loading / old Network Finder brand | Production must rebuild `frontend/dist`. Run without `-SkipBuild`, or `-ForceRestart`. |
 | `python -m venv` fails (Debian/Ubuntu) | `sudo apt-get install -y python3-venv`, then `npm run setup`. |
 | Stale Python deps | `npm run setup -- --force` |
 | Browser unavailable at capture time | Windows: `npm run setup:capture-tools` as the app user, then restart. Manual: `backend\.venv\Scripts\python.exe -m playwright install chromium`. |

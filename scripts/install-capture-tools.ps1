@@ -66,7 +66,7 @@ function Test-Cmd([string] $Name) {
 function Ensure-Playwright {
     $py = Join-Path $Root "backend\.venv\Scripts\python.exe"
     if (-not (Test-Path -LiteralPath $py)) {
-        Write-Step "backend\.venv missing — skip Playwright (run npm run setup first)" "WARN"
+        Write-Step "backend\.venv missing - skip Playwright (run npm run setup first)" "WARN"
         [void]$failed.Add("playwright")
         return
     }
@@ -115,7 +115,7 @@ function Ensure-Ffmpeg {
     }
 
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Write-Step "winget not available — install ffmpeg manually and add its bin to PATH" "WARN"
+        Write-Step "winget not available - install ffmpeg manually and add its bin to PATH" "WARN"
         [void]$failed.Add("ffmpeg")
         return
     }
@@ -131,7 +131,7 @@ function Ensure-Ffmpeg {
         Write-Step "ffmpeg ready"
         return
     }
-    Write-Step "ffmpeg still not on PATH after winget — open a new shell or add the bin folder manually" "WARN"
+    Write-Step "ffmpeg still not on PATH after winget - open a new shell or add the bin folder manually" "WARN"
     [void]$failed.Add("ffmpeg")
 }
 
@@ -228,7 +228,7 @@ if (-not $SkipPlaywright) { Ensure-Playwright }
 if (-not $SkipFfmpeg) { Ensure-Ffmpeg }
 if (-not $SkipFreeRdp) { Ensure-FreeRdp }
 
-Write-Step ("Summary — ffmpeg={0} freerdp={1} playwright_skipped={2}" -f `
+Write-Step ("Summary - ffmpeg={0} freerdp={1} playwright_skipped={2}" -f `
     (Test-Cmd "ffmpeg"), `
     [bool](Test-FreeRdpClient), `
     [bool]$SkipPlaywright)
