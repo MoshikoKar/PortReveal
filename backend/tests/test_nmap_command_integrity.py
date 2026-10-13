@@ -7,34 +7,45 @@ from ``nmap --iflist`` output. None of them may add, remove or reinterpret nmap 
 Invariants and where they are locked down:
 
 1. nmap runs from a list argv, never through a shell; targets reach nmap only through an ``-iL`` file.
-   -> ``test_run_argv_is_a_list_and_targets_go_through_il_file`` (below).
-2. Option sets are fixed by code: no ``--script``, ``-A`` or UDP probes; timing/rate values come from
-   closed sets. -> ``tests/test_scanner.py::test_nmap_arguments_are_fixed_and_safe``,
+   -> ``test_run_argv_is_a_list_and_targets_go_through_il_file``, and end to end through
+   ``NmapScanner.discover`` / ``scan_ports``: ``test_discover_*``, ``test_scan_ports_*`` (below).
+2. Option sets are fixed by code: no ``--script``, ``-A``, ``-iR`` or UDP probes; timing/rate values come
+   from closed sets. -> ``assert_safe_argv`` on every composed command (below),
+   ``tests/test_scanner.py::test_nmap_arguments_are_fixed_and_safe``,
    ``tests/test_vpn_s2s.py`` (VPN S2S rate caps), ``tests/test_identify_ai.py::test_fixed_port_args_include_ai_candidates``.
 3. Targets are parsed into IPv4 addresses before a scan is queued; anything else is 422.
-   -> ``tests/test_api.py::test_scan_flow_through_api`` (``"10.0.0.1; reboot"``),
-   ``tests/test_api.py::test_network_and_exclusion_validation`` (CIDR with shell text).
+   -> ``test_crafted_targets_never_validate`` (below), ``tests/test_api.py::test_scan_flow_through_api``
+   (``"10.0.0.1; reboot"``), ``tests/test_api.py::test_network_and_exclusion_validation`` (CIDR with shell text).
 4. Interface bind values (``-e``/``-S``) are a plain interface name and an IPv4 address, checked where
    they become argv, so a hostile ``--iflist`` line cannot inject an option.
    -> ``test_bind_*`` and ``test_run_drops_unsafe_bind_values`` (below).
 5. Web-capture helpers (VNC, FreeRDP, ffmpeg/RTSP) follow the same rules.
    -> ``tests/test_web_capture_argv.py``.
-
-Still to add here: a Popen spy over ``NmapScanner.discover`` / ``scan_ports`` with crafted targets and a
-deny-list assert on every composed argv, and closed-set tests for ``PUT /api/settings/scan``.
+6. Scan settings are a closed set: ``timing`` is one of polite/normal/fast, numbers are range-checked and
+   unknown fields (raw nmap arguments) are a 422 and never stored.
+   -> ``test_scan_settings_*`` (below).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.api.auth import limiter
+from app.db import session_scope
+from app.main import app
+from app.models import AppSetting
+from app.netutils import AddressSet, TargetError
 from app.scanner import nmap_scanner
 from app.scanner.nmap_iface import BindChoice, bind_args, parse_nmap_iflist
-from app.scanner.types import ScanContext
+from app.scanner.types import PortProfile, ScanContext
+from app.settings_store import ScanSettings
 
 FINISHED_XML = '<?xml version="1.0"?><nmaprun><runstats><finished exit="success"/></runstats></nmaprun>'
 SHELL_CHARS = set(";&|$`<>\n\r'\"")
+DENIED_OPTIONS = ("--script", "-A", "-iR", "-sU", "-sC")
+CRAFTED_TARGETS = ["10.0.0.1; reboot", "$(id)", "`id`", "10.0.0.2\n-iR 0", "10.0.0.3 && rm -rf /", "--script=evil"]
 
 
 class PopenSpy:
@@ -59,7 +70,21 @@ def scanner(tmp_path, monkeypatch):
     PopenSpy.calls = []
     monkeypatch.setattr(nmap_scanner.shutil, "which", lambda _p: "/usr/bin/nmap")
     monkeypatch.setattr(nmap_scanner.subprocess, "Popen", PopenSpy)
+    # No `nmap --iflist` run: discover / scan_ports bind to no interface.
+    monkeypatch.setattr(nmap_scanner, "resolve_bind", lambda _exe, _t, privileged: BindChoice(None, privileged))
     return nmap_scanner.NmapScanner("nmap", privileged=True, timing="normal", tmp_dir=tmp_path)
+
+
+def assert_safe_argv(call: dict) -> None:
+    """Invariants 1 and 2 for one recorded Popen call."""
+    cmd = call["cmd"]
+    assert isinstance(cmd, list) and all(isinstance(a, str) for a in cmd)
+    assert not call["kwargs"].get("shell")
+    assert cmd.count("-iL") == 1 and cmd[-2:] == ["-oX", "-"]
+    for arg in cmd:
+        assert not any(arg == d or arg.startswith(d + "=") for d in DENIED_OPTIONS), arg
+        assert not arg.startswith("--script"), arg
+        assert not SHELL_CHARS & set(arg), arg
 
 
 def _run(scanner, bind: BindChoice | None, targets=("192.0.2.1", "192.0.2.2")) -> dict:
@@ -121,3 +146,95 @@ def test_iflist_parser_skips_hostile_device_names():
         "**************************ROUTES**************************",
     ])
     assert [i.dev for i in parse_nmap_iflist(text)] == ["eth0"]
+
+
+# --- end to end through NmapScanner with a Popen spy ------------------------------------------------
+@pytest.mark.parametrize("spec", CRAFTED_TARGETS)
+def test_crafted_targets_never_validate(spec):
+    with pytest.raises(TargetError):
+        AddressSet.from_specs(spec)
+
+
+def test_discover_writes_only_validated_targets_to_the_il_file(scanner):
+    targets = AddressSet.from_specs("192.0.2.0/30, 192.0.2.9").chunks(1024)[0]
+    scanner.discover(targets, ScanContext(1))
+    assert len(PopenSpy.calls) == 1
+    call = PopenSpy.calls[0]
+    assert_safe_argv(call)
+    assert call["targets"].splitlines() == targets == ["192.0.2.0/30", "192.0.2.9"]
+    assert not any(t in call["cmd"] for t in targets)
+
+
+@pytest.mark.parametrize("full,os_detection", [(False, False), (False, True), (True, True)])
+def test_scan_ports_every_nmap_run_is_safe(scanner, full, os_detection):
+    ips = list(AddressSet.from_specs("192.0.2.1-192.0.2.3").addresses())
+    ctx = ScanContext(2)
+    ctx.known_truenas_ips = {"192.0.2.2"}  # also exercise the TrueNAS apps run
+    profile = PortProfile(full=full, top_ports=1000, timing="fast", os_detection=os_detection)
+    scanner.scan_ports(ips, profile, ctx)
+    assert len(PopenSpy.calls) >= 2
+    for call in PopenSpy.calls:
+        assert_safe_argv(call)
+        assert set(call["targets"].splitlines()) <= set(ips)
+        assert not any(ip in call["cmd"] for ip in ips)
+
+
+def test_unvalidated_strings_reach_nmap_only_as_il_file_lines(scanner):
+    """Defence in depth: even if a crafted string slipped past validation it would be one -iL line,
+    never an argv element, so it cannot add an option or reach a shell."""
+    scanner.discover(CRAFTED_TARGETS[:3], ScanContext(3))
+    call = PopenSpy.calls[0]
+    assert_safe_argv(call)
+    assert call["targets"].splitlines() == CRAFTED_TARGETS[:3]
+
+
+# --- PUT /api/settings/scan is a closed set (invariant 6) ---------------------------------------------
+@pytest.fixture
+def client(db_env):
+    limiter.reset()
+    with TestClient(app) as c:
+        assert c.post("/api/setup/admin", json={"username": "admin", "password": "correct-horse-1"}).status_code == 200
+        c.headers["X-CSRF-Token"] = c.cookies.get("nf_csrf", "")
+        yield c
+
+
+def _stored_scan_settings() -> dict:
+    with session_scope() as db:
+        row = db.get(AppSetting, "scan")
+        return dict(row.value) if row else {}
+
+
+@pytest.mark.parametrize("timing", ["polite", "normal", "fast"])
+def test_scan_settings_timing_round_trips(client, timing):
+    body = client.get("/api/settings/scan").json() | {"timing": timing}
+    r = client.put("/api/settings/scan", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["timing"] == timing
+    assert client.get("/api/settings/scan").json()["timing"] == timing
+    assert _stored_scan_settings()["timing"] == timing
+
+
+@pytest.mark.parametrize("patch", [
+    {"timing": "--script"}, {"timing": "-T5;id"}, {"timing": "insane"}, {"timing": "-T5"}, {"timing": ""},
+    {"top_ports": 99}, {"top_ports": 10001}, {"top_ports": "1000 --script=x"},
+    {"parallelism": 0}, {"host_timeout_minutes": 241},
+])
+def test_scan_settings_reject_values_outside_the_closed_set(client, patch):
+    before = client.get("/api/settings/scan").json()
+    r = client.put("/api/settings/scan", json=before | patch)
+    assert r.status_code == 422, r.text
+    assert client.get("/api/settings/scan").json() == before
+
+
+@pytest.mark.parametrize("extra", [
+    {"nmap_args": "--script=vuln"}, {"extra_args": ["-A"]}, {"arguments": "-iR 0"}, {"scripts": "default"},
+])
+def test_scan_settings_reject_raw_nmap_fields_and_never_store_them(client, extra):
+    before = client.get("/api/settings/scan").json()
+    r = client.put("/api/settings/scan", json=before | extra)
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "validation_error"
+    stored = _stored_scan_settings()
+    assert set(stored) <= set(ScanSettings.model_fields)
+    assert not any(isinstance(v, str) and v.startswith("-") for v in stored.values())
+    assert set(client.get("/api/settings/scan").json()) == set(ScanSettings.model_fields)

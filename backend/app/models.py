@@ -42,6 +42,8 @@ SCAN_FAILED = "failed"
 SCAN_CANCELLED = "cancelled"
 SCAN_ACTIVE_STATES = (SCAN_QUEUED, SCAN_RUNNING)
 SCAN_STATUSES = (SCAN_QUEUED, SCAN_RUNNING, SCAN_COMPLETED, SCAN_PARTIAL, SCAN_FAILED, SCAN_CANCELLED)
+# Stored as scan / web-capture `error` after an unexpected crash; the exception itself goes to the log only.
+INTERNAL_ERROR = "internal error (see the application log)"
 
 SCAN_DISCOVERY = "discovery"
 SCAN_STANDARD = "standard"

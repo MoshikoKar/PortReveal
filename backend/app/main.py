@@ -7,8 +7,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__, metrics
 from .api import (
@@ -33,6 +36,7 @@ from .api import (
     web_captures,
     webhooks,
 )
+from .api.errors import error_body, validation_message
 from .config import check_production_config, get_settings
 from .core.manager import manager
 from .core.query import QueryError
@@ -119,14 +123,39 @@ for r in (auth, setup, system, dashboard, devices, events, scans, networks, excl
     app.include_router(r.router)
 
 
+# Every error answers with one envelope: {code, message, detail, details?, pos?} (see api/errors.py).
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException):
+    if isinstance(exc.detail, str):
+        body = error_body(exc.status_code, exc.detail, getattr(exc, "code", None))
+    else:
+        body = error_body(exc.status_code, f"Request failed ({exc.status_code})", getattr(exc, "code", None),
+                          detail=exc.detail)
+    return JSONResponse(status_code=exc.status_code, content=jsonable_encoder(body), headers=exc.headers)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    details = [{"loc": list(e.get("loc", ())), "msg": e.get("msg"), "type": e.get("type")} for e in errors]
+    body = error_body(422, validation_message(errors), detail=errors, details=details)
+    return JSONResponse(status_code=422, content=jsonable_encoder(body))
+
+
 @app.exception_handler(TargetError)
 async def target_error_handler(request: Request, exc: TargetError):
-    return JSONResponse(status_code=422, content={"detail": str(exc)})
+    return JSONResponse(status_code=422, content=error_body(422, str(exc), "invalid_target"))
 
 
 @app.exception_handler(QueryError)
 async def query_error_handler(request: Request, exc: QueryError):
-    return JSONResponse(status_code=400, content={"detail": str(exc), "pos": exc.pos})
+    return JSONResponse(status_code=400, content=error_body(400, str(exc), "invalid_query", pos=exc.pos))
+
+
+@app.exception_handler(Exception)
+async def unhandled_error_handler(request: Request, exc: Exception):
+    # Logged with its traceback by the server; the client gets no exception text.
+    return JSONResponse(status_code=500, content=error_body(500, "Internal server error"))
 
 
 @app.middleware("http")

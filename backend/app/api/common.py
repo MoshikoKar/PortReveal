@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Query
+from pydantic import BaseModel
 
 from ..models import Device, DevicePort, Event, Network, Scan, User
 
@@ -50,6 +51,44 @@ def paging_with(default: int, max_size: int):
 
 def paged(items: list[Any], total: int, paging: Paging) -> dict:
     return {"items": items, "total": total, "page": paging.page, "page_size": paging.page_size}
+
+
+# --- documented response envelopes (OpenAPI). Rows stay free-form objects; the envelope keys are the contract.
+Row = dict[str, Any]
+
+UNPAGED_LIST = (
+    "Small admin collection: answers a plain JSON array of every row, not the paged "
+    "`{items, total, page, page_size}` envelope. It stays an array within v1 (see docs/api/conventions.md)."
+)
+
+
+class WebHostsPage(BaseModel):
+    """`GET /api/web-hosts`: a page of hosts, keyed `hosts` instead of `items`."""
+
+    hosts: list[Row]
+    total: int
+    page: int
+    page_size: int
+
+
+class ScansStarted(BaseModel):
+    """`POST /api/scans`: one queued scan per requested network (or one for ad-hoc targets)."""
+
+    scans: list[Row]
+
+
+class CaptureStarted(BaseModel):
+    """`POST /api/web-captures`: the queued capture job."""
+
+    capture: Row
+
+
+class ExposedPorts(BaseModel):
+    """`GET /api/exposed-ports`: up to `limit` open ports; `truncated` when more exist than were returned."""
+
+    ports: list[Row]
+    total: int
+    truncated: bool
 
 
 def user_out(u: User) -> dict:

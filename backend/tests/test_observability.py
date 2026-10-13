@@ -196,9 +196,123 @@ def test_smtp_test_endpoint_hides_raw_error_from_ui_and_audit(client, monkeypatc
         raise smtplib.SMTPAuthenticationError(535, b"5.7.8 credentials invalid for svc-mailer@corp.example")
 
     monkeypatch.setattr("app.api.settings.send_email", refuse)
-    body = client.post("/api/settings/notifications/test", json={}, headers=h).json()
-    assert body == {"ok": False, "message": "Sending failed: authentication failed (check username and password)."}
+    r = client.post("/api/settings/notifications/test", json={}, headers=h)
+    assert r.status_code == 502  # a failed send is not a 200 (API13-H1)
+    message = "Sending failed: authentication failed (check username and password)."
+    assert r.json() == {"code": "smtp_send_failed", "message": message, "detail": message}
     entry = client.get("/api/audit", params={"q": "smtp_test"}).json()["items"][0]
     assert json.loads(entry["details"]) == {"ok": False, "error": "authentication failed (check username and password)",
                                 "error_type": "SMTPAuthenticationError"}
     assert "corp.example" not in json.dumps(entry)
+
+
+def test_smtp_test_endpoint_success_is_200(client, monkeypatch):
+    h = admin(client)
+    cfg = {"enabled": False, "smtp_host": "smtp.example.test", "recipients": ["ops@example.test"]}
+    assert client.put("/api/settings/notifications", json=cfg, headers=h).status_code == 200
+    monkeypatch.setattr("app.api.settings.send_email", lambda *_a, **_k: None)
+    r = client.post("/api/settings/notifications/test", json={}, headers=h)
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "message": "Test email sent to ops@example.test"}
+
+
+# --- crashes: the client sees a stable message, the log keeps the exception -----------------------------
+SECRET_DETAIL = r"cannot open C:\ProgramData\portreveal\secret.db"
+
+
+def test_scan_crash_stores_a_safe_error(client, monkeypatch, caplog):
+    from app.core import runner
+    from app.core.runner import run_scan
+    from app.models import INTERNAL_ERROR
+
+    h = admin(client)
+    net = client.post("/api/networks", json={"name": "Lab", "cidr": "10.99.0.0/24"}, headers=h).json()
+    scan_id = client.post("/api/scans", json={"scan_type": "standard", "network_ids": [net["id"]]},
+                          headers=h).json()["scans"][0]["id"]
+
+    def crash(*_a, **_k):
+        raise RuntimeError(SECRET_DETAIL)
+
+    monkeypatch.setattr(runner, "scan_targets", crash)
+    with caplog.at_level(logging.ERROR, logger="app.core.runner"):
+        assert run_scan(scan_id) == "failed"
+    scan = client.get(f"/api/scans/{scan_id}").json()
+    assert scan["error"] == INTERNAL_ERROR and "secret" not in client.get(f"/api/scans/{scan_id}").text
+    crashed = [r for r in caplog.records if r.getMessage() == f"scan {scan_id} crashed"]
+    assert crashed and SECRET_DETAIL in str(crashed[0].exc_info[1])
+
+
+def test_web_capture_crash_stores_a_safe_error(client, caplog):
+    from app.core.web_capture.runner import run_web_capture
+    from app.models import INTERNAL_ERROR
+
+    h = admin(client)
+    cap_id = client.post("/api/web-captures", json={"targets": "10.99.0.5"}, headers=h).json()["capture"]["id"]
+
+    class CrashingContext:
+        capture_id = cap_id
+        cancelled = False
+
+        def check(self):
+            raise RuntimeError(SECRET_DETAIL)
+
+    with caplog.at_level(logging.ERROR, logger="app.core.web_capture.runner"):
+        assert run_web_capture(cap_id, CrashingContext()) == "failed"
+    body = client.get(f"/api/web-captures/{cap_id}")
+    assert body.json()["error"] == INTERNAL_ERROR and "secret" not in body.text
+    assert any(r.exc_info and SECRET_DETAIL in str(r.exc_info[1]) for r in caplog.records)
+
+
+# --- webhooks: failed deliveries are warned and counted ---------------------------------------------------
+def test_webhook_failures_are_warned_and_counted(db, monkeypatch, caplog):
+    import httpx
+
+    from app.core import webhooks
+    from app.models import Event, WebhookEndpoint
+
+    db.add_all([
+        WebhookEndpoint(name="down", url="https://siem.example.test/hook?token=s3cr3t", enabled=True),
+        WebhookEndpoint(name="error", url="https://error.example.test/hook", enabled=True),
+        WebhookEndpoint(name="ok", url="https://ok.example.test/hook", enabled=True),
+    ])
+    event = Event(event_type="port_opened", severity="medium", ip="192.0.2.5", port=22, protocol="tcp",
+                  message="port opened")
+    db.add(event)
+    db.flush()
+
+    def post(url, **_k):
+        if "siem" in url:
+            raise httpx.ConnectError("connection refused to siem.example.test?token=s3cr3t")
+        return httpx.Response(503 if "error" in url else 204)
+
+    monkeypatch.setattr(webhooks.httpx, "post", post)
+    metrics.reset()
+    with caplog.at_level(logging.WARNING, logger="app.core.webhooks"):
+        webhooks.deliver_event(db, event)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert any("siem.example.test" in w and "ConnectError" in w for w in warnings)
+    assert any("error.example.test" in w and "HTTP 503" in w for w in warnings)
+    assert all("s3cr3t" not in w and "/hook" not in w for w in warnings)
+    text = metrics.render(db)
+    for outcome in ("ok", "http_error", "network_error"):
+        assert f'nf_webhook_deliveries_total{{outcome="{outcome}"}} 1' in text
+
+
+# --- login lockout: logged, audited and counted -------------------------------------------------------------
+def test_login_lockout_is_logged_audited_and_counted(client, caplog):
+    h = admin(client)
+    client.post("/api/auth/logout", headers=h)
+    for _ in range(10):
+        client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
+    metrics.reset()
+    with caplog.at_level(logging.WARNING, logger="app.api.auth"):
+        r = client.post("/api/auth/login", json={"username": "admin", "password": "correct-horse-1"})
+    assert r.status_code == 429 and r.json()["code"] == "rate_limited"
+    warnings = [rec.getMessage() for rec in caplog.records if rec.name == "app.api.auth"]
+    assert warnings == ["login refused for 'admin' from testclient: too many failed attempts"]
+    limiter.reset()
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "correct-horse-1"}).status_code == 200
+    entry = client.get("/api/audit", params={"q": "login_rate_limited"}).json()["items"][0]
+    assert entry["action"] == "auth.login_rate_limited" and entry["username"] == "admin"
+    assert "nf_login_rate_limited_total 1" in client.get("/api/metrics").text

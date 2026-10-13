@@ -10,7 +10,7 @@ from ..core.audit import audit
 from ..db import get_db
 from ..models import Exclusion, User
 from ..netutils import AddressSet, TargetError, split_specs
-from .common import FULL_REPLACE
+from .common import FULL_REPLACE, UNPAGED_LIST, Row
 
 router = APIRouter(prefix="/api/exclusions", tags=["exclusions"])
 
@@ -49,7 +49,7 @@ def exclusion_out(e: Exclusion) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_exclusions(db: Session = Depends(get_db), user: User = Depends(current_user)):
     return [exclusion_out(e) for e in db.scalars(select(Exclusion).order_by(Exclusion.id)).all()]
 

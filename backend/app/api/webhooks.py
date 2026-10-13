@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..auth.deps import current_user, require_admin
+from ..auth.deps import require_admin
 from ..db import get_db, utcnow
 from ..models import EVENT_TYPES, User, WebhookEndpoint
 from ..security import encrypt_secret
+from .common import UNPAGED_LIST, Row
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
@@ -30,7 +31,7 @@ def _out(h: WebhookEndpoint) -> dict:
     }
 
 
-@router.get("")
+@router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_webhooks(db: Session = Depends(get_db), user: User = Depends(require_admin)):
     return [_out(h) for h in db.scalars(select(WebhookEndpoint).order_by(WebhookEndpoint.id))]
 

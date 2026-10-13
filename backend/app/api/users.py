@@ -11,7 +11,7 @@ from ..core.audit import audit
 from ..db import get_db
 from ..models import ROLE_ADMIN, User, UserSession
 from ..security import hash_password
-from .common import user_out
+from .common import UNPAGED_LIST, Row, user_out
 from .setup import MIN_PASSWORD, USERNAME_RE
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -46,7 +46,7 @@ def _active_local_admins(db: Session, excluding: int | None = None) -> int:
     return db.scalar(q) or 0
 
 
-@router.get("")
+@router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_users(db: Session = Depends(get_db), user: User = Depends(require_admin)):
     return [user_out(u) for u in db.scalars(select(User).order_by(User.username)).all()]
 

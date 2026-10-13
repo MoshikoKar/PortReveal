@@ -61,7 +61,8 @@ def test_search_hosts_and_services(seeded):
 def test_query_error_reports_position(seeded):
     r = seeded.get("/api/search", params={"q": "port:22 nosuch:1"})
     assert r.status_code == 400
-    assert r.json() == {"detail": "unknown field 'nosuch'", "pos": 8}
+    assert r.json() == {"code": "invalid_query", "message": "unknown field 'nosuch'",
+                        "detail": "unknown field 'nosuch'", "pos": 8}
     r = seeded.get("/api/search/count", params={"q": 'title:"open'})
     assert r.status_code == 400 and isinstance(r.json()["pos"], int)
     assert seeded.get("/api/search/facets", params={"facets": "nosuch"}).status_code == 400

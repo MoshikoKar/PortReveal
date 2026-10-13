@@ -5,17 +5,24 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import metrics
 from ..db import session_scope, utcnow
 from ..models import Event, WebhookEndpoint
 from ..security import decrypt_secret
 
 log = logging.getLogger(__name__)
+
+
+def _host(url: str) -> str:
+    try:
+        return httpx.URL(url).host or "?"
+    except Exception:
+        return "?"
 
 
 def _sign(secret: str, body: bytes) -> str:
@@ -47,16 +54,23 @@ def deliver_event(db: Session, event: Event) -> None:
         secret = decrypt_secret(hook.secret_enc) if hook.secret_enc else ""
         if secret:
             headers["X-NF-Signature"] = _sign(secret, body)
+        # Logs name the hook and host only: the URL path or query may carry a token.
         try:
             r = httpx.post(hook.url, content=body, headers=headers, timeout=8.0)
             if r.status_code >= 400:
                 hook.last_error = f"HTTP {r.status_code}"
+                metrics.observe_webhook_delivery("http_error")
+                log.warning("webhook %s (%s) answered HTTP %s for event %s",
+                            hook.id, _host(hook.url), r.status_code, event.id)
             else:
                 hook.last_success_at = utcnow()
                 hook.last_error = None
+                metrics.observe_webhook_delivery("ok")
         except Exception as exc:
             hook.last_error = str(exc)[:500]
-            log.debug("webhook %s failed: %s", hook.id, exc)
+            metrics.observe_webhook_delivery("network_error")
+            log.warning("webhook %s (%s) delivery failed for event %s: %s",
+                        hook.id, _host(hook.url), event.id, type(exc).__name__)
 
 
 def deliver_event_ids(event_ids: list[int]) -> None:

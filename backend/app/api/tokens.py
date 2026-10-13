@@ -13,6 +13,7 @@ from ..core.audit import audit
 from ..db import get_db, utcnow
 from ..models import ApiToken, User
 from ..security import hash_token, new_token
+from .common import UNPAGED_LIST, Row
 
 router = APIRouter(prefix="/api/tokens", tags=["tokens"])
 
@@ -39,7 +40,7 @@ def _out(t: ApiToken) -> dict:
             "last_used_at": t.last_used_at, "expires_at": t.expires_at, "revoked": t.revoked}
 
 
-@router.get("")
+@router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_tokens(db: Session = Depends(get_db), user: User = Depends(session_user)):
     rows = db.scalars(select(ApiToken).where(ApiToken.user_id == user.id).order_by(ApiToken.id.desc())).all()
     return [_out(t) for t in rows]

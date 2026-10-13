@@ -120,3 +120,91 @@ def test_web_capture_settings_live_under_settings_router(client):
     r = client.put("/api/settings/web-capture", json=cfg, headers=csrf(client))
     assert r.status_code == 200 and r.json()["max_addresses"] == 64
     assert client.get("/api/settings/web-capture").json()["max_addresses"] == 64
+
+
+# --- error envelope (API13-H3) -------------------------------------------------------------------------------
+def test_errors_share_one_envelope_with_a_machine_readable_code(client):
+    r = client.get("/api/scans/99999")
+    assert r.status_code == 404
+    assert r.json() == {"code": "not_found", "message": "Scan not found", "detail": "Scan not found"}
+
+    r = client.get("/api/definitely/not/a/route")
+    assert r.status_code == 404 and r.json()["code"] == "not_found"
+
+    r = client.post("/api/networks", json={"name": "Office", "cidr": "10.10.0.0/24"})  # no CSRF header
+    assert r.status_code == 403 and r.json()["code"] == "forbidden" and isinstance(r.json()["message"], str)
+
+    r = client.post("/api/networks", json={"name": "", "cidr": "10.10.0.0/24"}, headers=csrf(client))
+    body = r.json()
+    assert r.status_code == 422 and body["code"] == "validation_error"
+    assert body["message"].startswith("name: ")
+    assert isinstance(body["detail"], list) and body["detail"][0]["loc"] == ["body", "name"]  # legacy shape kept
+    assert body["details"][0].keys() == {"loc", "msg", "type"}
+
+    r = client.post("/api/scans", json={"scan_type": "standard", "targets": "10.0.0.1; reboot"}, headers=csrf(client))
+    assert r.status_code == 422 and r.json()["code"] in ("invalid_target", "validation_error")
+
+    r = client.get("/api/search", params={"q": "nosuch:1"})
+    assert r.status_code == 400 and r.json()["code"] == "invalid_query" and r.json()["pos"] == 0
+
+
+def test_api_error_carries_a_specific_code_and_headers():
+    from app.api.errors import ApiError, code_for
+
+    exc = ApiError(502, "Sending failed", "smtp_send_failed", headers={"Retry-After": "5"})
+    assert (exc.status_code, exc.detail, exc.code, exc.headers) == (502, "Sending failed", "smtp_send_failed",
+                                                                    {"Retry-After": "5"})
+    assert ApiError(409, "x").code == "conflict"
+    assert code_for(418) == "client_error" and code_for(599) == "server_error"
+
+
+# --- cancel semantics (API13-H2) -----------------------------------------------------------------------------
+def test_scan_cancel_failure_is_409_not_200(client, monkeypatch):
+    from app.api import scans as scans_api
+
+    net = client.post("/api/networks", json={"name": "Lab", "cidr": "10.99.0.0/24"}, headers=csrf(client)).json()
+    scan_id = client.post("/api/scans", json={"scan_type": "standard", "network_ids": [net["id"]]},
+                          headers=csrf(client)).json()["scans"][0]["id"]
+
+    monkeypatch.setattr(scans_api.manager, "cancel", lambda _id: False)
+    r = client.post(f"/api/scans/{scan_id}/cancel", headers=csrf(client))
+    assert r.status_code == 409 and r.json()["code"] == "conflict"
+    assert client.get(f"/api/scans/{scan_id}").json()["status"] == "queued"
+    assert not client.get("/api/audit", params={"q": "scan.cancel"}).json()["items"]
+
+    monkeypatch.undo()
+    r = client.post(f"/api/scans/{scan_id}/cancel", headers=csrf(client))
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert client.get(f"/api/scans/{scan_id}").json()["status"] == "cancelled"
+    r = client.post(f"/api/scans/{scan_id}/cancel", headers=csrf(client))
+    assert r.status_code == 409 and r.json()["message"] == "Scan is already cancelled"
+
+
+# --- list contracts in OpenAPI (API13-H4) ----------------------------------------------------------------------
+def test_openapi_documents_unpaged_admin_lists_and_custom_envelopes(client):
+    paths = client.get("/api/openapi.json").json()["paths"]
+    for path in ("/api/users", "/api/networks", "/api/exclusions", "/api/tokens", "/api/webhooks",
+                 "/api/saved-searches"):
+        get = paths[path]["get"]
+        assert "plain JSON array" in get["description"], path
+        assert get["responses"]["200"]["content"]["application/json"]["schema"]["type"] == "array", path
+
+    def ref(path, method):
+        return paths[path][method]["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+
+    assert ref("/api/web-hosts", "get").endswith("/WebHostsPage")
+    assert ref("/api/scans", "post").endswith("/ScansStarted")
+    assert ref("/api/web-captures", "post").endswith("/CaptureStarted")
+    assert ref("/api/exposed-ports", "get").endswith("/ExposedPorts")
+
+
+def test_documented_envelopes_match_the_bodies(scanned):
+    client, _ = scanned
+    assert isinstance(client.get("/api/networks").json(), list)
+    ports = client.get("/api/exposed-ports", params={"limit": 1}).json()
+    assert ports.keys() == {"ports", "total", "truncated"} and len(ports["ports"]) <= 1
+    started = client.post("/api/scans", json={"scan_type": "discovery", "targets": "10.99.0.7"},
+                          headers=csrf(client)).json()
+    assert started.keys() == {"scans"} and started["scans"][0]["targets"]
+    capture = client.post("/api/web-captures", json={"targets": "10.99.0.5"}, headers=csrf(client)).json()
+    assert capture.keys() == {"capture"} and capture["capture"]["id"]

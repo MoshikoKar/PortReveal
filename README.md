@@ -455,8 +455,9 @@ therefore a single point of failure, mitigated by:
 
 **Metrics.** `GET /api/metrics` returns Prometheus text format: API requests and latency
 by method, route template (`/api/devices/{uuid}`) and status, scans finished by type and
-status, scan duration, scan and web-capture queue depth, devices by status, and failed
-enrichment probes (TLS, SSH, screenshot hash, OCR). Counters reset when the process
+status, scan duration, scan and web-capture queue depth, devices by status, failed
+enrichment probes (TLS, SSH, screenshot hash, OCR), webhook deliveries by outcome, and
+login attempts refused by the failed-login lockout. Counters reset when the process
 restarts. It requires authentication, so scrape it with a read-only API token
 (Settings → API tokens):
 

@@ -1,6 +1,6 @@
 """In-process counters, exported in Prometheus text format by GET /api/metrics.
 
-Counters (HTTP requests, finished scans) live in this process and reset on restart, as
+Counters (HTTP requests, finished scans, webhook deliveries, login lockouts) live in this process and reset on restart, as
 Prometheus counters may. Gauges (queue depth, devices by status) are read from the database at
 scrape time. No client library: the exposition format is a few lines of text.
 """
@@ -33,6 +33,8 @@ _http_seconds: dict[tuple[str, str], list[float]] = {}  # (method, route templat
 _scans: Counter[tuple[str, str]] = Counter()  # (scan type, final status)
 _scan_seconds: dict[str, list[float]] = {}  # scan type -> [sum, count]
 _enrich_failures: Counter[str] = Counter()  # probe (tls, ssh, image_hash, ocr)
+_webhook_deliveries: Counter[str] = Counter()  # outcome (ok, http_error, network_error)
+_login_rate_limited = 0  # login attempts refused with 429
 
 
 def observe_request(method: str, route: str, status: int, seconds: float) -> None:
@@ -59,14 +61,30 @@ def observe_enrich_failure(probe: str) -> None:
         _enrich_failures[probe] += 1
 
 
+def observe_webhook_delivery(outcome: str) -> None:
+    """Count one outbound webhook POST: ``ok``, ``http_error`` (4xx/5xx answer) or ``network_error``."""
+    with _lock:
+        _webhook_deliveries[outcome] += 1
+
+
+def observe_login_rate_limited() -> None:
+    """Count a login attempt refused because its IP or username is locked out."""
+    global _login_rate_limited
+    with _lock:
+        _login_rate_limited += 1
+
+
 def reset() -> None:
     """Forget all counters (tests)."""
+    global _login_rate_limited
     with _lock:
         _http_requests.clear()
         _http_seconds.clear()
         _scans.clear()
         _scan_seconds.clear()
         _enrich_failures.clear()
+        _webhook_deliveries.clear()
+        _login_rate_limited = 0
 
 
 def _labels(**labels: str) -> str:
@@ -96,6 +114,8 @@ def render(db: Session) -> str:
         scans = sorted(_scans.items())
         scan_seconds = {k: tuple(v) for k, v in sorted(_scan_seconds.items())}
         enrich_failures = sorted(_enrich_failures.items())
+        webhook_deliveries = sorted(_webhook_deliveries.items())
+        login_rate_limited = _login_rate_limited
 
     scan_queue = dict(db.execute(
         select(Scan.status, func.count()).where(Scan.status.in_((SCAN_QUEUED, SCAN_RUNNING))).group_by(Scan.status)
@@ -124,6 +144,10 @@ def render(db: Session) -> str:
                       f"nf_scan_duration_seconds_count{_labels(type=t)} {count}"]
     out.metric("nf_enrich_failures_total", "counter", "Best-effort enrichment probes that failed, by probe.",
                [({"probe": p}, n) for p, n in enrich_failures])
+    out.metric("nf_webhook_deliveries_total", "counter", "Outbound webhook deliveries, by outcome.",
+               [({"outcome": o}, n) for o, n in webhook_deliveries])
+    out.metric("nf_login_rate_limited_total", "counter", "Login attempts refused by the failed-login lockout.",
+               [({}, login_rate_limited)])
     out.metric("nf_scan_queue", "gauge", "Scans waiting or running.",
                [({"state": st}, scan_queue.get(st, 0)) for st in (SCAN_QUEUED, SCAN_RUNNING)])
     out.metric("nf_web_capture_queue", "gauge", "Web capture jobs waiting or running.",

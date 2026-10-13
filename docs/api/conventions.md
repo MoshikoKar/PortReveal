@@ -49,7 +49,25 @@ authenticate again. `POST /api/tokens/{id}/revoke` does the same thing and retur
 
 **Errors.** `4xx` means the request was wrong: `400` for a malformed search query (with `pos`), `401`,
 `403`, `404`, `409` for state conflicts, `415`, `422` for validation, and `429` for rate limits. `5xx`
-means the server failed. Bodies carry `detail`, a message you can show to people.
+means the server failed, or an upstream it called did (`502` when a test email could not be sent).
+A failure is never a `200` with `"ok": false`.
+
+Every error body has the same envelope (`backend/app/api/errors.py`):
+
+```json
+{"code": "conflict", "message": "Scan is already completed", "detail": "Scan is already completed"}
+```
+
+- `code` is stable and machine-readable; branch on it, not on the message. By default it follows the
+  status (`bad_request`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `unsupported_media_type`,
+  `validation_error`, `rate_limited`, `internal_error`, `upstream_failed`, ...). Some errors are more
+  specific: `invalid_query` (search syntax, adds `pos`), `invalid_target` (scan targets),
+  `smtp_send_failed` (notification test).
+- `message` is a sentence you can show to people.
+- `detail` is the field older clients read. It equals `message`, except on `422` validation errors, where
+  it keeps FastAPI's list of errors. The same list is also in `details` as `{loc, msg, type}` objects.
+- Unhandled server errors answer `500` with `code: internal_error` and no exception text. Quote the
+  `X-Request-Id` to find the log lines.
 
 ## Actions (RPC-style endpoints)
 
@@ -84,7 +102,12 @@ Rules for actions:
 | `GET /api/web-hosts` | 50 | 500 | Returns `hosts` instead of `items`, plus `total`, `page`, `page_size` |
 
 - Small admin collections (users, networks, exclusions, tokens, webhooks, saved searches) are returned
-  as plain arrays without paging.
+  as plain arrays without paging. They stay arrays within v1; OpenAPI marks each one (`UNPAGED_LIST`
+  in `common.py`). A new collection that can grow uses the paged envelope.
+- Responses that are not lists but wrap results in a named key have a response model in OpenAPI:
+  `POST /api/scans` → `ScansStarted` (`{"scans": [...]}`), `POST /api/web-captures` → `CaptureStarted`
+  (`{"capture": {...}}`), `GET /api/web-hosts` → `WebHostsPage`, `GET /api/exposed-ports` →
+  `ExposedPorts` (`{"ports", "total", "truncated"}`).
 
 ## Correlation
 

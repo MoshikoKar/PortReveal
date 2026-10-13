@@ -8,11 +8,14 @@ export class ApiError extends Error {
   pos?: number;
   /** Id of the failed request, as logged by the backend; quote it when reporting a problem. */
   requestId?: string;
-  constructor(status: number, message: string, pos?: number, requestId?: string) {
+  /** Machine-readable error code from the backend envelope (`conflict`, `invalid_query`, ...). */
+  code?: string;
+  constructor(status: number, message: string, pos?: number, requestId?: string, code?: string) {
     super(message);
     this.status = status;
     this.pos = pos;
     this.requestId = requestId;
+    this.code = code;
   }
 }
 
@@ -44,7 +47,9 @@ export function query(params?: Params): string {
   return s ? `?${s}` : '';
 }
 
+/** Human message of an error body: the envelope's `message`, else FastAPI's `detail` (older servers, proxies). */
 export function errorMessage(body: any, status: number): string {
+  if (typeof body?.message === 'string' && body.message) return body.message;
   const detail = body?.detail;
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail)) {
@@ -64,7 +69,8 @@ export function responseError(res: Response, body: any, sentId: string): ApiErro
   const requestId = res.headers.get(REQUEST_ID_HEADER) || sentId;
   let message = errorMessage(body, res.status);
   if (res.status >= 500) message += ` (reference ${requestId})`;
-  return new ApiError(res.status, message, typeof body?.pos === 'number' ? body.pos : undefined, requestId);
+  const pos = typeof body?.pos === 'number' ? body.pos : undefined;
+  return new ApiError(res.status, message, pos, requestId, typeof body?.code === 'string' ? body.code : undefined);
 }
 
 async function readJson(res: Response): Promise<any> {

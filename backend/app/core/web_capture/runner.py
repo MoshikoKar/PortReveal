@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from ...config import get_settings
 from ...db import session_scope, utcnow
 from ...models import (
+    INTERNAL_ERROR,
     SCREENSHOT_CAPTURED,
     SCREENSHOT_FAILED,
     SCREENSHOT_NOT_REQUESTED,
@@ -544,14 +545,14 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             notes=("\n".join(notes) + "\nCancelled by user." if notes else "Cancelled by user."),
         )
         return WEB_CAPTURE_CANCELLED
-    except Exception as exc:
+    except Exception:
         log.exception("web capture %s crashed", capture_id)
         _update(
             capture_id,
             status=WEB_CAPTURE_FAILED,
             finished_at=utcnow(),
             stage=None,
-            error=f"internal error: {exc}",
+            error=INTERNAL_ERROR,
             notes="\n".join(notes) or None,
         )
         return WEB_CAPTURE_FAILED

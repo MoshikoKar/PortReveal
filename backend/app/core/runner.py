@@ -18,6 +18,7 @@ from .. import metrics
 from ..config import get_settings
 from ..db import session_scope, utcnow
 from ..models import (
+    INTERNAL_ERROR,
     SCAN_CANCELLED,
     SCAN_COMPLETED,
     SCAN_DISCOVERY,
@@ -159,9 +160,9 @@ def _run_parallel(items: list[list[str]], fn, parallelism: int, ctx: ScanContext
                         log.warning("scan %s: %s", ctx.scan_id, exc)
                         out.failures.append(str(exc))
                         out.failed_items.append(item)
-                    except Exception as exc:  # unexpected - keep the scan going, mark partial
+                    except Exception:  # unexpected - keep the scan going, mark partial
                         log.exception("scan %s: stage task crashed", ctx.scan_id)
-                        out.failures.append(f"internal error: {exc}")
+                        out.failures.append(INTERNAL_ERROR)
                         out.failed_items.append(item)
                     on_done(out)
         except ScanCancelled:
@@ -379,8 +380,8 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
         _update(scan_id, status=SCAN_FAILED, finished_at=utcnow(), stage=None, error=str(exc),
                 notes="Scan failed. The previous known state was preserved.")
         return SCAN_FAILED
-    except Exception as exc:
+    except Exception:
         log.exception("scan %s crashed", scan_id)
-        _update(scan_id, status=SCAN_FAILED, finished_at=utcnow(), stage=None, error=f"internal error: {exc}",
+        _update(scan_id, status=SCAN_FAILED, finished_at=utcnow(), stage=None, error=INTERNAL_ERROR,
                 notes="Scan failed. The previous known state was preserved.")
         return SCAN_FAILED

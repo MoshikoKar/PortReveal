@@ -8,7 +8,7 @@ import re
 import time
 from typing import Literal, TypeVar
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
@@ -87,6 +87,10 @@ class PresenceSettings(BaseModel):
 
 class ScanSettings(BaseModel):
     """Scan profile tuning. Deliberately small: no raw nmap arguments."""
+
+    # Unknown keys (an "nmap_args" smuggled into PUT /api/settings/scan) are a 422, never stored.
+    # Rows stored by older versions still load: _load_section drops fields the model no longer has.
+    model_config = ConfigDict(extra="forbid")
 
     top_ports: int = Field(3000, ge=100, le=10000)
     timing: Literal["polite", "normal", "fast"] = "normal"

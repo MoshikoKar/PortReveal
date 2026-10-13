@@ -27,7 +27,7 @@ from ..models import (
     Snapshot,
     User,
 )
-from .common import event_out, network_out
+from .common import ExposedPorts, event_out, network_out
 from .system import scan_summary
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -109,7 +109,7 @@ def exposed_ports(db: Session, network_id: int | None = None, limit: int | None 
     return sorted(by_port.values(), key=lambda r: (-r["count"], r["protocol"], r["port"]))
 
 
-@router.get("/exposed-ports")
+@router.get("/exposed-ports", response_model=ExposedPorts)
 def list_exposed_ports(network_id: int | None = Query(None),
                        limit: int = Query(EXPOSED_PORTS_DEFAULT_LIMIT, ge=1, le=EXPOSED_PORTS_MAX_LIMIT),
                        db: Session = Depends(get_db), user: User = Depends(current_user)):

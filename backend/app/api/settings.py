@@ -27,6 +27,7 @@ from ..settings_store import (
     get_section,
     put_section,
 )
+from .errors import ApiError
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 log = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ def test_notifications(body: TestEmailIn, request: Request, db: Session = Depend
         audit(db, user.username, "settings.smtp_test", cfg.smtp_host,
               {"ok": False, "error": reason, "error_type": type(exc).__name__}, _ip(request))
         db.commit()
-        return {"ok": False, "message": f"Sending failed: {reason}."}
+        raise ApiError(502, f"Sending failed: {reason}.", "smtp_send_failed") from exc
     audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": True}, _ip(request))
     db.commit()
     return {"ok": True, "message": f"Test email sent to {', '.join(cfg.recipients)}"}

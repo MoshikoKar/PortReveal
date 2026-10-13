@@ -97,6 +97,14 @@ describe('errors', () => {
     expect(err.message).toBe('A user with this name already exists');
   });
 
+  it('read the error envelope: message and machine-readable code', async () => {
+    respond(409, { code: 'conflict', message: 'Scan is already completed', detail: 'Scan is already completed' });
+    const err = await failure(post('/scans/1/cancel'));
+    expect(err.status).toBe(409);
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe('Scan is already completed');
+  });
+
   it('carry the search syntax error position', async () => {
     respond(400, { detail: 'unknown field', pos: 4 });
     const err = await failure(get('/search', { q: 'nosuch:1' }));
@@ -156,6 +164,11 @@ describe('errorMessage', () => {
     expect(errorMessage(body, 422)).toBe(
       'cidr: not a network; query.page_size: Input should be less than or equal to 500; whole body invalid',
     );
+  });
+
+  it('prefers the envelope message over the legacy detail list', () => {
+    const body = { code: 'validation_error', message: 'cidr: not a network', detail: [{ loc: ['body', 'cidr'], msg: 'x' }] };
+    expect(errorMessage(body, 422)).toBe('cidr: not a network');
   });
 
   it('explains gateway errors and falls back to the status', () => {

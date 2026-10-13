@@ -12,7 +12,7 @@ from ..core.mockdata import device_visible
 from ..db import get_db
 from ..models import DEVICE_ACTIVE, NETWORK_ZONES, Device, Network, User
 from ..netutils import TargetError, validate_network_cidr
-from .common import FULL_REPLACE, network_out
+from .common import FULL_REPLACE, UNPAGED_LIST, Row, network_out
 
 router = APIRouter(prefix="/api/networks", tags=["networks"])
 
@@ -56,7 +56,7 @@ def _counts(db: Session):
     return total, active
 
 
-@router.get("")
+@router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_networks(db: Session = Depends(get_db), user: User = Depends(current_user)):
     total, active = _counts(db)
     return [network_out(n, total.get(n.id, 0), active.get(n.id, 0))

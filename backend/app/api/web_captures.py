@@ -40,7 +40,7 @@ from ..models import (
 from ..netutils import AddressSet, TargetError
 from ..scanner import scanner_status
 from ..settings_store import WebCaptureSettings, get_section
-from .common import Paging, paged
+from .common import CaptureStarted, Paging, WebHostsPage, paged
 
 router = APIRouter(tags=["web-captures"])
 log = logging.getLogger(__name__)
@@ -260,7 +260,7 @@ def get_web_capture(capture_id: int, db: Session = Depends(get_db), user: User =
     return web_capture_out(c, include_pages=True)
 
 
-@router.post("/api/web-captures")
+@router.post("/api/web-captures", response_model=CaptureStarted)
 def start_web_capture(body: WebCaptureRequest, request: Request, db: Session = Depends(get_db),
                       user: User = Depends(require_admin)):
     cfg = get_section(db, WebCaptureSettings)
@@ -489,7 +489,7 @@ def live_rtsp_by_port(
     )
 
 
-@router.get("/api/web-hosts")
+@router.get("/api/web-hosts", response_model=WebHostsPage)
 def web_hosts(
     kind: Literal["web", "remote"] = Query(
         "web",

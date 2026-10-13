@@ -13,7 +13,7 @@ from ..db import get_db
 from ..models import SCAN_ACTIVE_STATES, SCAN_FULL, SCAN_QUEUED, SCAN_RUNNING, SCAN_TYPES, Device, Event, Network, Scan, User
 from ..netutils import MAX_SCAN_ADDRESSES, AddressSet, TargetError
 from ..scanner import scanner_status
-from .common import Paging, event_out, paged, scan_out
+from .common import Paging, ScansStarted, event_out, paged, scan_out
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
@@ -80,7 +80,7 @@ def scan_events(scan_id: int, paging: Paging = Depends(), db: Session = Depends(
     return paged([event_out(e) for e in rows], total, paging)
 
 
-@router.post("")
+@router.post("", response_model=ScansStarted)
 def start_scan(body: ScanRequest, request: Request, db: Session = Depends(get_db),
                user: User = Depends(require_admin)):
     if body.scan_type not in SCAN_TYPES:
@@ -140,7 +140,8 @@ def cancel_scan(scan_id: int, request: Request, db: Session = Depends(get_db), u
     if s.status not in SCAN_ACTIVE_STATES:
         raise HTTPException(409, f"Scan is already {s.status}")
     db.rollback()  # end the read transaction; the manager updates the row in its own session
-    ok = manager.cancel(scan_id)
+    if not manager.cancel(scan_id):
+        raise HTTPException(409, "Could not cancel scan")
     audit(db, user.username, "scan.cancel", f"scan {scan_id}", None, client_ip(request))
     db.commit()
-    return {"ok": ok}
+    return {"ok": True}

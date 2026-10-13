@@ -12,7 +12,7 @@ from ..core.query.search import prepare
 from ..core.watches import evaluate
 from ..db import get_db
 from ..models import ROLE_ADMIN, SEARCH_KIND_POLICY, SEARCH_KIND_WATCH, SavedSearch, SavedSearchHit, User
-from .common import FULL_REPLACE
+from .common import FULL_REPLACE, UNPAGED_LIST, Row
 
 router = APIRouter(prefix="/api/saved-searches", tags=["saved-searches"])
 
@@ -64,7 +64,7 @@ def _get(db: Session, search_id: int, user: User, *, edit: bool = False) -> Save
     return s
 
 
-@router.get("")
+@router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_saved_searches(db: Session = Depends(get_db), user: User = Depends(current_user)):
     return [_out(s, user) for s in db.scalars(select(SavedSearch).order_by(SavedSearch.name)).all()]
 

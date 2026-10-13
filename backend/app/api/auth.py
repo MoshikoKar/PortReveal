@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import metrics
 from ..auth.deps import client_ip, current_user, end_session, get_session_record, start_session
 from ..auth.ldap_auth import ldap_authenticate
 from ..auth.ratelimit import LoginRateLimiter
@@ -17,6 +20,7 @@ from ..settings_store import LdapSettings, get_section
 from .common import user_out
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+log = logging.getLogger(__name__)
 _s = get_settings()
 limiter = LoginRateLimiter(_s.login_max_failures, _s.login_window_minutes * 60)
 _DUMMY_HASH = hash_password("timing-equalizer")
@@ -38,6 +42,10 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     username = body.username.strip()
     keys = (f"ip:{ip}", f"user:{username.lower()}")
     if limiter.blocked(*keys):
+        metrics.observe_login_rate_limited()
+        log.warning("login refused for %r from %s: too many failed attempts", username, ip)
+        audit(db, username, "auth.login_rate_limited", None, None, ip)
+        db.commit()
         raise HTTPException(429, "Too many failed login attempts. Try again later.")
 
     user = db.scalar(select(User).where(func.lower(User.username) == username.lower()))
