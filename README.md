@@ -571,5 +571,26 @@ then signs in and opens the dashboard and devices list in headless Chromium; nee
 
 ## License
 
-See [LICENSE](LICENSE). Network Finder is proprietary software intended only for
-authorized internal use; no open-source license is granted.
+See [LICENSE](LICENSE). Network Finder is **free for non-commercial internal use**
+(and personal non-commercial use). It is **not** open source: commercial use,
+redistribution, or re-publishing as open source requires a separate written
+agreement. Publication of this repo does not change those terms.
+
+### Third-party tools (separate licenses)
+
+This app orchestrates tools you install yourself (or that ship in the Docker
+image). Those tools keep their own licenses — Network Finder’s grant does **not**
+cover them. Comply with each vendor’s terms, especially for commercial deployments:
+
+| Tool | Used for | License (verify upstream) |
+|---|---|---|
+| [Nmap](https://nmap.org/) | Network / port scanning | [Nmap Public Source License (NPSL)](https://nmap.org/npsl/) |
+| [Npc](https://npcap.com/) (Windows) | Packet capture for privileged scans | Nmap/Npc terms; commercial use may need an OEM license |
+| [PostgreSQL](https://www.postgresql.org/) | Production database | PostgreSQL License |
+| [Playwright](https://playwright.dev/) / Chromium | HTTP(S) web-capture screenshots | Apache-2.0 / Chromium BSD-related |
+| [FFmpeg](https://ffmpeg.org/) | RTSP / VNC stills and live MJPEG | LGPL/GPL (depends on build) |
+| [FreeRDP](https://www.freerdp.com/) | RDP stills | Apache-2.0 |
+| Node.js / Python packages | App runtime | See each package’s license metadata |
+
+Development can run with `SCANNER_MODE=mock` (no Nmap). Production scanning needs
+Nmap (and on Windows, usually Npcap). Web Capture tools are optional.

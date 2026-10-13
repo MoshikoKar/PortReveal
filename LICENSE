@@ -1,20 +1,60 @@
-Network Finder Internal-Use Notice
+Network Finder License
 
-This repository is proprietary software. No open-source license is granted.
+Copyright (c) Network Finder contributors
 
-Use, copying, modification, distribution, sublicensing, or sale of this software
-or its documentation is prohibited except where the repository owner has given
-written authorization or a separate written agreement permits it.
+Summary
+-------
+Network Finder is free for non-commercial internal use. It is not open source.
+Commercial use requires a separate written agreement with the copyright holder.
 
-Authorized internal users may install, run, and modify the software solely for
-their organization's internal operations and only within the scope of their
-authorization. They may not redistribute it or make it available to third
-parties.
+1. Grant (non-commercial internal use)
+
+You may install, run, copy, and modify Network Finder solely for non-commercial
+internal operations of your organization (or for personal non-commercial use),
+including evaluating it and operating it on networks you are authorized to manage.
+
+2. Restrictions
+
+Without prior written permission from the copyright holder, you may not:
+
+- Use Network Finder for commercial purposes (including selling, renting,
+  hosting as a paid service, bundling into a commercial product, or using it
+  as a material part of a revenue-generating offering)
+- Redistribute Network Finder, modified or unmodified, to third parties
+- Sublicense, sell, or publicly re-publish the source as if it were open source
+- Remove or alter this license notice
+
+3. No open-source license
+
+No OSI-approved or similar open-source license is granted. Publication of this
+repository (for example on GitHub) does not change these terms.
+
+4. Third-party software
+
+Network Finder depends on separate tools and libraries that remain under their
+own licenses. Installing or using those components does not grant you rights
+beyond each component’s license. Notable runtime tools include:
+
+- Nmap — Nmap Public Source License (NPSL); see https://nmap.org/npsl/
+- Npcap (Windows packet capture) — Nmap/Npc license; commercial use may
+  require a separate Npcap OEM/commercial license from Nmap Software LLC
+- PostgreSQL — PostgreSQL License
+- Playwright / Chromium — Apache-2.0 and Chromium/BSD-related terms
+- FFmpeg — LGPL/GPL (depending on build)
+- FreeRDP — Apache-2.0
+- Other Node.js and Python packages — see each package’s license metadata
+
+You are responsible for complying with those third-party licenses, including
+any commercial restrictions they impose (especially Nmap and Npcap).
+
+5. Disclaimer
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
-PURPOSE, AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE
-COPYRIGHT HOLDERS ARE NOT LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY
-ARISING FROM THE SOFTWARE OR ITS USE.
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT
+PERMITTED BY LAW, THE COPYRIGHT HOLDERS ARE NOT LIABLE FOR ANY CLAIM, DAMAGES,
+OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
 
-Third-party packages and assets remain subject to their own license terms.
+6. Contact
+
+For commercial licensing or redistribution rights, contact the repository owner.
