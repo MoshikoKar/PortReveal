@@ -124,6 +124,9 @@ export function useInFlight() {
   return { pending, track };
 }
 
+/** Hosts per /web-hosts request. The Web and Remote pages filter on the client, so pages are large. */
+export const WEB_HOSTS_PAGE_SIZE = 500;
+
 /** Fetch a GET endpoint, optionally polling. Re-fetches when path/params change. */
 export function useApi<T>(path: string | null, params?: Record<string, any>, pollMs?: number) {
   const [data, setData] = useState<T | null>(null);

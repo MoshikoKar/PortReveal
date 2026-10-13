@@ -10,6 +10,7 @@ from ..core.audit import audit
 from ..db import get_db
 from ..models import Exclusion, User
 from ..netutils import AddressSet, TargetError, split_specs
+from .common import FULL_REPLACE
 
 router = APIRouter(prefix="/api/exclusions", tags=["exclusions"])
 
@@ -53,7 +54,7 @@ def list_exclusions(db: Session = Depends(get_db), user: User = Depends(current_
     return [exclusion_out(e) for e in db.scalars(select(Exclusion).order_by(Exclusion.id)).all()]
 
 
-@router.post("")
+@router.post("", status_code=201)
 def create_exclusion(body: ExclusionIn, request: Request, db: Session = Depends(get_db),
                      user: User = Depends(require_admin)):
     e = Exclusion(value=body.value, description=body.description, enabled=body.enabled)
@@ -64,7 +65,7 @@ def create_exclusion(body: ExclusionIn, request: Request, db: Session = Depends(
     return exclusion_out(e)
 
 
-@router.put("/{exclusion_id}")
+@router.put("/{exclusion_id}", description=FULL_REPLACE)
 def update_exclusion(exclusion_id: int, body: ExclusionIn, request: Request, db: Session = Depends(get_db),
                      user: User = Depends(require_admin)):
     e = db.get(Exclusion, exclusion_id)
@@ -78,7 +79,7 @@ def update_exclusion(exclusion_id: int, body: ExclusionIn, request: Request, db:
     return exclusion_out(e)
 
 
-@router.delete("/{exclusion_id}")
+@router.delete("/{exclusion_id}", status_code=204)
 def delete_exclusion(exclusion_id: int, request: Request, db: Session = Depends(get_db),
                      user: User = Depends(require_admin)):
     e = db.get(Exclusion, exclusion_id)
@@ -87,4 +88,3 @@ def delete_exclusion(exclusion_id: int, request: Request, db: Session = Depends(
     audit(db, user.username, "exclusion.delete", e.value, None, client_ip(request))
     db.delete(e)
     db.commit()
-    return {"ok": True}

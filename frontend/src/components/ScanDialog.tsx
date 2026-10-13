@@ -3,6 +3,7 @@ import { post } from '../api';
 import { useApp } from '../context';
 import type { Network, Scan, ScanType } from '../types';
 import { useApi } from '../util';
+import { scanReady, scanRequestBody, scanStartHint, type ScanForm } from './scanRequest';
 import { confirmDiscard, ErrorBox, Loading, Modal } from './ui';
 
 export interface ScanPreset {
@@ -31,17 +32,13 @@ export function ScanDialog({ preset, onClose, onStarted }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unavailable = system?.scanner.mode === 'unavailable';
+  const form: ScanForm = { type, mode, selected, targets, deviceUuids: preset?.device_uuids, criteria: preset?.criteria };
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      const body: Record<string, unknown> = { scan_type: type };
-      if (mode === 'devices') body.device_uuids = preset?.device_uuids;
-      else if (mode === 'networks') body.network_ids = selected;
-      else body.targets = targets;
-      if (preset?.criteria) body.criteria = preset.criteria;
-      const res = await post<{ scans: Scan[] }>('/scans', body);
+      const res = await post<{ scans: Scan[] }>('/scans', scanRequestBody(form));
       onStarted?.(res.scans);
       onClose();
     } catch (e: any) {
@@ -51,13 +48,9 @@ export function ScanDialog({ preset, onClose, onStarted }: {
     }
   };
 
-  const ready = mode === 'devices' ? !!preset?.device_uuids?.length : mode === 'networks' ? selected.length > 0 : targets.trim().length > 0;
+  const ready = scanReady(form);
   const dirty = selected.length > 0 || targets !== '';
-  const startHint = !ready
-    ? mode === 'networks' ? 'Select at least one network' : mode === 'targets' ? 'Enter targets' : 'Select at least one device'
-    : unavailable ? system?.scanner.message ?? 'Scanner unavailable'
-    : busy ? 'Starting scan…'
-    : undefined;
+  const startHint = scanStartHint(form, { unavailable, unavailableMessage: system?.scanner.message, busy });
   const requestClose = () => confirmDiscard(dirty) && onClose();
 
   return (

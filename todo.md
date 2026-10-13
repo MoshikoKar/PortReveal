@@ -131,209 +131,209 @@ Status: Open
 
 ### API13-M1: Unbounded `GET /api/web-hosts`
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add `Paging` (or an explicit limit) to `web_hosts` in `backend/app/api/web_captures.py`
-- [ ] Return a paginated envelope (`paged(...)` or `{hosts, total, page, page_size}`)
-- [ ] Update the Web Hosts / Remote Hosts frontend fetch to pass page params
+- [x] Add `Paging` (or an explicit limit) to `web_hosts` in `backend/app/api/web_captures.py`
+- [x] Return a paginated envelope (`paged(...)` or `{hosts, total, page, page_size}`)
+- [x] Update the Web Hosts / Remote Hosts frontend fetch to pass page params
 
 ---
 
 ### API13-M2: Search pagination diverges from shared `Paging`
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Reuse or parameterize `Paging` in `backend/app/api/common.py` so search can set `le=100`
-- [ ] Wire `GET /api/search` in `backend/app/api/search.py` to that shared helper (keep max 100 if intentional)
-- [ ] Document the search page-size ceiling next to other list endpoints
+- [x] Reuse or parameterize `Paging` in `backend/app/api/common.py` so search can set `le=100`
+- [x] Wire `GET /api/search` in `backend/app/api/search.py` to that shared helper (keep max 100 if intentional)
+- [x] Document the search page-size ceiling next to other list endpoints
 
 ---
 
 ### API13-M3: Scan detail over-embeds up to 500 events
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Stop embedding a fixed 500-event list in `GET /api/scans/{scan_id}` by default (`backend/app/api/scans.py`)
-- [ ] Add `GET /api/scans/{scan_id}/events` with `Paging`, or gate events behind an explicit query flag
-- [ ] Update the Scans UI to load events from the new contract if it relied on the embedded list
+- [x] Stop embedding a fixed 500-event list in `GET /api/scans/{scan_id}` by default (`backend/app/api/scans.py`)
+- [x] Add `GET /api/scans/{scan_id}/events` with `Paging`, or gate events behind an explicit query flag
+- [x] Update the Scans UI to load events from the new contract if it relied on the embedded list
 
 ---
 
 ### API13-M4: PUT vs PATCH update semantics inconsistent
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Document the API rule: PUT = full replace (settings/config); PATCH = partial entity update
-- [ ] Either convert partial-friendly resources to PATCH or keep PUT and document full-body requirements in OpenAPI for networks/exclusions/saved-searches/profile
+- [x] Document the API rule: PUT = full replace (settings/config); PATCH = partial entity update
+- [x] Either convert partial-friendly resources to PATCH or keep PUT and document full-body requirements in OpenAPI for networks/exclusions/saved-searches/profile
 
 ---
 
 ### API13-M5: No API versioning strategy
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Choose path (`/api/v1`) or header versioning and document it
-- [ ] Mount or alias existing routers under the chosen version scheme in `backend/app/main.py` without breaking the bundled UI
-- [ ] Note the freeze policy for breaking response changes in README or OpenAPI description
+- [x] Choose path (`/api/v1`) or header versioning and document it
+- [x] Mount or alias existing routers under the chosen version scheme in `backend/app/main.py` without breaking the bundled UI
+- [x] Note the freeze policy for breaking response changes in README or OpenAPI description
 
 ---
 
 ### API13-M6: Web-capture settings split from other `/api/settings` routes
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Move `GET/PUT /api/settings/web-capture` handlers from `backend/app/api/web_captures.py` into `backend/app/api/settings.py` (or a shared settings module)
-- [ ] Keep URL paths stable; remove duplicate absolute routes from the web-captures router
-- [ ] Verify Settings UI still loads/saves web-capture settings
+- [x] Move `GET/PUT /api/settings/web-capture` handlers from `backend/app/api/web_captures.py` into `backend/app/api/settings.py` (or a shared settings module)
+- [x] Keep URL paths stable; remove duplicate absolute routes from the web-captures router
+- [x] Verify Settings UI still loads/saves web-capture settings
 
 ---
 
 ### API13-M7: Singular `/api/host` vs plural `/api/devices`
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Document `/api/host/{ip}` as the Shodan-shaped alias in OpenAPI/README
-- [ ] Add a canonical plural (or by-ip) path such as `/api/hosts/{ip}` or `/api/devices/by-ip/{ip}` in `backend/app/api/host.py`
-- [ ] Prefer the canonical path from new frontend callers; keep the singular alias for compatibility
+- [x] Document `/api/host/{ip}` as the Shodan-shaped alias in OpenAPI/README
+- [x] Add a canonical plural (or by-ip) path such as `/api/hosts/{ip}` or `/api/devices/by-ip/{ip}` in `backend/app/api/host.py`
+- [x] Prefer the canonical path from new frontend callers; keep the singular alias for compatibility
 
 ---
 
 ### OBS13-M1: No request / correlation identifiers
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add middleware in `backend/app/main.py` that accepts or generates `X-Request-Id` and echoes it on the response
-- [ ] Attach the request id to a contextvar / log `extra` so subsequent log lines can carry it
-- [ ] Optionally send/echo the same id from `frontend/src/api.ts` fetch headers
+- [x] Add middleware in `backend/app/main.py` that accepts or generates `X-Request-Id` and echoes it on the response
+- [x] Attach the request id to a contextvar / log `extra` so subsequent log lines can carry it
+- [x] Optionally send/echo the same id from `frontend/src/api.ts` fetch headers
 
 ---
 
 ### OBS13-M2: Structured logging optional and shallow
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Prefer `LOG_FORMAT=json` in production examples (`.env.example` / `.env.production.example` notes)
-- [ ] Extend `JsonFormatter` in `backend/app/logging_setup.py` to emit an allowlisted set of extras (`request_id`, `user`, etc.)
+- [x] Prefer `LOG_FORMAT=json` in production examples (`.env.example` / `.env.production.example` notes)
+- [x] Extend `JsonFormatter` in `backend/app/logging_setup.py` to emit an allowlisted set of extras (`request_id`, `user`, etc.)
 
 ---
 
 ### OBS13-M3: HTTP metrics lack route/path labels
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Pass a low-cardinality route template from `request_timing` in `backend/app/main.py` into `observe_request`
-- [ ] Update `backend/app/metrics.py` counters/summary labels to include route (not raw URLs with IDs)
+- [x] Pass a low-cardinality route template from `request_timing` in `backend/app/main.py` into `observe_request`
+- [x] Update `backend/app/metrics.py` counters/summary labels to include route (not raw URLs with IDs)
 
 ---
 
 ### OBS13-M4: Admin SMTP/LDAP diagnostics return raw exception strings
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] In `backend/app/api/settings.py` SMTP test, return a short classified message to the client; log full detail server-side
-- [ ] Truncate/redact exception text stored in `audit(...)` details for SMTP test failures
-- [ ] In `backend/app/auth/ldap_auth.py` / LDAP test path, return classified messages instead of raw `str(exc)` to the UI
+- [x] In `backend/app/api/settings.py` SMTP test, return a short classified message to the client; log full detail server-side
+- [x] Truncate/redact exception text stored in `audit(...)` details for SMTP test failures
+- [x] In `backend/app/auth/ldap_auth.py` / LDAP test path, return classified messages instead of raw `str(exc)` to the UI
 
 ---
 
 ### OBS13-M5: No frontend error reporting or shared request id UX
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Surface response `X-Request-Id` (when present) in `frontend/src/api.ts` `ApiError` or support reference text
-- [ ] Optionally add a React error boundary that shows a reference id for uncaught UI failures
+- [x] Surface response `X-Request-Id` (when present) in `frontend/src/api.ts` `ApiError` or support reference text
+- [x] Optionally add a React error boundary that shows a reference id for uncaught UI failures
 
 ---
 
 ### OBS13-M6: Health is DB-coupled with no separate liveness probe
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add a cheap `/api/live` (process up, no DB) in `backend/app/api/system.py`, or document that `/api/health` is readiness-only
-- [ ] Update `docs/runbook/runbook.md` monitoring section to distinguish live vs ready probe roles
+- [x] Add a cheap `/api/live` (process up, no DB) in `backend/app/api/system.py`, or document that `/api/health` is readiness-only
+- [x] Update `docs/runbook/runbook.md` monitoring section to distinguish live vs ready probe roles
 
 ---
 
 ### TEST13-M1: Web-capture helper subprocess argv integrity is untested
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add unit assertions for VNC argv construction in `backend/tests/test_web_capture.py` (or a dedicated module): list tokens only, no shell operators, no credential files
-- [ ] Add the same style of argv asserts for FreeRDP (`backend/app/core/web_capture/rdp.py`) with invalid IP/port rejected upstream
-- [ ] Add the same style of argv asserts for RTSP/ffmpeg (`backend/app/core/web_capture/rtsp.py`)
+- [x] Add unit assertions for VNC argv construction in `backend/tests/test_web_capture.py` (or a dedicated module): list tokens only, no shell operators, no credential files
+- [x] Add the same style of argv asserts for FreeRDP (`backend/app/core/web_capture/rdp.py`) with invalid IP/port rejected upstream
+- [x] Add the same style of argv asserts for RTSP/ffmpeg (`backend/app/core/web_capture/rtsp.py`)
 
 ---
 
 ### TEST13-M2: No frontend unit/component tests
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add a Vitest (or project-chosen) harness under `frontend/` for unit tests
-- [ ] Cover `frontend/src/api.ts` CSRF header attachment and `errorMessage` / `ApiError` mapping
-- [ ] Wire the frontend unit script into `.github/workflows/ci.yml` (or a dedicated npm script invoked by CI)
+- [x] Add a Vitest (or project-chosen) harness under `frontend/` for unit tests
+- [x] Cover `frontend/src/api.ts` CSRF header attachment and `errorMessage` / `ApiError` mapping
+- [x] Wire the frontend unit script into `.github/workflows/ci.yml` (or a dedicated npm script invoked by CI)
 
 ---
 
 ### TEST13-M3: E2E smoke is opt-in and not run in CI
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add a CI job (or scheduled workflow) that builds the frontend, installs Chromium, and runs `pytest -m e2e`, or document an explicit non-goal if M2 unit coverage is the chosen gate
-- [ ] Keep default local `npm test` / pytest free of e2e so offline contributors are unaffected
+- [x] Add a CI job (or scheduled workflow) that builds the frontend, installs Chromium, and runs `pytest -m e2e`, or document an explicit non-goal if M2 unit coverage is the chosen gate
+- [x] Keep default local `npm test` / pytest free of e2e so offline contributors are unaffected
 
 ---
 
 ### TEST13-M4: LDAP auth coverage is narrow
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Extend `backend/tests/test_ldap_auth.py` with a successful `ldap_authenticate` path that maps to a user/role
-- [ ] Add an API login test with LDAP mocked enabled covering `/api/auth/login` success vs local-disabled routing
+- [x] Extend `backend/tests/test_ldap_auth.py` with a successful `ldap_authenticate` path that maps to a user/role
+- [x] Add an API login test with LDAP mocked enabled covering `/api/auth/login` success vs local-disabled routing
 
 ---
 
 ### TEST13-M5: Scan-command safety tests are fragmented
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Point existing builder/VPN/API injection cases at `backend/tests/test_nmap_command_integrity.py` (or expand `test_scanner.py`) with one threat-model docstring
-- [ ] Cross-link H1/H2 cases from that module so review sees one integrity entrypoint
+- [x] Point existing builder/VPN/API injection cases at `backend/tests/test_nmap_command_integrity.py` (or expand `test_scanner.py`) with one threat-model docstring
+- [x] Cross-link H1/H2 cases from that module so review sees one integrity entrypoint
 
 ---
 
@@ -341,142 +341,142 @@ Status: Open
 
 ### API13-L1: Resource creates return 200 instead of 201
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Set `status_code=201` on primary create routes (`users`, `networks`, `tokens`, `webhooks`, exclusions, saved-searches) where a new resource is created
+- [x] Set `status_code=201` on primary create routes (`users`, `networks`, `tokens`, `webhooks`, exclusions, saved-searches) where a new resource is created
 - [ ] Optionally add `Location` headers for created resource URLs
 
 ---
 
 ### API13-L2: Deletes return 200 `{ok: true}` instead of 204
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Change empty-body DELETE successes to `204 No Content` for resources that currently return only `{ok: true}`
-- [ ] Update frontend `del()` callers that expect a JSON body on those endpoints
+- [x] Change empty-body DELETE successes to `204 No Content` for resources that currently return only `{ok: true}`
+- [x] Update frontend `del()` callers that expect a JSON body on those endpoints
 
 ---
 
 ### API13-L3: Host document duplicates `ports` and `data`
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Document `data` as a deprecated Shodan alias on `GET /api/host/{ip}` in `backend/app/api/host.py`
-- [ ] Plan removal of the duplicate field under a future API version
+- [x] Document `data` as a deprecated Shodan alias on `GET /api/host/{ip}` in `backend/app/api/host.py`
+- [x] Plan removal of the duplicate field under a future API version
 
 ---
 
 ### API13-L4: Token DELETE is soft-revoke without documented semantics
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Document `DELETE /api/tokens/{id}` as revoke (soft) in OpenAPI/docstring (`backend/app/api/tokens.py`)
-- [ ] Optionally return the updated token resource or add an explicit `POST .../revoke` alias
+- [x] Document `DELETE /api/tokens/{id}` as revoke (soft) in OpenAPI/docstring (`backend/app/api/tokens.py`)
+- [x] Optionally return the updated token resource or add an explicit `POST .../revoke` alias
 
 ---
 
 ### API13-L5: RPC-style action paths lack a documented convention
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Document allowed action/RPC patterns under parent resources (`…/cancel`, `…/reset-baseline`, settings tests/runs)
-- [ ] Avoid introducing new top-level verb paths outside `/api/{resource}/…`
+- [x] Document allowed action/RPC patterns under parent resources (`…/cancel`, `…/reset-baseline`, settings tests/runs)
+- [x] Avoid introducing new top-level verb paths outside `/api/{resource}/…`
 
 ---
 
 ### OBS13-L1: Playwright settle path uses empty `except Exception: pass`
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Decide keep-as-is vs count settle timeouts in `backend/app/core/web_capture/screenshot.py`
-- [ ] If counting, add a debug counter or gated debug log for settle timeout / destroyed-context cases
+- [x] Decide keep-as-is vs count settle timeouts in `backend/app/core/web_capture/screenshot.py`
+- [x] If counting, add a debug counter or gated debug log for settle timeout / destroyed-context cases
 
 ---
 
 ### OBS13-L2: Optional enrichers fail closed without INFO visibility
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] In `backend/app/core/intel.py`, rate-limit a `warning` when TLS/SSH enrich failures exceed a per-scan threshold (or keep debug and emit a metric)
-- [ ] In `backend/app/core/image_intel.py`, optionally log/metric soft-fail decode/OCR paths when failures are systemic
+- [x] In `backend/app/core/intel.py`, rate-limit a `warning` when TLS/SSH enrich failures exceed a per-scan threshold (or keep debug and emit a metric)
+- [x] In `backend/app/core/image_intel.py`, optionally log/metric soft-fail decode/OCR paths when failures are systemic
 
 ---
 
 ### OBS13-L3: JSON logs omit service/host/process identity fields
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add static identity fields (`service`, `version`, optional hostname) to `JsonFormatter` in `backend/app/logging_setup.py` when `log_format=json`
+- [x] Add static identity fields (`service`, `version`, optional hostname) to `JsonFormatter` in `backend/app/logging_setup.py` when `log_format=json`
 
 ---
 
 ### OBS13-L4: Slow-request logs include the full query string
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] In `backend/app/main.py` `request_timing`, truncate or omit query strings on slow-request warnings (path + safe params only)
+- [x] In `backend/app/main.py` `request_timing`, truncate or omit query strings on slow-request warnings (path + safe params only)
 
 ---
 
 ### TEST13-L1: No coverage reporting or thresholds in CI
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add optional `pytest-cov` (or equivalent) to the backend CI job in `.github/workflows/ci.yml` as a report artifact without a hard gate initially
+- [x] Add optional `pytest-cov` (or equivalent) to the backend CI job in `.github/workflows/ci.yml` as a report artifact without a hard gate initially
 - [ ] Optionally set a modest fail-under later for `app/scanner` and `app/auth` once the integrity suite lands
 
 ---
 
 ### TEST13-L2: Interface bind values trusted into nmap argv without sanitizer test
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] In the integrity Popen spy suite, include a bind with a malicious `device`/`source` string
-- [ ] Assert either rejection/validation in `backend/app/scanner/nmap_iface.py` / `_run`, or that unsafe bind values never reach argv
+- [x] In the integrity Popen spy suite, include a bind with a malicious `device`/`source` string
+- [x] Assert either rejection/validation in `backend/app/scanner/nmap_iface.py` / `_run`, or that unsafe bind values never reach argv
 
 ---
 
 ### TEST13-L3: Frontend CI is typecheck/lint/build only (no behavioral tests)
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Note in `.github/workflows/ci.yml` or README that the frontend job does not run behavioral tests until TEST13-M2/M3 land
-- [ ] Ensure CSRF header and scan-dialog cases are explicitly listed under TEST13-M2 or TEST13-M3 when those are implemented
+- [x] Note in `.github/workflows/ci.yml` or README that the frontend job does not run behavioral tests until TEST13-M2/M3 land
+- [x] Ensure CSRF header and scan-dialog cases are explicitly listed under TEST13-M2 or TEST13-M3 when those are implemented
 
 ---
 
 ### TEST13-L4: Test run docs are brief
 
-Status: Open
+Status: Completed
 
 #### Subtasks
 
-- [ ] Add a short Testing subsection to `README.md`: mock scanner default, when e2e runs, how to run pytest locally
-- [ ] Point contributors at `backend/tests/test_nmap_command_integrity.py` (or the integrity entrypoint) once TEST13-H1 lands
+- [x] Add a short Testing subsection to `README.md`: mock scanner default, when e2e runs, how to run pytest locally
+- [x] Point contributors at `backend/tests/test_nmap_command_integrity.py` (or the integrity entrypoint) once TEST13-H1 lands
 
 ---
 

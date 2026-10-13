@@ -30,8 +30,18 @@ jobs:
           cache-dependency-path: backend/requirements*.txt
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m ruff check .
-      - run: python -m pytest -q
+      # Coverage is reported, not gated yet: scanner and auth (the command-integrity and login paths)
+      # are the first candidates for a --cov-fail-under once the integrity suite is complete.
+      - run: python -m pytest -q --cov=app --cov-report=term:skip-covered --cov-report=xml:coverage.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: ignore
 
+  # Typecheck, lint, Vitest unit tests (fetch wrapper: CSRF header, error mapping, request ids; scan
+  # dialog rules) and the production build. Browser flows run in the e2e job below.
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -45,4 +55,32 @@ jobs:
       # Match root `npm run lint` frontend half (Ruff runs in the backend job).
       - run: npx tsc -p frontend --noEmit
       - run: npx eslint -c frontend/eslint.config.js frontend/src
+      - run: npm run test:frontend
       - run: npm run build
+
+  # Browser smoke test (sign in -> dashboard -> devices) against the built UI served by the real app.
+  # Local `npm test` stays offline and skips it; run it locally with `npm run test:e2e`.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: npm ci
+      - run: npm run build
+      - run: python -m pip install -r requirements-dev.txt
+        working-directory: backend
+      - run: python -m playwright install --with-deps chromium
+        working-directory: backend
+      - run: python -m pytest -q -m e2e
+        working-directory: backend
+        env:
+          APP_SECRET_KEY: ci-test-secret

@@ -7,7 +7,7 @@ import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { HttpBadge, KIND_LABELS, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
 import { Card, Empty, ErrorBox, Loading, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
-import type { Paged, Scan, SnapshotInfo, WebCapture } from '../types';
+import type { ChangeEvent, Paged, Scan, SnapshotInfo, WebCapture } from '../types';
 import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, scanStageFraction, useApi, useInFlight } from '../util';
 
 interface MockState { mock_active: boolean; last_step: number; steps: string[]; networks: { id: number; name: string; step: number }[] }
@@ -54,6 +54,9 @@ function CaptureTargets({ c }: { c: WebCapture }) {
     </>
   );
 }
+
+/** Change events shown in the scan detail modal; the rest are on the Changes page. */
+const SCAN_EVENTS_SHOWN = 500;
 
 export default function Scans() {
   const { isAdmin, system, refreshSystem } = useApp();
@@ -152,8 +155,11 @@ export default function Scans() {
     }
     let live = true;
     setErr(null);
-    get<Scan>(`/scans/${detailId}`).then(
-      (d) => live && setDetail(d),
+    Promise.all([
+      get<Scan>(`/scans/${detailId}`),
+      get<Paged<ChangeEvent>>(`/scans/${detailId}/events`, { page_size: SCAN_EVENTS_SHOWN }),
+    ]).then(
+      ([d, ev]) => live && setDetail({ ...d, events: ev.items }),
       (e: any) => {
         if (!live) return;
         setErr(`Could not open scan #${detailId}: ${e.message}`);

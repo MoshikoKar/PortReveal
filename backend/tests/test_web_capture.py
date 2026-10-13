@@ -271,7 +271,7 @@ def test_delete_removes_screenshot_files(db, client):
     assert cap is not None
     cap_uuid = cap.uuid
     cap_dir = captures_root() / cap_uuid
-    assert client.delete(f"/api/web-captures/{cap_id}", headers=csrf(client)).status_code == 200
+    assert client.delete(f"/api/web-captures/{cap_id}", headers=csrf(client)).status_code == 204
     db.expire_all()
     assert db.get(WebCapture, cap_id) is None
     assert not cap_dir.exists()

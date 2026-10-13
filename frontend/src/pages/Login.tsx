@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { post } from '../api';
-import { BrandLockup, Logo } from '../components/Layout';
+import { LogoLockup } from '../components/Layout';
 import { ErrorBox } from '../components/ui';
 import type { SetupStatus, User } from '../types';
 
@@ -36,10 +36,7 @@ export default function Login({
     <div className="login-wrap">
       <form className="card login" onSubmit={submit}>
         <div className="card-body stack" style={{ gap: 16, padding: 24 }}>
-          <div className="row">
-            <Logo />
-            <BrandLockup subtitle="Network discovery" />
-          </div>
+          <LogoLockup />
           {sessionExpired && (
             <div className="alert warn">Your session expired or you were signed out. Please sign in again to continue.</div>
           )}

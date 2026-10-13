@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import metrics
 from ..db import session_scope, utcnow
 from ..models import Device, Event, Scan, ScanHost
 from .exposure import apply_scores, unique_services
@@ -20,6 +21,9 @@ from .watches import evaluate_all
 log = logging.getLogger(__name__)
 
 REFRESH_CHUNK = 500
+# Single probe failures are normal (host went away, odd TLS stack) and stay at debug. This many in one
+# scan points at a systemic problem (egress filtering, broken TLS library) and is logged as a warning.
+ENRICH_WARN_THRESHOLD = 5
 
 
 def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | None = None,
@@ -45,7 +49,7 @@ def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | No
     return events
 
 
-def _enrich_open_services(db: Session, device_ids: list[int]) -> None:
+def _enrich_open_services(db: Session, device_ids: list[int], *, scan_id: int | None = None) -> None:
     """Best-effort TLS / banner / CPE / SSH enrichment for devices touched by a scan (TCP only)."""
     from ..models import Device, DevicePort
     from ..scanner import scanner_status
@@ -59,22 +63,26 @@ def _enrich_open_services(db: Session, device_ids: list[int]) -> None:
     # Live probes (TLS/SSH) need real sockets — skip in mock/tests so scripts stay fast.
     live = scanner_status().effective_mode != "mock"
     devices = {d.id: d for d in db.scalars(select(Device).where(Device.id.in_(device_ids)))}
+    failures = {"tls": 0, "ssh": 0}
     for did, dev in devices.items():
         if live:
-            try:
-                enrich_device_tls(db, did, dev.current_ip)
-            except Exception:
-                log.debug("tls enrich failed for device %s", did, exc_info=True)
-            try:
-                enrich_device_ssh(db, did, dev.current_ip)
-            except Exception:
-                log.debug("ssh enrich failed for device %s", did, exc_info=True)
+            for probe, enrich in (("tls", enrich_device_tls), ("ssh", enrich_device_ssh)):
+                try:
+                    enrich(db, did, dev.current_ip)
+                except Exception:
+                    failures[probe] += 1
+                    metrics.observe_enrich_failure(probe)
+                    log.debug("%s enrich failed for device %s", probe, did, exc_info=True)
         ports = db.scalars(select(DevicePort).where(
             DevicePort.device_id == did, DevicePort.is_open.is_(True),
         )).all()
         sync_nmap_banners(db, ports, device=dev, scan_id=None, now=utcnow())
         for p in ports:
             sync_nmap_cpes(db, p)
+    for probe, n in failures.items():
+        if n >= ENRICH_WARN_THRESHOLD:
+            log.warning("scan %s: %s enrichment failed for %d of %d devices (enable DEBUG for details)",
+                        scan_id, probe.upper(), n, len(devices))
 
 
 def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:
@@ -86,7 +94,7 @@ def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:
         with db.begin_nested():
             ids = list(db.scalars(select(ScanHost.device_id).where(ScanHost.scan_id == scan.id)).all())
             try:
-                _enrich_open_services(db, ids)
+                _enrich_open_services(db, ids, scan_id=scan.id)
             except Exception:
                 log.exception("scan %s: service enrichment failed", scan.id)
             report = {e.device.id for e in changed if e.device is not None and e.device.id is not None}

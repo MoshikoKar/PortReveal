@@ -67,7 +67,7 @@ def test_csrf_required_for_state_changes(client):
     body = {"name": "Office", "cidr": "10.10.0.0/16"}
     assert client.post("/api/networks", json=body).status_code == 403
     assert client.post("/api/networks", json=body, headers={"X-CSRF-Token": "bogus"}).status_code == 403
-    assert client.post("/api/networks", json=body, headers=csrf(client)).status_code == 200
+    assert client.post("/api/networks", json=body, headers=csrf(client)).status_code == 201
 
 
 def test_login_rate_limit(client):
@@ -88,7 +88,7 @@ def test_viewer_is_read_only(client):
     setup_admin(client)
     r = client.post("/api/users", json={"username": "viewer1", "password": "viewer-pass-1", "role": "viewer"},
                     headers=csrf(client))
-    assert r.status_code == 200
+    assert r.status_code == 201
     client.post("/api/auth/logout", headers=csrf(client))
     client.post("/api/auth/login", json={"username": "viewer1", "password": "viewer-pass-1"})
     assert client.get("/api/dashboard").status_code == 200
@@ -105,6 +105,7 @@ def test_last_local_admin_cannot_be_removed(client):
     assert client.delete(f"/api/users/{me['id']}", headers=csrf(client)).status_code == 409
 
 
+# Scan-command integrity invariant; the threat model and full index live in test_nmap_command_integrity.py.
 def test_network_and_exclusion_validation(client):
     setup_admin(client)
     h = csrf(client)
@@ -112,7 +113,7 @@ def test_network_and_exclusion_validation(client):
     assert client.post("/api/networks", json={"name": "Bad", "cidr": "10.0.0.0/24; rm -rf"}, headers=h).status_code == 422
     r = client.post("/api/exclusions", json={"value": "10.0.0.5\n10.0.0.10-20, 10.0.1.0/30", "description": "printers"},
                     headers=h)
-    assert r.status_code == 200 and r.json()["address_count"] == 1 + 11 + 4
+    assert r.status_code == 201 and r.json()["address_count"] == 1 + 11 + 4
     assert client.post("/api/exclusions", json={"value": "10.0.0.999"}, headers=h).status_code == 422
 
 
@@ -150,6 +151,7 @@ def test_scan_flow_through_api(client):
 
     r = client.post("/api/scans", json={"scan_type": "full", "device_uuids": [uuid]}, headers=h)
     assert r.status_code == 200
+    # scan-command integrity: shell text in targets never reaches a queued scan (test_nmap_command_integrity.py)
     assert client.post("/api/scans", json={"scan_type": "full", "targets": "10.0.0.1; reboot"},
                        headers=h).status_code == 422
     snaps = client.get("/api/snapshots").json()

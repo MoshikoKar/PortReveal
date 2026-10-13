@@ -1,6 +1,8 @@
 """Centralized runtime settings (admin only). Secrets are write-only."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -8,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..auth.deps import client_ip, require_admin
 from ..auth.ldap_auth import ldap_authenticate, ldap_test
 from ..core.audit import audit
-from ..core.notify import format_sample_digest, send_email
+from ..core.notify import format_sample_digest, send_email, smtp_failure_reason
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
 from ..db import get_db
@@ -21,11 +23,13 @@ from ..settings_store import (
     RetentionSettings,
     ScanSettings,
     ScheduleSettings,
+    WebCaptureSettings,
     get_section,
     put_section,
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+log = logging.getLogger(__name__)
 
 
 def _ip(request: Request) -> str | None:
@@ -83,6 +87,21 @@ def put_scan_settings(body: ScanSettings, request: Request, db: Session = Depend
                       user: User = Depends(require_admin)):
     put_section(db, body)
     audit(db, user.username, "settings.scan_profile", None, body.model_dump(), _ip(request))
+    db.commit()
+    return body.model_dump()
+
+
+# --- web capture ------------------------------------------------------------------
+@router.get("/web-capture")
+def get_web_capture_settings(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return get_section(db, WebCaptureSettings).model_dump()
+
+
+@router.put("/web-capture")
+def put_web_capture_settings(body: WebCaptureSettings, request: Request, db: Session = Depends(get_db),
+                             user: User = Depends(require_admin)):
+    put_section(db, body)
+    audit(db, user.username, "settings.web_capture", None, body.model_dump(), _ip(request))
     db.commit()
     return body.model_dump()
 
@@ -148,9 +167,12 @@ def test_notifications(body: TestEmailIn, request: Request, db: Session = Depend
         subject, plain, html_body = format_sample_digest()
         send_email(cfg, subject, plain + f"\nSent by: {user.username}\n", html_body)
     except Exception as exc:
-        audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": False, "error": str(exc)}, _ip(request))
+        reason = smtp_failure_reason(exc)
+        log.warning("SMTP test via %s:%s failed (%s): %s", cfg.smtp_host, cfg.smtp_port, type(exc).__name__, exc)
+        audit(db, user.username, "settings.smtp_test", cfg.smtp_host,
+              {"ok": False, "error": reason, "error_type": type(exc).__name__}, _ip(request))
         db.commit()
-        return {"ok": False, "message": f"Sending failed: {exc}"}
+        return {"ok": False, "message": f"Sending failed: {reason}."}
     audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": True}, _ip(request))
     db.commit()
     return {"ok": True, "message": f"Test email sent to {', '.join(cfg.recipients)}"}

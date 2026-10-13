@@ -24,7 +24,7 @@ from .known_ports import (
     TRUENAS_APPS_TCP_PORTS,
     merge_port_scope,
 )
-from .nmap_iface import BindChoice, resolve_bind
+from .nmap_iface import BindChoice, bind_args, resolve_bind
 from .nmap_parser import parse_nmap_xml
 from .types import (
     HostObservation,
@@ -371,14 +371,11 @@ class NmapScanner:
         fd, target_file = tempfile.mkstemp(prefix=f"scan{ctx.scan_id}_", suffix=".txt", dir=self.tmp_dir)
         with os.fdopen(fd, "w") as fh:
             fh.write("\n".join(targets) + "\n")
-        bind_args: list[str] = []
-        if bind is not None and bind.device:
-            bind_args = ["-e", bind.device]
-            if bind.source:
-                bind_args += ["-S", bind.source]
+        extra = bind_args(bind)
+        if extra:
             log.info("scan %s: binding nmap %s to interface %s (source %s)",
-                     ctx.scan_id, label, bind.device, bind.source or "auto")
-        cmd = [self.exe, *args, *bind_args, "-iL", target_file, "-oX", "-"]
+                     ctx.scan_id, label, extra[1], extra[3] if len(extra) > 3 else "auto")
+        cmd = [self.exe, *args, *extra, "-iL", target_file, "-oX", "-"]
         log.debug("scan %s: running %s", ctx.scan_id, " ".join(cmd))
         started = time.monotonic()
         try:

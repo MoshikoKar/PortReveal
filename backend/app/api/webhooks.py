@@ -35,7 +35,7 @@ def list_webhooks(db: Session = Depends(get_db), user: User = Depends(require_ad
     return [_out(h) for h in db.scalars(select(WebhookEndpoint).order_by(WebhookEndpoint.id))]
 
 
-@router.post("")
+@router.post("", status_code=201)
 def create_webhook(body: WebhookIn, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     if body.event_types:
         bad = [t for t in body.event_types if t not in EVENT_TYPES]
@@ -47,14 +47,14 @@ def create_webhook(body: WebhookIn, db: Session = Depends(get_db), user: User = 
         event_types=body.event_types, created_at=utcnow(),
     )
     db.add(h)
-    db.flush()
+    db.commit()
     return _out(h)
 
 
-@router.delete("/{webhook_id}")
+@router.delete("/{webhook_id}", status_code=204)
 def delete_webhook(webhook_id: int, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     h = db.get(WebhookEndpoint, webhook_id)
     if h is None:
         raise HTTPException(404, "webhook not found")
     db.delete(h)
-    return {"ok": True}
+    db.commit()

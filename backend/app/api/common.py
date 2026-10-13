@@ -7,20 +7,45 @@ from fastapi import Query
 
 from ..models import Device, DevicePort, Event, Network, Scan, User
 
+# OpenAPI description for PUT routes on entities (PATCH is the partial-update verb; see docs/api/conventions.md).
+FULL_REPLACE = (
+    "Full replace: send the complete resource body. Optional fields left out are reset to their defaults "
+    "(null, false or the documented default); this is not a partial update."
+)
+
 
 def like_pattern(q: str) -> str:
     escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
 
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 500
+
+
 class Paging:
-    def __init__(self, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500)):
+    """Offset pagination for list endpoints: ``?page=`` (1-based) and ``?page_size=`` (default 50, max 500).
+
+    Endpoints with costlier pages use ``paging_with`` to lower the default and the ceiling.
+    """
+
+    def __init__(self, page: int = Query(1, ge=1),
+                 page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE)):
         self.page = page
         self.page_size = page_size
 
     @property
     def offset(self) -> int:
         return (self.page - 1) * self.page_size
+
+
+def paging_with(default: int, max_size: int):
+    """A ``Paging`` dependency with its own default and maximum page size."""
+
+    def dependency(page: int = Query(1, ge=1), page_size: int = Query(default, ge=1, le=max_size)) -> Paging:
+        return Paging(page, page_size)
+
+    return dependency
 
 
 def paged(items: list[Any], total: int, paging: Paging) -> dict:

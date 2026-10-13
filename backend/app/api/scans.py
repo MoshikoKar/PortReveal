@@ -65,10 +65,19 @@ def get_scan(scan_id: int, db: Session = Depends(get_db), user: User = Depends(c
     s = db.get(Scan, scan_id)
     if s is None:
         raise HTTPException(404, "Scan not found")
-    out = scan_out(s, _names(db).get(s.network_id))
-    events = db.scalars(select(Event).where(Event.scan_id == s.id).order_by(Event.id).limit(500)).unique().all()
-    out["events"] = [event_out(e) for e in events]
-    return out
+    return scan_out(s, _names(db).get(s.network_id))
+
+
+@router.get("/{scan_id}/events")
+def scan_events(scan_id: int, paging: Paging = Depends(), db: Session = Depends(get_db),
+                user: User = Depends(current_user)):
+    """Change events recorded by one scan, oldest first."""
+    if db.get(Scan, scan_id) is None:
+        raise HTTPException(404, "Scan not found")
+    total = db.scalar(select(func.count(Event.id)).where(Event.scan_id == scan_id)) or 0
+    rows = db.scalars(select(Event).where(Event.scan_id == scan_id).order_by(Event.id)
+                      .offset(paging.offset).limit(paging.page_size)).unique().all()
+    return paged([event_out(e) for e in rows], total, paging)
 
 
 @router.post("")

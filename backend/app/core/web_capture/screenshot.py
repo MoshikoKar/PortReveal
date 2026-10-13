@@ -109,8 +109,9 @@ def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bo
         left = int((end - time.monotonic()) * 1000)
         try:
             page.wait_for_load_state("networkidle", timeout=max(1, min(left, NETWORK_IDLE_MS)))
-        except Exception:
-            pass
+        except Exception as exc:
+            # Normal for chatty pages (polling, websockets): settling goes on with the quiet window.
+            log.debug("settle %s: network never idle (%s)", page.url[:120], type(exc).__name__)
         before = navs[0]
         page.wait_for_timeout(max(0, min(QUIET_MS, int((end - time.monotonic()) * 1000))))
         try:
@@ -129,8 +130,10 @@ def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bo
             followed.add(target)
             try:
                 page.goto(target, wait_until="domcontentloaded", timeout=max(1000, left))
-            except Exception:
-                pass
+            except Exception as exc:
+                # The shot is still taken of whatever loaded; take_screenshot reports real failures.
+                log.debug("settle %s: meta refresh to %s failed (%s)", page.url[:120], target[:120],
+                          type(exc).__name__)
             continue
         if visible or out_of_time:
             return last

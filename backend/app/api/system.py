@@ -24,8 +24,16 @@ router = APIRouter(prefix="/api", tags=["system"])
 STARTED = time.time()
 
 
+@router.get("/live")
+def live():
+    """Liveness: the process is up and serving HTTP. Never touches the database, so a database outage does
+    not make an orchestrator restart a healthy process. Use /api/health for readiness."""
+    return {"status": "ok", "version": __version__}
+
+
 @router.get("/health")
 def health():
+    """Readiness: the application can serve requests (database reachable). 503 when it cannot."""
     ok, _ = check_db()
     body = {
         "status": "ok" if ok else "degraded",

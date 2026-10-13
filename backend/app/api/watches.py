@@ -12,6 +12,7 @@ from ..core.query.search import prepare
 from ..core.watches import evaluate
 from ..db import get_db
 from ..models import ROLE_ADMIN, SEARCH_KIND_POLICY, SEARCH_KIND_WATCH, SavedSearch, SavedSearchHit, User
+from .common import FULL_REPLACE
 
 router = APIRouter(prefix="/api/saved-searches", tags=["saved-searches"])
 
@@ -68,7 +69,7 @@ def list_saved_searches(db: Session = Depends(get_db), user: User = Depends(curr
     return [_out(s, user) for s in db.scalars(select(SavedSearch).order_by(SavedSearch.name)).all()]
 
 
-@router.post("")
+@router.post("", status_code=201)
 def create_saved_search(body: SavedSearchIn, request: Request, db: Session = Depends(get_db),
                         user: User = Depends(current_user)):
     prepare(body.query)
@@ -81,7 +82,7 @@ def create_saved_search(body: SavedSearchIn, request: Request, db: Session = Dep
     return _out(s, user)
 
 
-@router.put("/{search_id}")
+@router.put("/{search_id}", description=FULL_REPLACE)
 def update_saved_search(search_id: int, body: SavedSearchIn, request: Request, db: Session = Depends(get_db),
                         user: User = Depends(current_user)):
     s = _get(db, search_id, user, edit=True)
@@ -99,11 +100,10 @@ def update_saved_search(search_id: int, body: SavedSearchIn, request: Request, d
     return _out(s, user)
 
 
-@router.delete("/{search_id}")
+@router.delete("/{search_id}", status_code=204)
 def delete_saved_search(search_id: int, request: Request, db: Session = Depends(get_db),
                         user: User = Depends(current_user)):
     s = _get(db, search_id, user, edit=True)
     audit(db, user.username, "saved_search.delete", s.name, {"query": s.query}, client_ip(request))
     db.delete(s)
     db.commit()
-    return {"ok": True}

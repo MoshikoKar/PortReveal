@@ -15,3 +15,8 @@ backups/
 .DS_Store
 graphify-out/
 .netlify
+tmp/
+
+# Coverage (pytest --cov)
+.coverage
+coverage.xml

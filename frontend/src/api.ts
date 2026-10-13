@@ -1,14 +1,30 @@
-// Small fetch wrapper: JSON in/out, CSRF header, readable error messages.
+// Small fetch wrapper: JSON in/out, CSRF header, request ids, readable error messages.
+
+export const REQUEST_ID_HEADER = 'X-Request-Id';
 
 export class ApiError extends Error {
   status: number;
   /** Character offset of a search query syntax error (400 responses from /search). */
   pos?: number;
-  constructor(status: number, message: string, pos?: number) {
+  /** Id of the failed request, as logged by the backend; quote it when reporting a problem. */
+  requestId?: string;
+  constructor(status: number, message: string, pos?: number, requestId?: string) {
     super(message);
     this.status = status;
     this.pos = pos;
+    this.requestId = requestId;
   }
+}
+
+/** A fresh request id. crypto.randomUUID needs a secure context, which a plain-HTTP LAN install is not. */
+export function newRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' && globalThis.isSecureContext !== false) {
+    return crypto.randomUUID().replace(/-/g, '');
+  }
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 function csrfToken(): string {
@@ -28,7 +44,7 @@ export function query(params?: Params): string {
   return s ? `?${s}` : '';
 }
 
-function errorMessage(body: any, status: number): string {
+export function errorMessage(body: any, status: number): string {
   const detail = body?.detail;
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail)) {
@@ -43,9 +59,27 @@ function errorMessage(body: any, status: number): string {
   return `Request failed (${status})`;
 }
 
+/** The ApiError for a failed response. Server errors carry a reference so support can find the log lines. */
+export function responseError(res: Response, body: any, sentId: string): ApiError {
+  const requestId = res.headers.get(REQUEST_ID_HEADER) || sentId;
+  let message = errorMessage(body, res.status);
+  if (res.status >= 500) message += ` (reference ${requestId})`;
+  return new ApiError(res.status, message, typeof body?.pos === 'number' ? body.pos : undefined, requestId);
+}
+
+async function readJson(res: Response): Promise<any> {
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function api<T>(path: string, opts: { method?: string; body?: unknown; params?: Params } = {}): Promise<T> {
   const method = opts.method || 'GET';
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const requestId = newRequestId();
+  const headers: Record<string, string> = { Accept: 'application/json', [REQUEST_ID_HEADER]: requestId };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET') headers['X-CSRF-Token'] = csrfToken();
   let res: Response;
@@ -59,16 +93,10 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   } catch {
     throw new ApiError(0, 'Cannot reach the backend. Check that it is running.');
   }
-  const text = await res.text();
-  let body: any = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = null;
-  }
+  const body = await readJson(res);
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/auth/login')) window.dispatchEvent(new Event('nf:unauthorized'));
-    throw new ApiError(res.status, errorMessage(body, res.status), typeof body?.pos === 'number' ? body.pos : undefined);
+    throw responseError(res, body, requestId);
   }
   return body as T;
 }
@@ -81,22 +109,21 @@ export const del = <T>(path: string) => api<T>(path, { method: 'DELETE' });
 
 /** Download a binary response (e.g. inventory ZIP) and trigger a browser save. */
 export async function downloadBlob(path: string, fallbackName: string): Promise<void> {
+  const requestId = newRequestId();
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, { method: 'GET', credentials: 'same-origin', headers: { Accept: '*/*' } });
+    res = await fetch(`/api${path}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { Accept: '*/*', [REQUEST_ID_HEADER]: requestId },
+    });
   } catch {
     throw new ApiError(0, 'Cannot reach the backend. Check that it is running.');
   }
   if (!res.ok) {
-    const text = await res.text();
-    let body: any = null;
-    try {
-      body = text ? JSON.parse(text) : null;
-    } catch {
-      body = null;
-    }
+    const body = await readJson(res);
     if (res.status === 401) window.dispatchEvent(new Event('nf:unauthorized'));
-    throw new ApiError(res.status, errorMessage(body, res.status));
+    throw responseError(res, body, requestId);
   }
   const blob = await res.blob();
   const cd = res.headers.get('Content-Disposition') || '';
@@ -115,27 +142,22 @@ export async function downloadBlob(path: string, fallbackName: string): Promise<
 
 /** POST multipart/form-data (do not set Content-Type; the browser adds the boundary). */
 export async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const requestId = newRequestId();
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { Accept: 'application/json', 'X-CSRF-Token': csrfToken() },
+      headers: { Accept: 'application/json', 'X-CSRF-Token': csrfToken(), [REQUEST_ID_HEADER]: requestId },
       body: form,
     });
   } catch {
     throw new ApiError(0, 'Cannot reach the backend. Check that it is running.');
   }
-  const text = await res.text();
-  let body: any = null;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = null;
-  }
+  const body = await readJson(res);
   if (!res.ok) {
     if (res.status === 401) window.dispatchEvent(new Event('nf:unauthorized'));
-    throw new ApiError(res.status, errorMessage(body, res.status));
+    throw responseError(res, body, requestId);
   }
   return body as T;
 }

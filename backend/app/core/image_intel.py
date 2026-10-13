@@ -5,6 +5,8 @@ import logging
 from io import BytesIO
 from pathlib import Path
 
+from .. import metrics
+
 log = logging.getLogger(__name__)
 
 
@@ -16,7 +18,9 @@ def average_hash(data: bytes, *, size: int = 8) -> str | None:
         return None
     try:
         img = Image.open(BytesIO(data)).convert("L").resize((size, size), Image.Resampling.LANCZOS)
-    except Exception:
+    except Exception as exc:
+        metrics.observe_enrich_failure("image_hash")
+        log.debug("screenshot hash: cannot decode image (%s)", type(exc).__name__)
         return None
     pixels = list(img.getdata())
     avg = sum(pixels) / len(pixels)
@@ -36,7 +40,9 @@ def ocr_text(data: bytes) -> str | None:
         text = pytesseract.image_to_string(img) or ""
         text = " ".join(text.split())
         return text[:2000] if text else None
-    except Exception:
+    except Exception as exc:
+        metrics.observe_enrich_failure("ocr")
+        log.debug("screenshot OCR failed (%s)", type(exc).__name__)
         return None
 
 

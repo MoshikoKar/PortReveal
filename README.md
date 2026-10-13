@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/portreveal-lockup-dark.png">
+    <img src="docs/brand/portreveal-lockup-light.png" alt="PortReveal — Network discovery" width="440">
+  </picture>
+</p>
+
 # PortReveal
 
 Continuous network discovery, service inventory, and change detection for internal

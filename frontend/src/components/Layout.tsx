@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import logoMark from '../assets/logo-mark-56.png';
+import logoLockup from '../assets/logo-lockup.png';
+import logoMark from '../assets/logo-mark.png';
 import { useApp } from '../context';
 import type { SystemStatus } from '../types';
 import { SCAN_TYPE_LABELS, scanStageFraction } from '../util';
@@ -40,7 +41,12 @@ const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean 
 ];
 
 export function Logo() {
-  return <img className="brand-logo" src={logoMark} width={28} height={28} alt="" aria-hidden />;
+  return <img className="brand-logo" src={logoMark} width={106} height={120} alt="" aria-hidden />;
+}
+
+/** Full mark + wordmark + tagline artwork (sidebar header, sign-in screen). */
+export function LogoLockup({ className = 'brand-lockup-img' }: { className?: string }) {
+  return <img className={className} src={logoLockup} width={720} height={289} alt="PortReveal — Network discovery" />;
 }
 
 export function BrandLockup({ subtitle = 'Network discovery' }: { subtitle?: string }) {
@@ -127,8 +133,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <aside className={`sidebar ${navOpen ? 'open' : ''}`}>
         <div className="brand">
           <Link className="brand-home" to="/">
-            <Logo />
-            <BrandLockup subtitle="Network discovery" />
+            <LogoLockup className="sidebar-lockup" />
           </Link>
           {activeNav && <span className="nav-current"><Icon d={ICONS[activeNav.icon]} />{activeNav.label}</span>}
           <button className="btn ghost icon nav-toggle" onClick={() => setNavOpen((o) => !o)}

@@ -39,7 +39,7 @@ from ..models import (
 )
 from ..netutils import AddressSet, TargetError
 from ..scanner import scanner_status
-from ..settings_store import WebCaptureSettings, get_section, put_section
+from ..settings_store import WebCaptureSettings, get_section
 from .common import Paging, paged
 
 router = APIRouter(tags=["web-captures"])
@@ -221,20 +221,6 @@ def web_capture_out(c: WebCapture, *, include_pages: bool = False) -> dict:
     return out
 
 
-@router.get("/api/settings/web-capture")
-def get_web_capture_settings(db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    return get_section(db, WebCaptureSettings).model_dump()
-
-
-@router.put("/api/settings/web-capture")
-def put_web_capture_settings(body: WebCaptureSettings, request: Request, db: Session = Depends(get_db),
-                             user: User = Depends(require_admin)):
-    put_section(db, body)
-    audit(db, user.username, "settings.web_capture", None, body.model_dump(), client_ip(request))
-    db.commit()
-    return body.model_dump()
-
-
 @router.get("/api/web-captures")
 def list_web_captures(
     status: str | None = Query(None),
@@ -365,7 +351,7 @@ def cancel_web_capture(capture_id: int, request: Request, db: Session = Depends(
     return {"ok": True}
 
 
-@router.delete("/api/web-captures/{capture_id}")
+@router.delete("/api/web-captures/{capture_id}", status_code=204)
 def remove_web_capture(capture_id: int, request: Request, db: Session = Depends(get_db),
                        user: User = Depends(require_admin)):
     job = db.scalar(select(WebCapture).where(WebCapture.id == capture_id).options(selectinload(WebCapture.pages)))
@@ -376,7 +362,6 @@ def remove_web_capture(capture_id: int, request: Request, db: Session = Depends(
     audit(db, user.username, "web_capture.delete", job.targets, {"capture_id": capture_id}, client_ip(request))
     delete_web_capture(db, job)
     db.commit()
-    return {"ok": True}
 
 
 @router.get("/api/web-pages/{page_id}/screenshot")
@@ -510,12 +495,14 @@ def web_hosts(
         "web",
         description="web = HTTP(S)/RTSP gallery; remote = RDP/VNC desktops only",
     ),
+    paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Every device with captured pages, summarised from its latest capture.
+    """Devices with captured pages, summarised from their latest capture, one page at a time.
 
-    ``kind=web`` (default) excludes RDP/VNC; ``kind=remote`` returns only those.
+    ``kind=web`` (default) excludes RDP/VNC; ``kind=remote`` returns only those. Hosts are ordered (with
+    screenshots first) before paging, so page 1 always holds the most useful cards.
     """
     latest = (
         select(WebPage.device_id, func.max(WebPage.capture_id).label("cid"))
@@ -563,7 +550,8 @@ def web_hosts(
             "services": _web_services(dev_pages),
         })
     hosts.sort(key=lambda h: (h["screenshot_count"] == 0, h["reachable_count"] == 0, h["hostname"] or h["ip"]))
-    return {"hosts": hosts}
+    return {"hosts": hosts[paging.offset:paging.offset + paging.page_size], "total": len(hosts),
+            "page": paging.page, "page_size": paging.page_size}
 
 
 @router.get("/api/devices/{uuid}/web-interfaces")

@@ -30,6 +30,7 @@ def _arg(args: list[str], flag: str) -> str:
     return args[args.index(flag) + 1]
 
 
+# Scan-command integrity invariant; the threat model and full index live in test_nmap_command_integrity.py.
 def test_vpn_discovery_args_are_capped_and_serial():
     for timing in ("polite", "normal", "fast"):
         for local_l2 in (False, True):

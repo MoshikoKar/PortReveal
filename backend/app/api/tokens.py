@@ -45,7 +45,7 @@ def list_tokens(db: Session = Depends(get_db), user: User = Depends(session_user
     return [_out(t) for t in rows]
 
 
-@router.post("")
+@router.post("", status_code=201)
 def create_token(body: TokenIn, request: Request, db: Session = Depends(get_db), user: User = Depends(session_user)):
     active = db.scalars(select(ApiToken.id).where(ApiToken.user_id == user.id, ApiToken.revoked.is_(False))).all()
     if len(active) >= MAX_TOKENS_PER_USER:
@@ -61,12 +61,28 @@ def create_token(body: TokenIn, request: Request, db: Session = Depends(get_db),
     return {**_out(t), "token": secret}
 
 
-@router.delete("/{token_id}")
-def revoke_token(token_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(session_user)):
+def _revoke(db: Session, token_id: int, user: User, request: Request) -> ApiToken:
     t = db.get(ApiToken, token_id)
     if t is None or t.user_id != user.id:
         raise HTTPException(404, "Token not found")
     t.revoked = True
     audit(db, user.username, "token.revoke", t.name, {"id": t.id}, client_ip(request))
     db.commit()
-    return {"ok": True}
+    return t
+
+
+@router.delete("/{token_id}", status_code=204)
+def revoke_token(token_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(session_user)):
+    """Revoke the token (soft delete).
+
+    The row is kept with ``revoked: true`` so the audit trail and the token list still show it; a revoked
+    token can never authenticate again. ``POST /api/tokens/{id}/revoke`` does the same and returns the token.
+    """
+    _revoke(db, token_id, user, request)
+
+
+@router.post("/{token_id}/revoke")
+def revoke_token_action(token_id: int, request: Request, db: Session = Depends(get_db),
+                        user: User = Depends(session_user)):
+    """Revoke the token and return its updated record (same effect as ``DELETE /api/tokens/{id}``)."""
+    return _out(_revoke(db, token_id, user, request))

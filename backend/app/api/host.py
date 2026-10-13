@@ -1,4 +1,8 @@
-"""Shodan-shaped host document: GET /api/host/{ip}."""
+"""Shodan-shaped host document by IP.
+
+``GET /api/hosts/{ip}`` is the canonical path. ``GET /api/host/{ip}`` is a compatibility alias kept for
+Shodan-style clients (singular ``host`` as in Shodan's ``/shodan/host/{ip}``); both return the same body.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,12 +25,18 @@ from ..models import (
     WebPage,
 )
 
-router = APIRouter(prefix="/api/host", tags=["host"])
+router = APIRouter(prefix="/api", tags=["host"])
+
+HOST_DOC = """One host with its open services (NF inventory, Shodan-like shape).
+
+`ports` lists the open services. `data` is a deprecated Shodan-compatible alias holding the same list;
+it will be dropped in the next API version, so new clients should read `ports`.
+"""
 
 
-@router.get("/{ip}")
+@router.get("/hosts/{ip}", description=HOST_DOC)
+@router.get("/host/{ip}", description=HOST_DOC + " Alias of `GET /api/hosts/{ip}`, kept for compatibility.")
 def host_document(ip: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    """One host with its open services (NF inventory, Shodan-like shape)."""
     dev = db.scalar(
         select(Device).where(Device.current_ip == ip, device_visible(db))
         .options(selectinload(Device.ports), selectinload(Device.profile), selectinload(Device.network))
@@ -111,5 +121,5 @@ def host_document(ip: str, db: Session = Depends(get_db), user: User = Depends(c
         "first_seen": dev.first_seen,
         "last_seen": dev.last_seen,
         "ports": data,
-        "data": data,  # Shodan alias
+        "data": data,  # deprecated Shodan alias of "ports"; remove in API v2
     }

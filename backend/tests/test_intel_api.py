@@ -60,18 +60,18 @@ def test_device_detail_tags_and_profile(admin):
     assert r.status_code == 200 and r.json()["tag"] == "pci-zone" and r.json()["source"] == "manual"
     assert admin.post(f"/api/devices/{uuid}/tags", json={"tag": "!!"}, headers=csrf(admin)).status_code == 422
     # Dismiss a rule tag: stays off search and type recomputes without it.
-    assert admin.delete(f"/api/devices/{uuid}/tags/web-server", headers=csrf(admin)).status_code == 200
+    assert admin.delete(f"/api/devices/{uuid}/tags/web-server", headers=csrf(admin)).status_code == 204
     d = admin.get(f"/api/devices/{uuid}").json()
     assert any(t["tag"] == "web-server" and t["source"] == "suppressed" for t in d["tags"])
     assert d["type"] is None  # remote-access has no type; web-server was the only type rule
     assert admin.get("/api/search", params={"q": "tag:web-server"}).json()["total"] == 0
     # Clear dismiss → rule tag returns.
-    assert admin.delete(f"/api/devices/{uuid}/tags/web-server", headers=csrf(admin)).status_code == 200
+    assert admin.delete(f"/api/devices/{uuid}/tags/web-server", headers=csrf(admin)).status_code == 204
     d = admin.get(f"/api/devices/{uuid}").json()
     assert any(t["tag"] == "web-server" and t["source"] == "rule" for t in d["tags"])
     assert d["type"] == "web-server"
     assert admin.get("/api/search", params={"q": "tag:pci-zone"}).json()["total"] == 1
-    assert admin.delete(f"/api/devices/{uuid}/tags/pci-zone", headers=csrf(admin)).status_code == 200
+    assert admin.delete(f"/api/devices/{uuid}/tags/pci-zone", headers=csrf(admin)).status_code == 204
 
     body = {"owner": " alice ", "location": "rack 4", "criticality": "high", "notes": ""}
     r = admin.put(f"/api/devices/{uuid}/profile", json=body, headers=csrf(admin))
@@ -111,7 +111,7 @@ def test_device_detail_eager_loads_related_data_in_three_queries(admin, db):
 
 def test_saved_searches_crud_and_ownership(admin):
     r = admin.post("/api/saved-searches", json={"name": "RDP", "query": "port:3389"}, headers=csrf(admin))
-    assert r.status_code == 200
+    assert r.status_code == 201
     s = r.json()
     assert s["initialized"] and s["last_count"] == 1 and s["kind"] == "watch" and s["can_edit"]
     bad = admin.post("/api/saved-searches", json={"name": "x", "query": "nosuch:1"}, headers=csrf(admin))
@@ -126,8 +126,8 @@ def test_saved_searches_crud_and_ownership(admin):
     listed = {x["name"]: x["can_edit"] for x in viewer.get("/api/saved-searches").json()}
     assert listed == {"SSH": False, "Mine": True}
     assert viewer.delete(f"/api/saved-searches/{s['id']}", headers=vh).status_code == 403
-    assert viewer.delete(f"/api/saved-searches/{mine['id']}", headers=vh).status_code == 200
-    assert admin.delete(f"/api/saved-searches/{s['id']}", headers=csrf(admin)).status_code == 200
+    assert viewer.delete(f"/api/saved-searches/{mine['id']}", headers=vh).status_code == 204
+    assert admin.delete(f"/api/saved-searches/{s['id']}", headers=csrf(admin)).status_code == 204
 
 
 def test_reports_dashboard_and_zone(admin):
@@ -155,7 +155,7 @@ def test_reports_dashboard_and_zone(admin):
 
 def test_api_tokens_are_read_only_and_revocable(admin):
     r = admin.post("/api/tokens", json={"name": "script", "expires_days": 30}, headers=csrf(admin))
-    assert r.status_code == 200
+    assert r.status_code == 201
     secret = r.json()["token"]
     assert secret.startswith("nf_") and r.json()["prefix"] == secret[:12]
     assert "token" not in admin.get("/api/tokens").json()[0]
@@ -170,5 +170,13 @@ def test_api_tokens_are_read_only_and_revocable(admin):
     assert admin.get("/api/tokens").json()[0]["last_used_at"] is not None
 
     token_id = r.json()["id"]
-    assert admin.delete(f"/api/tokens/{token_id}", headers=csrf(admin)).status_code == 200
+    r = admin.delete(f"/api/tokens/{token_id}", headers=csrf(admin))
+    assert r.status_code == 204 and r.content == b""
     assert bearer.get("/api/dashboard", headers=auth).status_code == 401
+    assert admin.get("/api/tokens").json()[0]["revoked"] is True  # soft revoke: the row stays listed
+
+    second = admin.post("/api/tokens", json={"name": "other"}, headers=csrf(admin)).json()
+    r = admin.post(f"/api/tokens/{second['id']}/revoke", headers=csrf(admin))
+    assert r.status_code == 200 and r.json()["id"] == second["id"] and r.json()["revoked"] is True
+    assert "token" not in r.json()
+    assert admin.post("/api/tokens/99999/revoke", headers=csrf(admin)).status_code == 404

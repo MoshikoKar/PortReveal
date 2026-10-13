@@ -59,6 +59,7 @@ def test_parse_rejects_garbage_and_incomplete_output():
     assert not run.finished_ok
 
 
+# Scan-command integrity invariant; the threat model and full index live in test_nmap_command_integrity.py.
 def test_nmap_arguments_are_fixed_and_safe():
     # Discovery never sends UDP probes (slow on silent ranges, can upset fragile UDP services).
     disc = build_discovery_args(privileged=True, timing="normal")

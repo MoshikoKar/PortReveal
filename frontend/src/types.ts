@@ -53,6 +53,7 @@ export interface Scan {
   is_baseline: boolean;
   error: string | null;
   notes: string | null;
+  /** Filled by the Scans page from GET /scans/{id}/events; not part of the scan resource. */
   events?: ChangeEvent[];
 }
 
@@ -361,6 +362,14 @@ export interface WebHost {
   hero: WebPage;
   /** Usable web services of the host (errors / blank pages left out; http→https duplicates merged). */
   services: WebService[];
+}
+
+/** GET /web-hosts: one page of hosts (ordered with screenshots first). */
+export interface WebHostPage {
+  hosts: WebHost[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface WebService {

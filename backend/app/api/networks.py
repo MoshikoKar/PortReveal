@@ -12,7 +12,7 @@ from ..core.mockdata import device_visible
 from ..db import get_db
 from ..models import DEVICE_ACTIVE, NETWORK_ZONES, Device, Network, User
 from ..netutils import TargetError, validate_network_cidr
-from .common import network_out
+from .common import FULL_REPLACE, network_out
 
 router = APIRouter(prefix="/api/networks", tags=["networks"])
 
@@ -71,7 +71,7 @@ def _check_name(db: Session, name: str, exclude_id: int | None = None) -> None:
         raise HTTPException(409, f"A network named '{name}' already exists")
 
 
-@router.post("")
+@router.post("", status_code=201)
 def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
     _check_name(db, body.name)
@@ -84,7 +84,7 @@ def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_
     return network_out(net, 0, 0)
 
 
-@router.put("/{network_id}")
+@router.put("/{network_id}", description=FULL_REPLACE)
 def update_network(network_id: int, body: NetworkIn, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
     net = db.get(Network, network_id)
@@ -124,7 +124,7 @@ def reset_baseline(network_id: int, request: Request, db: Session = Depends(get_
     return {"ok": True}
 
 
-@router.delete("/{network_id}")
+@router.delete("/{network_id}", status_code=204)
 def delete_network(network_id: int, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
     net = db.get(Network, network_id)
@@ -133,4 +133,3 @@ def delete_network(network_id: int, request: Request, db: Session = Depends(get_
     audit(db, user.username, "network.delete", net.name, {"cidr": net.cidr}, client_ip(request))
     db.delete(net)
     db.commit()
-    return {"ok": True}

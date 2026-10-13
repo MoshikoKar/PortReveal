@@ -51,7 +51,7 @@ def list_users(db: Session = Depends(get_db), user: User = Depends(require_admin
     return [user_out(u) for u in db.scalars(select(User).order_by(User.username)).all()]
 
 
-@router.post("")
+@router.post("", status_code=201)
 def create_user(body: UserIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     if db.scalar(select(User.id).where(func.lower(User.username) == body.username.lower())):
         raise HTTPException(409, "A user with this name already exists")
@@ -96,7 +96,7 @@ def _sid(request: Request, user_id: int) -> int:
     return sess.id if sess is not None and sess.user_id == user_id else -1
 
 
-@router.delete("/{user_id}")
+@router.delete("/{user_id}", status_code=204)
 def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     u = db.get(User, user_id)
     if u is None:
@@ -108,4 +108,3 @@ def delete_user(user_id: int, request: Request, db: Session = Depends(get_db), u
     audit(db, user.username, "user.delete", u.username, None, client_ip(request))
     db.delete(u)
     db.commit()
-    return {"ok": True}

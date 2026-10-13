@@ -33,7 +33,7 @@ from ..models import (
     WebCapture,
     WebPage,
 )
-from .common import Paging, device_summary, event_out, paged, port_out
+from .common import FULL_REPLACE, Paging, device_summary, event_out, paged, port_out
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
 
@@ -238,7 +238,7 @@ def add_tag(uuid: str, body: TagIn, request: Request, db: Session = Depends(get_
     return _tag_out(row)
 
 
-@router.delete("/{uuid}/tags/{tag}")
+@router.delete("/{uuid}/tags/{tag}", status_code=204)
 def remove_tag(uuid: str, tag: str, request: Request, db: Session = Depends(get_db),
                user: User = Depends(require_admin)):
     d = _get(db, uuid)
@@ -266,7 +266,6 @@ def remove_tag(uuid: str, tag: str, request: Request, db: Session = Depends(get_
     db.flush()
     reclassify_device(db, d.id, now=utcnow())
     db.commit()
-    return {"ok": True}
 
 
 class ProfileIn(BaseModel):
@@ -289,7 +288,7 @@ class ProfileIn(BaseModel):
         return v
 
 
-@router.put("/{uuid}/profile")
+@router.put("/{uuid}/profile", description=FULL_REPLACE)
 def update_profile(uuid: str, body: ProfileIn, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
     d = _get(db, uuid)
@@ -362,11 +361,10 @@ def device_scans(uuid: str, paging: Paging = Depends(), db: Session = Depends(ge
     return paged(items, total, paging)
 
 
-@router.delete("/{uuid}")
+@router.delete("/{uuid}", status_code=204)
 def delete_device(uuid: str, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     d = _get(db, uuid)
     audit(db, user.username, "device.delete", d.hostname or d.current_ip, {"uuid": d.uuid, "ip": d.current_ip},
           client_ip(request))
     db.delete(d)
     db.commit()
-    return {"ok": True}

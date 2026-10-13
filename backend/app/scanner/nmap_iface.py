@@ -136,6 +136,26 @@ def _score(iface: NmapIface) -> tuple:
     )
 
 
+def bind_args(bind: BindChoice | None) -> list[str]:
+    """nmap ``-e``/``-S`` arguments for a bind, or none when the values are not a plain interface name and
+    IPv4 address. Bind values come from ``nmap --iflist`` output, so they are re-checked where they become
+    argv: a name such as ``-oN/path`` would otherwise be read by nmap as an option."""
+    if bind is None or not bind.device:
+        return []
+    if not _DEV_RE.match(bind.device):
+        log.warning("ignoring nmap bind device with unexpected characters: %r", bind.device[:40])
+        return []
+    args = ["-e", bind.device]
+    if bind.source:
+        try:
+            source = ipaddress.IPv4Address(bind.source)
+        except ValueError:
+            log.warning("ignoring nmap bind source that is not an IPv4 address: %r", bind.source[:40])
+            return args
+        args += ["-S", str(source)]
+    return args
+
+
 def choose_bind(targets: list[str], ifaces: list[NmapIface], privileged: bool) -> BindChoice:
     """Select nmap -e device and whether privileged mode is safe for these targets."""
     wanted = _target_networks(targets)

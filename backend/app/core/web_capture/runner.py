@@ -41,7 +41,7 @@ from .probe import EndpointProbe, probe_endpoint
 from .rdp import freerdp_available, grab_rdp_frame
 from .rtsp import ffmpeg_available, placeholder_rtsp_webp, probe_rtsp
 from .screenshot import playwright_available, take_screenshot
-from .vnc import grab_vnc_frame, vnc_tool_available
+from .vnc import grab_vnc_frame
 from .wordlist import discovery_paths
 
 log = logging.getLogger(__name__)
@@ -284,8 +284,6 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             notes.append("ffmpeg unavailable; RTSP endpoints recorded without frames or live proxy.")
         if not mock and any(e["scheme"] == "rdp" for e in endpoint_data) and not freerdp_available():
             notes.append("freerdp unavailable; RDP endpoints recorded without screenshots.")
-        if not mock and any(e["scheme"] == "vnc" for e in endpoint_data) and not vnc_tool_available():
-            notes.append("VNC tools unavailable; VNC endpoints recorded without screenshots.")
 
         # (ip, landing URL) -> (status, relpath, error) of a screenshot already taken in this job,
         # so e.g. http:80 redirecting to the https:443 page reuses that image instead of reloading it
@@ -742,25 +740,21 @@ def _capture_remote_desktop(
                     notes.append(f"{ep['ip']}:{ep['port']}: RDP requires auth (skipped; no credential guessing).")
                 elif frame.status == "failed":
                     had_failures = True
-    else:  # vnc
-        if not vnc_tool_available():
-            shot_err = "vnc tools unavailable"
-            notes.append(f"{ep['ip']}:{ep['port']}: VNC recorded without frame (tools unavailable).")
+    else:  # vnc: built-in RFB client, no external tool needed
+        frame = grab_vnc_frame(ep["ip"], ep["port"], timeout=max(timeout, 10.0))
+        if frame.status == "captured" and frame.data and shot_budget > 0:
+            frame_data = frame.data
+            shot_path = write_screenshot(capture_uuid, page_uuid, frame.data)
+            shot_status = SCREENSHOT_CAPTURED
+            shot_budget -= 1
+            screenshots_done += 1
         else:
-            frame = grab_vnc_frame(ep["ip"], ep["port"], timeout=max(timeout, 10.0))
-            if frame.status == "captured" and frame.data and shot_budget > 0:
-                frame_data = frame.data
-                shot_path = write_screenshot(capture_uuid, page_uuid, frame.data)
-                shot_status = SCREENSHOT_CAPTURED
-                shot_budget -= 1
-                screenshots_done += 1
-            else:
-                shot_status = SCREENSHOT_SKIPPED if frame.auth_required or frame.status == "skipped" else SCREENSHOT_FAILED
-                shot_err = frame.error or "vnc frame failed"
-                if frame.auth_required:
-                    notes.append(f"{ep['ip']}:{ep['port']}: VNC requires a password (skipped).")
-                elif frame.status == "failed":
-                    had_failures = True
+            shot_status = SCREENSHOT_SKIPPED if frame.auth_required or frame.status == "skipped" else SCREENSHOT_FAILED
+            shot_err = frame.error or "vnc frame failed"
+            if frame.auth_required:
+                notes.append(f"{ep['ip']}:{ep['port']}: VNC requires a password (skipped).")
+            elif frame.status == "failed":
+                had_failures = True
 
     if frame_data is not None:
         phash_val, ocr_val = average_hash(frame_data), ocr_text(frame_data)

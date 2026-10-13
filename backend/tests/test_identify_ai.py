@@ -41,6 +41,7 @@ def test_title_identifies_open_webui():
     assert identify_local_ai(title="Open WebUI", body="<html></html>") == "Open WebUI"
 
 
+# Scan-command integrity invariant; the threat model and full index live in test_nmap_command_integrity.py.
 def test_fixed_port_args_include_ai_candidates():
     profile = PortProfile(full=False, top_ports=3000)
     std = build_port_args(True, profile)

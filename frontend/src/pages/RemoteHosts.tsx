@@ -2,10 +2,10 @@ import { useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { post } from '../api';
 import { HttpBadge, endpointUrl, isDesktopPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
-import { Card, ErrorBox, Loading } from '../components/ui';
+import { Card, ErrorBox, Loading, Pager } from '../components/ui';
 import { useApp } from '../context';
-import type { WebCapture, WebHost, WebService } from '../types';
-import { relTime, useApi } from '../util';
+import type { WebCapture, WebHost, WebHostPage, WebService } from '../types';
+import { WEB_HOSTS_PAGE_SIZE, relTime, useApi } from '../util';
 
 type ViewFilter = 'all' | 'shots' | 'open';
 
@@ -56,9 +56,10 @@ function Section({ title, count, children }: { title: string; count: number; chi
 
 export default function RemoteHosts() {
   const { isAdmin } = useApp();
-  const { data, error, reload } = useApi<{ hosts: WebHost[] }>('/web-hosts', { kind: 'remote' }, 15000);
-  const active = useApi<{ running: WebCapture[]; queued: WebCapture[] }>('/web-captures/active', undefined, 4000);
   const [sp, setSp] = useSearchParams();
+  const page = Math.max(1, Number(sp.get('page')) || 1);
+  const { data, error, reload } = useApi<WebHostPage>('/web-hosts', { kind: 'remote', page, page_size: WEB_HOSTS_PAGE_SIZE }, 15000);
+  const active = useApi<{ running: WebCapture[]; queued: WebCapture[] }>('/web-captures/active', undefined, 4000);
   const q = sp.get('q') ?? '';
   const view = (sp.get('view') as ViewFilter) || 'all';
   const [busy, setBusy] = useState(false);
@@ -206,6 +207,9 @@ export default function RemoteHosts() {
             <DesktopCard key={`${c.h.device_uuid}:${c.s.scheme}:${c.s.port}`} {...c} />
           ))}
         </div>
+      )}
+      {data && data.total > WEB_HOSTS_PAGE_SIZE && (
+        <Pager page={page} pageSize={WEB_HOSTS_PAGE_SIZE} total={data.total} onPage={(p) => update({ page: p > 1 ? String(p) : null })} />
       )}
     </>
   );

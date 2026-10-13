@@ -10,7 +10,7 @@ import ssl
 from dataclasses import dataclass
 
 from ldap3 import BASE, NONE, SUBTREE, Connection, Server, Tls
-from ldap3.core.exceptions import LDAPException
+from ldap3.core.exceptions import LDAPCommunicationError, LDAPException, LDAPStartTLSError
 from ldap3.utils.conv import escape_filter_chars
 
 from ..models import ROLE_ADMIN, ROLE_VIEWER
@@ -28,6 +28,24 @@ class LdapResult:
     error: str | None = None
 
 
+class LdapBindError(LDAPException):
+    """The server answered but refused the bind (wrong DN or password, locked account)."""
+
+
+def classify_error(exc: BaseException) -> str:
+    """A short, stable reason for the UI and audit log. Raw exception text (server names, DNs, library
+    internals) stays in the application log only."""
+    if isinstance(exc, LdapBindError):
+        return "bind refused (check the bind DN and password)"
+    if isinstance(exc, LDAPStartTLSError | ssl.SSLError):
+        return "TLS negotiation or certificate verification failed"
+    if isinstance(exc, LDAPCommunicationError | OSError):
+        return "could not reach the LDAP server"
+    if isinstance(exc, LDAPException):
+        return "the LDAP server returned an error"
+    return "unexpected error (details in the application log)"
+
+
 def _server(cfg: LdapSettings) -> Server:
     tls = Tls(validate=ssl.CERT_REQUIRED if cfg.verify_tls else ssl.CERT_NONE)
     return Server(cfg.server_uri, use_ssl=cfg.server_uri.lower().startswith("ldaps://"), get_info=NONE,
@@ -42,7 +60,7 @@ def _connect(cfg: LdapSettings, server: Server, user: str | None, password: str 
         if cfg.start_tls and not cfg.server_uri.lower().startswith("ldaps://"):
             conn.start_tls()
         if not conn.bind():
-            raise LDAPException(f"bind failed: {conn.result.get('description', 'invalid credentials')}")
+            raise LdapBindError(f"bind failed: {conn.result.get('description', 'invalid credentials')}")
     except Exception:
         _unbind(conn)  # opened socket must not leak when STARTTLS or the bind fails
         raise
@@ -103,12 +121,9 @@ def ldap_authenticate(cfg: LdapSettings, username: str, password: str) -> LdapRe
         else:
             return LdapResult(False, error="user is not a member of an allowed group")
         return LdapResult(True, role=role, display_name=str(display))
-    except LDAPException as exc:
-        log.warning("LDAP authentication error: %s", exc)
-        return LdapResult(False, error=f"LDAP error: {exc}")
-    except Exception as exc:  # network errors etc.
-        log.warning("LDAP connection error: %s", exc)
-        return LdapResult(False, error=f"LDAP connection error: {exc}")
+    except Exception as exc:  # LDAP and network errors
+        log.warning("LDAP authentication error (%s): %s", type(exc).__name__, exc)
+        return LdapResult(False, error=f"LDAP error: {classify_error(exc)}")
     finally:
         _unbind(svc)  # every path, including early returns (user not found, not in an allowed group)
 
@@ -124,6 +139,7 @@ def ldap_test(cfg: LdapSettings) -> tuple[bool, str]:
         return (True, "Connected and bound successfully; user base DN found.") if ok else (
             False, "Bound successfully but the user base DN was not found.")
     except Exception as exc:
-        return False, f"LDAP test failed: {exc}"
+        log.warning("LDAP test failed (%s): %s", type(exc).__name__, exc)
+        return False, f"LDAP test failed: {classify_error(exc)}."
     finally:
         _unbind(conn)

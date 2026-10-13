@@ -1,8 +1,8 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { HttpBadge, endpointUrl, isRtspPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
-import { Card, ErrorBox, Loading } from '../components/ui';
-import type { WebHost, WebService } from '../types';
-import { relTime, useApi } from '../util';
+import { Card, ErrorBox, Loading, Pager } from '../components/ui';
+import type { WebHost, WebHostPage, WebService } from '../types';
+import { WEB_HOSTS_PAGE_SIZE, relTime, useApi } from '../util';
 
 /** A host is a real "web app" if its latest capture produced at least one usable web service. */
 const isApp = (h: WebHost) => h.services.length > 0;
@@ -83,9 +83,10 @@ function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number
 }
 
 export default function WebHosts() {
-  const { data, error } = useApi<{ hosts: WebHost[] }>('/web-hosts', { kind: 'web' }, 15000);
-  // Filter state lives in the URL (q, noapp=1, hide=kind,kind) so reload, Back and shared links keep it.
+  // Filter state lives in the URL (q, noapp=1, hide=kind,kind, page) so reload, Back and shared links keep it.
   const [sp, setSp] = useSearchParams();
+  const page = Math.max(1, Number(sp.get('page')) || 1);
+  const { data, error } = useApi<WebHostPage>('/web-hosts', { kind: 'web', page, page_size: WEB_HOSTS_PAGE_SIZE }, 15000);
   const q = sp.get('q') ?? '';
   // Hidden by default: default server pages, errors, blank shells, redirects, no-response
   const showNoApp = sp.get('noapp') === '1';
@@ -219,6 +220,9 @@ export default function WebHosts() {
             </Card>
           )}
         </>
+      )}
+      {data && data.total > WEB_HOSTS_PAGE_SIZE && (
+        <Pager page={page} pageSize={WEB_HOSTS_PAGE_SIZE} total={data.total} onPage={(p) => update({ page: p > 1 ? String(p) : null })} />
       )}
     </>
   );
