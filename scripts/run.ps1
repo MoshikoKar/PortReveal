@@ -515,13 +515,47 @@ if ($Mode -eq "dev") {
 # production
 Write-Log "Starting production on ${listenHost}:${listenPort} (env: .env.production, DB: Docker Postgres)"
 
-# Web-capture tools stay on the host (Postgres is the only container). Soft-warn so
-# RDP/RTSP stills do not fail silently after deploy.
-if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-    Write-Log "ffmpeg not on PATH — RTSP/VNC web-capture stills will soft-skip" "WARN"
+# Scoop / WinGet installs often land on User PATH after the current process started
+# (Task Scheduler especially). Prepend common locations before tool checks.
+$scoopShims = Join-Path $env:USERPROFILE "scoop\shims"
+if (Test-Path -LiteralPath $scoopShims) {
+    if ($env:Path -notlike "*$scoopShims*") { $env:Path = "$scoopShims;$env:Path" }
 }
-if (-not (Get-Command wfreerdp -ErrorAction SilentlyContinue)) {
-    Write-Log "wfreerdp not on PATH — RDP web-capture stills will soft-skip (install FreeRDP for Windows)" "WARN"
+# Nightly FreeRDP may only ship sdl-freerdp; ensure a wfreerdp name for checks + older builds.
+$sdl = Join-Path $env:USERPROFILE "scoop\apps\freerdp-nightly\current\sdl-freerdp.exe"
+$wShim = Join-Path $scoopShims "wfreerdp.exe"
+if ((Test-Path -LiteralPath $sdl) -and -not (Test-Path -LiteralPath $wShim) -and (Test-Path -LiteralPath $scoopShims)) {
+    Copy-Item -LiteralPath $sdl -Destination $wShim -Force -ErrorAction SilentlyContinue
+}
+
+# Web-capture tools stay on the host (Postgres is the only container). Soft-warn so
+# RDP/RTSP stills do not fail silently after deploy. Auto-install once when missing
+# unless NF_SKIP_CAPTURE_TOOLS=1 (same flag as npm run setup).
+$haveFfmpeg = [bool](Get-Command ffmpeg -ErrorAction SilentlyContinue)
+$haveFreerdp = [bool](
+    (Get-Command wfreerdp -ErrorAction SilentlyContinue) -or
+    (Get-Command xfreerdp -ErrorAction SilentlyContinue) -or
+    (Get-Command sdl-freerdp -ErrorAction SilentlyContinue)
+)
+$havePlaywrightMarker = Test-Path -LiteralPath (Join-Path $env:USERPROFILE "AppData\Local\ms-playwright")
+if ((-not $haveFfmpeg -or -not $haveFreerdp -or -not $havePlaywrightMarker) -and $env:NF_SKIP_CAPTURE_TOOLS -ne "1") {
+    $captureScript = Join-Path $PSScriptRoot "install-capture-tools.ps1"
+    if (Test-Path -LiteralPath $captureScript) {
+        Write-Log "Web-capture tools incomplete — running scripts\install-capture-tools.ps1 (soft-fail)"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $captureScript
+        $haveFfmpeg = [bool](Get-Command ffmpeg -ErrorAction SilentlyContinue)
+        $haveFreerdp = [bool](
+            (Get-Command wfreerdp -ErrorAction SilentlyContinue) -or
+            (Get-Command xfreerdp -ErrorAction SilentlyContinue) -or
+            (Get-Command sdl-freerdp -ErrorAction SilentlyContinue)
+        )
+    }
+}
+if (-not $haveFfmpeg) {
+    Write-Log "ffmpeg not on PATH — RTSP/VNC web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
+}
+if (-not $haveFreerdp) {
+    Write-Log "FreeRDP not on PATH — RDP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
 }
 
 Start-DockerDb

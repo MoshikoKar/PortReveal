@@ -33,13 +33,15 @@ git clone https://github.com/MoshikoKar/network_finder.git
 cd network_finder
 npm install
 npm run setup
-backend\.venv\Scripts\python.exe -m playwright install chromium
 npm run dev
 ```
 
 `npm run setup` creates `.env` from `.env.example`, sets up `backend/.venv`,
-installs Python dependencies, and migrates the database. Install Playwright
-Chromium before the first run (needed for web-capture screenshots).
+installs Python dependencies, and migrates the database. On **Windows** it also
+runs `scripts/install-capture-tools.ps1` (Playwright Chromium, ffmpeg via winget,
+FreeRDP via Scoop) with soft-fail so missing optional tools do not block setup.
+Skip that step with `npm run setup -- --skip-capture-tools` or
+`NF_SKIP_CAPTURE_TOOLS=1`. Re-run tools alone with `npm run setup:capture-tools`.
 
 Open **http://localhost:5173** and sign in with **admin / admin** (development
 seed). The seed also creates the network *Mock Lab* (`10.99.0.0/24`) and queues a
@@ -47,7 +49,8 @@ baseline scan so the dashboard fills within seconds.
 
 | Task | Command |
 |---|---|
-| Install | `npm install` + `npm run setup` + `backend\.venv\Scripts\python.exe -m playwright install chromium` |
+| Install | `npm install` + `npm run setup` (Windows also installs capture tools) |
+| Capture tools only (Windows) | `npm run setup:capture-tools` |
 | Configure | edit `.env` (safe defaults; created from `.env.example`) |
 | Start both sides | `npm run dev` |
 | Backend / frontend only | `npm run dev:backend` / `npm run dev:frontend` |
@@ -108,13 +111,13 @@ or **Scans → Web captures**.
 
 | Target | Tool on `PATH` | Install |
 |---|---|---|
-| HTTP(S) screenshots | Playwright Chromium | `backend\.venv\Scripts\python.exe -m playwright install chromium` |
-| RTSP stills / live MJPEG, VNC stills | `ffmpeg` | Windows: [ffmpeg.org](https://ffmpeg.org/download.html) or `winget install ffmpeg`. Linux: `sudo apt-get install -y ffmpeg`. **Preinstalled in Docker.** |
-| RDP stills | `wfreerdp` (Windows) or `xfreerdp` (Linux) | Windows: install a FreeRDP build so `wfreerdp` is on `PATH` (e.g. [FreeRDP releases](https://github.com/FreeRDP/FreeRDP/releases)). Linux: `sudo apt-get install -y freerdp2-x11`. **Preinstalled in Docker.** |
+| HTTP(S) screenshots | Playwright Chromium | Windows: included in `npm run setup` / `npm run setup:capture-tools`. Manual: `backend\.venv\Scripts\python.exe -m playwright install chromium` |
+| RTSP stills / live MJPEG, VNC stills | `ffmpeg` | Windows: `npm run setup:capture-tools` (winget) or `winget install ffmpeg` then ensure the `bin` folder is on `PATH`. Linux: `sudo apt-get install -y ffmpeg`. **Preinstalled in Docker.** |
+| RDP stills | `wfreerdp` / `sdl-freerdp` (Windows) or `xfreerdp` (Linux) | Windows: `npm run setup:capture-tools` (Scoop `freerdp-nightly` + `wfreerdp` shim). Official FreeRDP does not ship Windows release zips. Linux: `sudo apt-get install -y freerdp2-x11`. **Preinstalled in Docker.** |
 
 Empty credentials only — hosts that require NLA/passwords are recorded without a
-frame. Confirm tools with `ffmpeg -version` and `wfreerdp /version` or
-`xfreerdp --version`, then restart the app.
+frame. Confirm tools with `ffmpeg -version` and `wfreerdp /version` (or
+`sdl-freerdp` / `xfreerdp --version`), then restart the app.
 
 Any inventory port identified as **rtsp** is treated as a stream page; use
 **Watch live** on the host preview for the server-side RTSP→MJPEG proxy.
@@ -213,18 +216,21 @@ Recommended when the scanner is a **Windows PC on the LAN** (Npc + Npcap).
 Docker Desktop runs **Postgres only**; the app and nmap stay on the host.
 
 Requirements: Node.js 20.19+, Python 3.10+, nmap+Npc, Docker Desktop, and on
-`PATH`: **ffmpeg** (RTSP/VNC) plus **FreeRDP** as `wfreerdp` if you want RDP
-stills. Copy `.env.production.example` → `.env.production` and set at least
-`POSTGRES_PASSWORD` and `APP_SECRET_KEY`.
+`PATH`: **ffmpeg** (RTSP/VNC) plus **FreeRDP** (`wfreerdp` / `sdl-freerdp`) if you
+want RDP stills. Copy `.env.production.example` → `.env.production` and set at
+least `POSTGRES_PASSWORD` and `APP_SECRET_KEY`.
 
-Install Chromium for the same user that runs the app (Playwright pip package
-does not download the browser), then put ffmpeg / FreeRDP on `PATH`:
+`npm run setup` (and production `run.ps1` when tools are missing) installs
+Playwright Chromium, ffmpeg, and Scoop FreeRDP for the **same Windows user**
+that runs the app:
 
 ```powershell
+npm install
 npm run setup
-backend\.venv\Scripts\python.exe -m playwright install chromium
-# ffmpeg: winget install ffmpeg   (or add a portable build to PATH)
-# FreeRDP: install a Windows build so `wfreerdp` resolves (see Web capture above)
+# or only capture tools:
+npm run setup:capture-tools
+ffmpeg -version
+wfreerdp /version
 ```
 
 | Task | Command |
@@ -267,7 +273,7 @@ exclusions → schedule → SMTP → optional LDAP → recipients → baseline s
 
 1. Take a backup set (`.\scripts\backup.ps1`) and record the current Git revision
    (`git rev-parse HEAD`) with the stamp.
-2. `git pull`, `npm run setup`, reinstall Chromium if the Playwright pin changed, then
+2. `git pull`, `npm run setup` (reinstalls capture tools / Chromium when needed), then
    `.\scripts\run.ps1 -Mode production -ForceRestart`.
 3. Confirm `/api/health`, sign-in, and a smoke check of inventory before closing the
    window. Migrations run automatically on start.
@@ -542,9 +548,9 @@ recovery, see the [operations runbook](docs/runbook/runbook.md).
 | Frontend not loading | `npm install` (Node 20.19+). Production serves UI on `APP_PORT`. |
 | `python -m venv` fails (Debian/Ubuntu) | `sudo apt-get install -y python3-venv`, then `npm run setup`. |
 | Stale Python deps | `npm run setup -- --force` |
-| Browser unavailable at capture time | `backend\.venv\Scripts\python.exe -m playwright install chromium` as the app user, then restart. |
-| ffmpeg unavailable | Install ffmpeg; confirm `ffmpeg -version`, then restart. Preinstalled in Docker. |
-| freerdp unavailable | Install FreeRDP (`wfreerdp` on Windows, `xfreerdp` via `freerdp2-x11` on Debian/Ubuntu); confirm on `PATH`, then restart. Preinstalled in Docker. |
+| Browser unavailable at capture time | Windows: `npm run setup:capture-tools` as the app user, then restart. Manual: `backend\.venv\Scripts\python.exe -m playwright install chromium`. |
+| ffmpeg unavailable | Windows: `npm run setup:capture-tools` (fixes winget PATH). Confirm `ffmpeg -version`, then restart. Preinstalled in Docker. |
+| freerdp unavailable | Windows: `npm run setup:capture-tools` (Scoop + `wfreerdp` shim from `sdl-freerdp`). Linux: `sudo apt-get install -y freerdp2-x11`. Confirm on `PATH`, then restart. Preinstalled in Docker. |
 | Scan stuck after restart | In-flight scans are marked failed; start a new one. |
 | App exits at start: `APP_SECRET_KEY must be set` | Production needs an explicit key. Set it in `.env.production` / `.env` (`openssl rand -hex 32`), or copy `data/.secret_key` from an earlier run to keep stored SMTP/LDAP passwords. |
 | Login HTTP 429 | Wait out the login window (`LOGIN_WINDOW_MINUTES`, default 15). |

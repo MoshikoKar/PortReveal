@@ -11,6 +11,7 @@
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",
+    "setup:capture-tools": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-capture-tools.ps1",
     "dev": "node scripts/dev.mjs",
     "dev:backend": "node scripts/dev.mjs backend",
     "dev:frontend": "node scripts/dev.mjs frontend",

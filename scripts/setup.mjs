@@ -78,12 +78,31 @@ export function reportNmap() {
   else log(`${c.yellow('nmap NOT detected')} - the app will start, but only the mock scanner can run. Install nmap for real scans.`);
 }
 
+/** Windows host: Playwright Chromium + ffmpeg + FreeRDP (soft-fail; optional for scans). */
+export function ensureCaptureTools() {
+  if (!IS_WIN) return;
+  if (process.env.NF_SKIP_CAPTURE_TOOLS === '1') {
+    log('skipping capture-tools install (NF_SKIP_CAPTURE_TOOLS=1)');
+    return;
+  }
+  const script = join(ROOT, 'scripts', 'install-capture-tools.ps1');
+  if (!existsSync(script)) return;
+  log('ensuring web-capture host tools (Playwright / ffmpeg / FreeRDP)');
+  const status = run('powershell.exe', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
+  ]);
+  if (status !== 0) {
+    log(c.yellow('capture-tools install reported issues — RDP/RTSP/HTTP stills may soft-skip until tools are on PATH'));
+  }
+}
+
 export function ensureAll({ quiet = false } = {}) {
   ensureEnvFile();
   ensureNode();
   ensurePython();
   migrate();
   reportNmap();
+  ensureCaptureTools();
   if (!quiet) log(c.green('setup complete. Start the app with: npm run dev'));
 }
 
@@ -93,5 +112,6 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   ensurePython({ force: process.argv.includes('--force') });
   migrate();
   reportNmap();
+  if (!process.argv.includes('--skip-capture-tools')) ensureCaptureTools();
   log(c.green('setup complete. Start the app with: npm run dev'));
 }

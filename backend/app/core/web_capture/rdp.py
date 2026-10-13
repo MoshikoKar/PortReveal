@@ -14,15 +14,25 @@ from .screenshot import ScreenshotResult, _to_webp
 log = logging.getLogger(__name__)
 
 
+# Windows Scoop nightlies ship sdl-freerdp; Linux packages ship xfreerdp.
+_FREERDP_CLIENTS = (
+    "wfreerdp",
+    "xfreerdp",
+    "wlfreerdp",
+    "sdl-freerdp",
+    "sdl3-freerdp",
+)
+
+
 def freerdp_available() -> bool:
-    for name in ("wfreerdp", "xfreerdp", "wlfreerdp", "freerdp"):
+    for name in (*_FREERDP_CLIENTS, "freerdp"):
         if shutil.which(name):
             return True
     return False
 
 
 def _freerdp_bin() -> str | None:
-    for name in ("wfreerdp", "xfreerdp", "wlfreerdp"):
+    for name in _FREERDP_CLIENTS:
         p = shutil.which(name)
         if p:
             return p
