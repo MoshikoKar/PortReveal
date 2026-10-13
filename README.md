@@ -492,6 +492,10 @@ Large CIDRs are chunked with bounded parallelism; failed/partial scans never
 remove inventory. Discovery caps probe RTT, uses one retry, and bounds probe
 rate (min and max) on both local and routed/VPN paths so silent ranges finish
 without flooding a remote site — duration follows live hosts, not CIDR size.
+Networks marked **Reached over VPN (site-to-site)** (Settings → Networks) are
+scanned serially with polite discovery hard-capped at 150 probes/s (small
+chunks, VPN-latency RTT) and port/service batches of 8 capped at 300 packets/s,
+so scans take longer but never burst into the tunnel.
 Discovery uses ICMP/TCP (rate-capped ARP on local segments). No scan or
 enrichment stage sends UDP. Service detection runs `--version-light` and never
 probes telephony signaling ports (H.323 1720, SCCP 2000/2443, CTI 2748, SIP

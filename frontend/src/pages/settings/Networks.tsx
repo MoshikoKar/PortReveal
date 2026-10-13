@@ -5,7 +5,11 @@ import { useApp } from '../../context';
 import type { Network } from '../../types';
 import { NETWORK_ZONES, fmtTime, useApi, useInFlight } from '../../util';
 
-type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean; zone: string };
+type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean; zone: string; vpn_s2s: boolean };
+
+const VPN_S2S_TIP = 'Fast discovery sends bursts of probes that can saturate a site-to-site tunnel, make it renegotiate, '
+  + 'or knock over fragile appliances at the remote site. When checked, this network is scanned one chunk at a time '
+  + 'with polite timing and a hard probe-rate cap. Scans take longer but do not interrupt the tunnel.';
 
 /** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it). */
 export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCount?: (n: number) => void }) {
@@ -31,7 +35,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
     setSaveError(null);
     setSaving(true);
     try {
-      const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled, zone: draft.zone || null };
+      const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled, zone: draft.zone || null, vpn_s2s: draft.vpn_s2s };
       if (draft.id) await put(`/networks/${draft.id}`, body);
       else await post('/networks', body);
       setDraft(null);
@@ -77,7 +81,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
     <Card
       title="Network scopes"
       flush
-      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ name: '', cidr: '', description: '', enabled: true, zone: '' })}>Add network</button>}
+      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ name: '', cidr: '', description: '', enabled: true, zone: '', vpn_s2s: false })}>Add network</button>}
     >
       {!compact && (
         <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -93,7 +97,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
             <tbody>
               {data.map((n) => (
                 <tr key={n.id}>
-                  <td><strong>{n.name}</strong>{n.description && <div className="muted small">{n.description}</div>}</td>
+                  <td><strong>{n.name}</strong>{n.vpn_s2s && <> <span className="badge outline" title={VPN_S2S_TIP}>VPN</span></>}{n.description && <div className="muted small">{n.description}</div>}</td>
                   <td className="mono">{n.cidr}</td>
                   <td>{n.zone ?? <span className="muted">—</span>}</td>
                   <td>{n.active_count ?? 0} active / {n.device_count ?? 0}</td>
@@ -101,7 +105,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
                   <td>{n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
                   {isAdmin && (
                     <td className="right nowrap">
-                      <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '' })}>Edit</button>
+                      <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '', vpn_s2s: n.vpn_s2s })}>Edit</button>
                       {n.baseline_at && <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => resetBaseline(n)}>Reset baseline</button>}
                       <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => remove(n)}>Delete</button>
                     </td>
@@ -133,6 +137,8 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
             </select>
             <span className="hint">Admin services and databases score higher in users, iot and guest zones. Changing it re-scores this network's devices.</span></label>
           <label className="check"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />Include in the scheduled daily scan</label>
+          <label className="check" title={VPN_S2S_TIP}><input type="checkbox" checked={draft.vpn_s2s} onChange={(e) => setDraft({ ...draft, vpn_s2s: e.target.checked })} />Reached over VPN (site-to-site)</label>
+          <span className="hint">{VPN_S2S_TIP}</span>
           <ErrorBox error={saveError} />
         </Modal>
       )}

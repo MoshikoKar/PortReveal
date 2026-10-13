@@ -36,7 +36,7 @@ from ..netutils import MAX_SCAN_ADDRESSES, AddressSet, TargetError, ip_sort_key
 from ..scanner import scanner_status
 from ..scanner.identify_truenas import looks_like_truenas
 from ..scanner.mock_scanner import LAST_STEP, MockScanner
-from ..scanner.nmap_scanner import NmapScanner, nmap_is_privileged
+from ..scanner.nmap_scanner import VPN_PORT_MAX_RATE, NmapScanner, nmap_is_privileged
 from ..scanner.types import (
     HostObservation,
     PortProfile,
@@ -54,6 +54,28 @@ from .web_capture.auto import maybe_enqueue_auto_web_capture
 from .web_capture.manager import web_capture_manager
 
 log = logging.getLogger(__name__)
+
+VPN_S2S_DISCOVERY_CHUNK = 256
+VPN_S2S_PORT_BATCH = 8
+
+
+def effective_scan_settings(cfg: ScanSettings, vpn_s2s: bool) -> ScanSettings:
+    """Scan settings for one scan. VPN S2S networks run serially with polite (rate-capped) discovery
+    and small chunks/batches so the tunnel never sees parallel bursts; stored settings are untouched."""
+    if not vpn_s2s:
+        return cfg
+    return cfg.model_copy(update={
+        "timing": "polite",
+        "parallelism": 1,
+        "discovery_chunk_size": min(cfg.discovery_chunk_size, VPN_S2S_DISCOVERY_CHUNK),
+        "port_batch_size": min(cfg.port_batch_size, VPN_S2S_PORT_BATCH),
+    })
+
+
+def vpn_port_timing(timing: str) -> str:
+    """Port-stage timing on VPN S2S networks. -T2 waits 400 ms between probes, so a 3000-port service
+    scan would outlive the host timeout; the stage is capped by --max-rate instead and only "fast" drops."""
+    return "normal" if timing == "fast" else timing
 
 
 def exclusion_set(db) -> AddressSet:
@@ -169,7 +191,11 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             scan = db.get(Scan, scan_id)
             if scan is None:
                 return SCAN_FAILED
-            cfg = get_section(db, ScanSettings)
+            stored_cfg = get_section(db, ScanSettings)
+            net = db.get(Network, scan.network_id) if scan.network_id is not None else None
+            vpn_s2s = bool(net is not None and net.vpn_s2s)
+            cfg = effective_scan_settings(stored_cfg, vpn_s2s)
+            ctx.vpn_s2s = vpn_s2s
             targets, excluded_n = scan_targets(db, scan)
             if not targets:
                 raise ScanStageError("no addresses to scan (all targets are excluded or empty)")
@@ -194,6 +220,12 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             "scan %s started: %s, %d addresses (%d excluded), scanner=%s",
             scan_id, scan_type, len(targets), excluded_n, scanner.mode,
         )
+        if vpn_s2s:
+            log.info(
+                "scan %s: VPN S2S profile (serial, polite discovery, chunks of %d, port batches of %d, "
+                "port max-rate %d/s)",
+                scan_id, cfg.discovery_chunk_size, cfg.port_batch_size, VPN_PORT_MAX_RATE,
+            )
 
         has_ports = scan_type in (SCAN_STANDARD, SCAN_FULL)
         # Discovery is 20% of overall progress on standard/full; UI shows stage-local % separately.
@@ -239,10 +271,11 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             profile = PortProfile(
                 full=full,
                 top_ports=cfg.top_ports,
-                timing=cfg.timing,
+                timing=vpn_port_timing(stored_cfg.timing) if vpn_s2s else cfg.timing,
                 host_timeout_minutes=cfg.full_host_timeout_minutes if full else cfg.host_timeout_minutes,
                 os_detection=cfg.os_detection,
                 batch_size=min(cfg.port_batch_size, 16) if full else cfg.port_batch_size,
+                max_rate=VPN_PORT_MAX_RATE if vpn_s2s else None,
             )
             ips = sorted(live, key=ip_sort_key)
             batches = [ips[i:i + profile.batch_size] for i in range(0, len(ips), profile.batch_size)]

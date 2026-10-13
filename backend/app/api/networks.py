@@ -23,6 +23,7 @@ class NetworkIn(BaseModel):
     description: str | None = Field(None, max_length=1000)
     enabled: bool = True
     zone: str | None = None
+    vpn_s2s: bool = False
 
     @field_validator("zone")
     @classmethod
@@ -75,7 +76,7 @@ def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_
                    user: User = Depends(require_admin)):
     _check_name(db, body.name)
     net = Network(name=body.name, cidr=body.cidr, description=body.description, enabled=body.enabled,
-                  zone=body.zone)
+                  zone=body.zone, vpn_s2s=body.vpn_s2s)
     db.add(net)
     db.flush()
     audit(db, user.username, "network.create", net.name, body.model_dump(), client_ip(request))
@@ -90,12 +91,14 @@ def update_network(network_id: int, body: NetworkIn, request: Request, db: Sessi
     if net is None:
         raise HTTPException(404, "Network not found")
     _check_name(db, body.name, network_id)
-    before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled, "zone": net.zone}
+    before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled, "zone": net.zone,
+              "vpn_s2s": net.vpn_s2s}
     if net.cidr != body.cidr:
         # A different scope needs a fresh baseline, otherwise every host in the new range would alert
         net.baseline_scan_id = None
         net.baseline_at = None
     net.name, net.cidr, net.description, net.enabled = body.name, body.cidr, body.description, body.enabled
+    net.vpn_s2s = body.vpn_s2s
     zone_changed = net.zone != body.zone
     net.zone = body.zone
     audit(db, user.username, "network.update", net.name, {"before": before, "after": body.model_dump()},

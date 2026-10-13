@@ -48,6 +48,7 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
         "description": n.description,
         "enabled": n.enabled,
         "zone": n.zone,
+        "vpn_s2s": bool(n.vpn_s2s),
         "baseline_scan_id": n.baseline_scan_id,
         "baseline_at": n.baseline_at,
         "created_at": n.created_at,

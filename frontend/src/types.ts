@@ -424,6 +424,7 @@ export interface Network {
   description: string | null;
   enabled: boolean;
   zone: string | null;
+  vpn_s2s: boolean;
   baseline_scan_id: number | null;
   baseline_at: string | null;
   created_at: string;

@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -184,6 +185,8 @@ class Network(Base):
     description: Mapped[str | None] = mapped_column(Text)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     zone: Mapped[str | None] = mapped_column(String(20))  # NETWORK_ZONES; weights the exposure score
+    # Reached over a site-to-site VPN: scans use a serial, rate-capped profile so the tunnel stays up.
+    vpn_s2s: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     baseline_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

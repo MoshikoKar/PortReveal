@@ -81,6 +81,7 @@ class PortProfile:
     host_timeout_minutes: int = 15
     os_detection: bool = False
     batch_size: int = 32
+    max_rate: int | None = None  # packets/s cap for every nmap run of the stage (VPN S2S networks)
 
 
 class ScanCancelled(Exception):
@@ -102,6 +103,8 @@ class ScanContext:
         self._lock = threading.Lock()
         # Current IPs of inventory devices already identified as TrueNAS / FreeNAS.
         self.known_truenas_ips: set[str] = set()
+        # Network is reached over a site-to-site VPN: discovery uses the rate-capped VPN profile.
+        self.vpn_s2s = False
 
     @property
     def cancelled(self) -> bool:

@@ -64,6 +64,13 @@ _DISCOVERY_MAX_RATE_REMOTE = {"polite": 400, "normal": 1000, "fast": 2000}
 # waiting out nmap's adaptive timeouts; live hosts answer well inside these on routed/VPN paths.
 _DISCOVERY_RTT_MS = {"polite": (300, 1200), "normal": (200, 800), "fast": (100, 400)}
 _DISCOVERY_RTT_MS_REMOTE = {"polite": (200, 800), "normal": (100, 400), "fast": (50, 250)}
+# Site-to-site VPN networks (admin flag): a fixed low ceiling regardless of timing, looser RTT for
+# tunnel latency and no forced parallelism, so discovery never bursts into the tunnel.
+_DISCOVERY_MIN_RATE_VPN = 50
+_DISCOVERY_MAX_RATE_VPN = 150
+_DISCOVERY_RTT_MS_VPN = (400, 1500)
+# Packet-rate cap for every port/service nmap run against a VPN S2S network.
+VPN_PORT_MAX_RATE = 300
 _DISCOVERY_RETRIES = 1
 _DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
@@ -110,7 +117,8 @@ def nmap_version(nmap_path: str) -> str | None:
     return "unknown" if out.returncode == 0 else None
 
 
-def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = False) -> list[str]:
+def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = False,
+                         vpn_s2s: bool = False) -> list[str]:
     # -sn: host discovery only. Reverse DNS stays on (nmap default) for hostnames of live hosts.
     # TCP probes stay enabled even behind Docker NAT; discovery_host_is_live() drops
     # RST/conn-refused false positives that have no MAC.
@@ -119,16 +127,16 @@ def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = Fals
         args += ["--privileged", "-PE", "-PP", f"-PS{_DISCOVERY_TCP}", "-PA80,443,3389"]
     else:
         args += ["--unprivileged", f"-PS{_DISCOVERY_TCP}"]
-    initial_rtt, max_rtt = discovery_rtt_ms(timing, local_l2=local_l2)
+    initial_rtt, max_rtt = discovery_rtt_ms(timing, local_l2=local_l2, vpn_s2s=vpn_s2s)
     args += [
         _TIMING.get(timing, "-T3"),
         "--max-retries", str(_DISCOVERY_RETRIES),
-        "--min-rate", str(discovery_min_rate(timing, local_l2=local_l2)),
+        "--min-rate", str(discovery_min_rate(timing, local_l2=local_l2, vpn_s2s=vpn_s2s)),
         "--initial-rtt-timeout", f"{initial_rtt}ms",
         "--max-rtt-timeout", f"{max_rtt}ms",
     ]
-    if local_l2:
-        args += ["--max-rate", str(discovery_max_rate(timing, local_l2=True))]
+    if local_l2 or vpn_s2s:
+        args += ["--max-rate", str(discovery_max_rate(timing, local_l2=local_l2, vpn_s2s=vpn_s2s))]
     else:
         args += [
             "--min-parallelism", str(_DISCOVERY_MIN_PARALLELISM),
@@ -137,22 +145,30 @@ def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = Fals
     return args
 
 
-def discovery_min_rate(timing: str, *, local_l2: bool = False) -> int:
+def discovery_min_rate(timing: str, *, local_l2: bool = False, vpn_s2s: bool = False) -> int:
+    if vpn_s2s:
+        return _DISCOVERY_MIN_RATE_VPN
     table = _DISCOVERY_MIN_RATE if local_l2 else _DISCOVERY_MIN_RATE_REMOTE
     return table.get(timing, table["normal"])
 
 
-def discovery_max_rate(timing: str, *, local_l2: bool = False) -> int:
-    table = _DISCOVERY_MAX_RATE_LOCAL if local_l2 else _DISCOVERY_MAX_RATE_REMOTE
-    maximum = table.get(timing, table["normal"])
-    minimum = discovery_min_rate(timing, local_l2=local_l2)
+def discovery_max_rate(timing: str, *, local_l2: bool = False, vpn_s2s: bool = False) -> int:
+    if vpn_s2s:
+        maximum = _DISCOVERY_MAX_RATE_VPN
+    else:
+        table = _DISCOVERY_MAX_RATE_LOCAL if local_l2 else _DISCOVERY_MAX_RATE_REMOTE
+        maximum = table.get(timing, table["normal"])
+    minimum = discovery_min_rate(timing, local_l2=local_l2, vpn_s2s=vpn_s2s)
     assert maximum >= minimum, "discovery max-rate must be >= min-rate"
     return maximum
 
 
-def discovery_rtt_ms(timing: str, *, local_l2: bool = False) -> tuple[int, int]:
-    table = _DISCOVERY_RTT_MS if local_l2 else _DISCOVERY_RTT_MS_REMOTE
-    initial, maximum = table.get(timing, table["normal"])
+def discovery_rtt_ms(timing: str, *, local_l2: bool = False, vpn_s2s: bool = False) -> tuple[int, int]:
+    if vpn_s2s:
+        initial, maximum = _DISCOVERY_RTT_MS_VPN
+    else:
+        table = _DISCOVERY_RTT_MS if local_l2 else _DISCOVERY_RTT_MS_REMOTE
+        initial, maximum = table.get(timing, table["normal"])
     assert 0 < initial <= maximum, "discovery RTT caps must be positive and ordered"
     return initial, maximum
 
@@ -166,7 +182,8 @@ def discovery_host_is_live(host: HostObservation) -> bool:
     return host.reason in _TRUSTED_DISCOVERY_REASONS
 
 
-def discovery_timeout(targets: list[str], timing: str, *, local_l2: bool = False) -> float:
+def discovery_timeout(targets: list[str], timing: str, *, local_l2: bool = False,
+                      vpn_s2s: bool = False) -> float:
     """Worst case for a chunk where no address answers (every probe sent with all retries), plus margin."""
     addresses = 0
     for t in targets:
@@ -176,7 +193,8 @@ def discovery_timeout(targets: list[str], timing: str, *, local_l2: bool = False
             addresses += 1  # hostname
     # TCP SYN list + echo/timestamp + 3 ACK
     probes = len(_DISCOVERY_TCP.split(",")) + 5
-    worst = addresses * probes * (_DISCOVERY_RETRIES + 1) / discovery_min_rate(timing, local_l2=local_l2)
+    worst = addresses * probes * (_DISCOVERY_RETRIES + 1) / discovery_min_rate(
+        timing, local_l2=local_l2, vpn_s2s=vpn_s2s)
     return max(DISCOVERY_TIMEOUT_S, worst * 1.5)
 
 
@@ -200,6 +218,7 @@ def build_port_args(privileged: bool, profile: PortProfile) -> list[str]:
         "--host-timeout", f"{int(profile.host_timeout_minutes)}m",
         "--min-hostgroup", str(max(1, int(profile.batch_size))),
     ]
+    args += _max_rate_args(profile)
     if profile.os_detection and privileged:
         args += ["-O", "--osscan-limit", "--max-os-tries", "1"]
     return args
@@ -218,7 +237,15 @@ def build_fixed_port_args(privileged: bool, profile: PortProfile, ports: tuple[i
         "--host-timeout", f"{int(profile.host_timeout_minutes)}m",
         "--min-hostgroup", str(max(1, int(profile.batch_size))),
     ]
+    args += _max_rate_args(profile)
     return args
+
+
+def _max_rate_args(profile: PortProfile) -> list[str]:
+    if profile.max_rate is None:
+        return []
+    assert profile.max_rate > 0, "port-stage max-rate must be positive"
+    return ["--max-rate", str(int(profile.max_rate))]
 
 
 def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
@@ -259,7 +286,11 @@ class NmapScanner:
     def discover(self, targets: list[str], ctx: ScanContext) -> StageResult:
         bind = resolve_bind(self.exe, targets, self.privileged)
         local_l2 = bind.device is not None
-        if not local_l2:
+        vpn = ctx.vpn_s2s
+        if vpn:
+            log.info("scan %s: VPN S2S discovery profile (min-rate %d, max-rate %d, RTT %s ms)",
+                     ctx.scan_id, _DISCOVERY_MIN_RATE_VPN, _DISCOVERY_MAX_RATE_VPN, _DISCOVERY_RTT_MS_VPN)
+        elif not local_l2:
             log.warning(
                 "scan %s: no local ethernet overlaps targets — ARP/MAC unavailable "
                 "(typical on Docker Desktop / remote VPS). Using remote discovery "
@@ -267,9 +298,9 @@ class NmapScanner:
                 "silent phones/IoT need a LAN/host-network scan.",
                 ctx.scan_id,
             )
-        args = build_discovery_args(bind.privileged, self.timing, local_l2=local_l2)
+        args = build_discovery_args(bind.privileged, self.timing, local_l2=local_l2, vpn_s2s=vpn)
         run = self._run(
-            args, targets, discovery_timeout(targets, self.timing, local_l2=local_l2),
+            args, targets, discovery_timeout(targets, self.timing, local_l2=local_l2, vpn_s2s=vpn),
             ctx, "discovery", bind=bind,
         )
         hosts = [h for h in run.hosts if discovery_host_is_live(h)]
