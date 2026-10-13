@@ -741,3 +741,45 @@ def test_auto_web_capture_skips_unchanged_hosts(db):
     db.commit()
     scan(ScriptedScanner(hosts), network_id=net.id)
     assert db.scalar(select(func.count(WebCapture.id))) == 1  # unchanged inventory: no second job
+
+
+def test_grab_rdp_frame_tries_tls_first_for_logon_screen(monkeypatch, tmp_path):
+    """Shodan-style: /sec:tls + empty creds can yield a pre-auth logon bitmap."""
+    from io import BytesIO
+    from pathlib import Path
+
+    from PIL import Image
+
+    from app.core.web_capture import rdp as rdp_mod
+
+    calls: list[list[str]] = []
+
+    def fake_run(exe: str, args: list[str], *, timeout: float):
+        calls.append(list(args))
+        shot = next(a for a in args if a.startswith("/screenshot:"))
+        path = Path(shot.split(":", 1)[1])
+        buf = BytesIO()
+        Image.new("RGB", (64, 48), (30, 40, 50)).save(buf, format="BMP")
+        path.write_bytes(buf.getvalue())
+        return 0, ""
+
+    monkeypatch.setattr(rdp_mod, "_freerdp_bin", lambda: "wfreerdp")
+    monkeypatch.setattr(rdp_mod, "_run_freerdp", fake_run)
+    shot = rdp_mod.grab_rdp_frame("10.0.0.205", 3389)
+    assert shot.status == "captured"
+    assert shot.data
+    assert calls and "/sec:tls" in calls[0]
+
+
+def test_grab_rdp_frame_nla_required_is_skipped_auth(monkeypatch):
+    from app.core.web_capture import rdp as rdp_mod
+
+    def fake_run(exe: str, args: list[str], *, timeout: float):
+        return 1, "ERRCONNECT_AUTHENTICATION_FAILED nla credssp"
+
+    monkeypatch.setattr(rdp_mod, "_freerdp_bin", lambda: "wfreerdp")
+    monkeypatch.setattr(rdp_mod, "_run_freerdp", fake_run)
+    shot = rdp_mod.grab_rdp_frame("10.0.0.205", 3389)
+    assert shot.status == "skipped"
+    assert shot.auth_required is True
+    assert shot.error == "skipped_auth"

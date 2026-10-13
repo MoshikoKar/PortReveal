@@ -115,9 +115,13 @@ or **Scans → Web captures**.
 | RTSP stills / live MJPEG, VNC stills | `ffmpeg` | Windows: `npm run setup:capture-tools` (winget) or `winget install ffmpeg` then ensure the `bin` folder is on `PATH`. Linux: `sudo apt-get install -y ffmpeg`. **Preinstalled in Docker.** |
 | RDP stills | `wfreerdp` / `sdl-freerdp` (Windows) or `xfreerdp` (Linux) | Windows: `npm run setup:capture-tools` (Scoop `freerdp-nightly` + `wfreerdp` shim). Official FreeRDP does not ship Windows release zips. Linux: `sudo apt-get install -y freerdp2-x11`. **Preinstalled in Docker.** |
 
-Empty credentials only — hosts that require NLA/passwords are recorded without a
-frame. Confirm tools with `ffmpeg -version` and `wfreerdp /version` (or
-`sdl-freerdp` / `xfreerdp --version`), then restart the app.
+Empty credentials only — no password guessing. RDP stills use FreeRDP `/sec:tls`
+first so hosts **without NLA** yield a Shodan-style Windows logon-screen bitmap.
+Hosts that **require NLA** never draw a desktop before CredSSP, so there is no
+frame to capture (shown as auth required). VNC stills need no-auth RFB; password
+VNC and non-RFB/`tcpwrapped` ports stay without a frame. Confirm tools with
+`ffmpeg -version` and `wfreerdp /version` (or `sdl-freerdp` / `xfreerdp --version`),
+then restart the app.
 
 Any inventory port identified as **rtsp** is treated as a stream page; use
 **Watch live** on the host preview for the server-side RTSP→MJPEG proxy.

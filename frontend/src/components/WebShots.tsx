@@ -63,6 +63,8 @@ export function shotNote(p: WebPage): string {
   if (isDesktopPage(p)) {
     if (p.capture_error === 'freerdp unavailable') return 'freerdp unavailable';
     if (p.capture_error === 'vnc tools unavailable') return 'vnc tools unavailable';
+    // NLA/CredSSP: protocol never draws a logon bitmap — Shodan-style still needs non-NLA RDP.
+    if (p.capture_error === 'skipped_auth') return 'auth required (no pre-login screen)';
     if (p.screenshot_status === 'failed') return p.capture_error ?? 'Desktop frame failed';
     if (p.screenshot_status === 'skipped') return p.capture_error ?? 'No desktop frame';
     return p.capture_error ?? 'No desktop frame';
