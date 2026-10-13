@@ -378,6 +378,8 @@ export interface WebCapture {
   uuid: string;
   status: WebCaptureStatus;
   targets: string;
+  /** all | remote (RDP/VNC) | web (HTTP/RTSP). Older jobs omit this (treat as all). */
+  scope?: 'all' | 'remote' | 'web';
   target_count: number;
   requested_by: string | null;
   created_at: string;

@@ -229,6 +229,8 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             cfg = get_section(db, WebCaptureSettings)
             endpoints, inv_notes = find_web_endpoints(db, ips, max_endpoints=cfg.max_endpoints)
             notes.extend(inv_notes)
+            job_row = db.get(WebCapture, capture_id)
+            scope = (getattr(job_row, "scope", None) or "all").lower()
             # Snapshot endpoint data while session open
             endpoint_data = [
                 {
@@ -243,20 +245,28 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                 }
                 for e in endpoints
             ]
-            capture_uuid = db.get(WebCapture, capture_id).uuid
-            mock = db.get(WebCapture, capture_id).mock_mode
+            if scope == "remote":
+                endpoint_data = [e for e in endpoint_data if e["scheme"] in ("rdp", "vnc")]
+            elif scope == "web":
+                endpoint_data = [e for e in endpoint_data if e["scheme"] not in ("rdp", "vnc")]
+            capture_uuid = job_row.uuid
+            mock = job_row.mock_mode
 
         _update(capture_id, endpoints_found=len(endpoint_data), stage="probing", progress=0.15)
 
         if not endpoint_data:
             status = WEB_CAPTURE_COMPLETED
+            empty_msg = {
+                "remote": "No open RDP or VNC endpoints found in current inventory for these targets.",
+                "web": "No known HTTP(S) or RTSP endpoints found in current inventory.",
+            }.get(scope, "No known web or RTSP endpoints found in current inventory.")
             _update(
                 capture_id,
                 status=status,
                 finished_at=utcnow(),
                 stage=None,
                 progress=1.0,
-                notes="\n".join(notes) or "No known web or RTSP endpoints found in current inventory.",
+                notes="\n".join(notes) or empty_msg,
                 pages_captured=0,
                 screenshots_captured=0,
             )

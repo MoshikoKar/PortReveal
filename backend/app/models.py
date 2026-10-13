@@ -609,6 +609,8 @@ class WebCapture(Base):
     uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)
     status: Mapped[str] = mapped_column(String(20), default=WEB_CAPTURE_QUEUED, index=True)
     targets: Mapped[str] = mapped_column(Text)
+    # all = HTTP/RTSP/RDP/VNC; remote = RDP/VNC only; web = HTTP(S)/RTSP only
+    scope: Mapped[str] = mapped_column(String(16), default="all")
     target_count: Mapped[int] = mapped_column(Integer, default=0)
     requested_by: Mapped[str | None] = mapped_column(String(150))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)

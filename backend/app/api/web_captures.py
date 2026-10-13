@@ -52,6 +52,10 @@ HOST_VIEW_STATES = ("running", "completed", "partial", "cancelled")
 class WebCaptureRequest(BaseModel):
     targets: str | None = Field(None, max_length=10000)
     device_uuids: list[str] | None = Field(None, max_length=4096)
+    # all = every endpoint type; remote = RDP/VNC only; web = HTTP(S)/RTSP only
+    scope: Literal["all", "remote", "web"] = "all"
+    # With inventory=True, capture every inventory host that has open RDP/VNC (scope forced remote).
+    inventory: bool = False
 
 
 def _is_rtsp_page(p: WebPage) -> bool:
@@ -197,6 +201,7 @@ def web_capture_out(c: WebCapture, *, include_pages: bool = False) -> dict:
         "uuid": c.uuid,
         "status": c.status,
         "targets": c.targets,
+        "scope": getattr(c, "scope", None) or "all",
         "target_count": c.target_count,
         "requested_by": c.requested_by,
         "created_at": c.created_at,
@@ -275,17 +280,28 @@ def start_web_capture(body: WebCaptureRequest, request: Request, db: Session = D
     cfg = get_section(db, WebCaptureSettings)
     if not cfg.enabled:
         raise HTTPException(409, "Web Capture is disabled in settings")
-    given = [x for x in (body.targets, body.device_uuids) if x]
+    given = [x for x in (body.targets, body.device_uuids, True if body.inventory else None) if x]
     if len(given) != 1:
-        raise HTTPException(422, "Specify exactly one of: targets, device_uuids")
+        raise HTTPException(422, "Specify exactly one of: targets, device_uuids, inventory")
 
-    if body.device_uuids:
+    scope = body.scope
+    if body.inventory:
+        scope = "remote"
+        from ..core.web_capture.inventory import inventory_remote_ips
+        ips = inventory_remote_ips(db)
+        if not ips:
+            raise HTTPException(404, "No open RDP or VNC ports in current inventory")
+        spec = ",".join(ips)
+        target_text = spec
+    elif body.device_uuids:
         ips = db.scalars(select(Device.current_ip).where(Device.uuid.in_(body.device_uuids))).all()
         if not ips:
             raise HTTPException(404, "No matching devices")
         spec = ",".join(ips)
+        target_text = spec
     else:
         spec = body.targets or ""
+        target_text = spec.strip()
 
     try:
         targets = AddressSet.from_specs(spec, allow_hostname=True)
@@ -301,15 +317,10 @@ def start_web_capture(body: WebCaptureRequest, request: Request, db: Session = D
     if "://" in raw or raw.strip().lower().startswith(("http:", "https:")):
         raise HTTPException(422, "Arbitrary URLs are not accepted; provide IP, range, CIDR, or device UUIDs")
 
-    # Store original target spec for runner (describe() is lossy for ranges)
-    if body.device_uuids:
-        target_text = spec
-    else:
-        target_text = (body.targets or "").strip()
-
     job = WebCapture(
         status=WEB_CAPTURE_QUEUED,
         targets=target_text,
+        scope=scope,
         target_count=len(targets),
         requested_by=user.username,
         mock_mode=scanner_status().effective_mode == "mock" or cfg.force_mock,
@@ -317,7 +328,7 @@ def start_web_capture(body: WebCaptureRequest, request: Request, db: Session = D
     db.add(job)
     db.flush()
     audit(db, user.username, "web_capture.start", targets.describe(),
-          {"capture_id": job.id, "target_count": len(targets)}, client_ip(request))
+          {"capture_id": job.id, "target_count": len(targets), "scope": scope}, client_ip(request))
     capture_id = job.id
     db.commit()
     web_capture_manager.wake()

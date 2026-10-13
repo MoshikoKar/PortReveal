@@ -107,7 +107,8 @@ Post-scan stills of remote UIs found in inventory: **HTTP(S)** (Playwright),
 One Web Capture job; galleries are split — **Web** (HTTP/RTSP) and **Remote**
 (RDP/VNC). Not an nmap stage. Auto-queue after standard/full scans is under
 **Settings → Web capture**. Manual jobs from Device details, Devices multi-select,
-or **Scans → Web captures**.
+or **Scans → Web captures**. On **Remote**, admins can **Recapture remotes**
+(RDP/VNC inventory only) and filter **With screenshot** vs **Open · no screenshot**.
 
 | Target | Tool on `PATH` | Install |
 |---|---|---|

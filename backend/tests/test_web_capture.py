@@ -783,3 +783,36 @@ def test_grab_rdp_frame_nla_required_is_skipped_auth(monkeypatch):
     assert shot.status == "skipped"
     assert shot.auth_required is True
     assert shot.error == "skipped_auth"
+
+
+def test_inventory_remote_capture_scope(db, client):
+    """Remote-page Recapture: inventory=true queues RDP/VNC-only stills."""
+    from app.models import Network
+
+    setup_admin(client)
+    put_section(db, WebCaptureSettings(enabled=True, force_mock=True))
+    db.commit()
+    net = make_network(db, "10.0.0.0/24", name="RemoteInv")
+    scan(
+        ScriptedScanner([
+            host("10.0.0.40", [port(3389, "ms-wbt-server"), port(443, "https")]),
+            host("10.0.0.41", [port(5900, "vnc")]),
+        ]),
+        network_id=net.id,
+    )
+    assert db.scalar(select(Network).where(Network.name == "RemoteInv")) is not None
+
+    r = client.post(
+        "/api/web-captures",
+        json={"inventory": True, "scope": "remote"},
+        headers=csrf(client),
+    )
+    assert r.status_code == 200, r.text
+    cap = r.json()["capture"]
+    assert cap["scope"] == "remote"
+    assert cap["status"] in ("completed", "partial")
+    detail = client.get(f"/api/web-captures/{cap['id']}").json()
+    schemes = {p["scheme"] for p in detail["pages"]}
+    assert schemes <= {"rdp", "vnc"}
+    assert "https" not in schemes
+    assert "rdp" in schemes and "vnc" in schemes

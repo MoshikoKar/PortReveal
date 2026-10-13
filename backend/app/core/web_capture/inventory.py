@@ -190,3 +190,20 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
         if found == 0:
             notes.append(f"{ip}: No known web/RTSP/RDP/VNC endpoints found in current inventory.")
     return endpoints, notes
+
+
+def inventory_remote_ips(db: Session) -> list[str]:
+    """Current-inventory IPs that expose at least one open RDP or VNC TCP port."""
+    devices = db.scalars(select(Device).options(selectinload(Device.ports))).all()
+    ips: list[str] = []
+    for dev in devices:
+        ip = (dev.current_ip or "").strip()
+        if not ip:
+            continue
+        for p in dev.ports:
+            if not p.is_open or p.protocol != "tcp":
+                continue
+            if is_rdp_service(p.service, p.port) or is_vnc_service(p.service, p.port):
+                ips.append(ip)
+                break
+    return sorted(set(ips))
