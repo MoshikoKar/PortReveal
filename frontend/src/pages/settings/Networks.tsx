@@ -7,9 +7,9 @@ import { NETWORK_ZONES, fmtTime, useApi, useInFlight } from '../../util';
 
 type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean; zone: string; vpn_s2s: boolean };
 
-const VPN_S2S_TIP = 'Fast discovery can burst probes into a site-to-site tunnel and knock over fragile remote gear. '
-  + 'When checked, this network still scans like a normal job, but with a lower probe-rate ceiling and fewer '
-  + 'parallel nmap processes so the tunnel stays up. Scanning is not disabled.';
+const VPN_S2S_TIP = 'Mark networks reached over a site-to-site VPN. Scans use the same remote discovery speed as '
+  + 'before (so a /16 still finishes in about an hour), force the routed profile even if a NIC looks local, '
+  + 'and block "fast" timing so the tunnel never sees a 2000 probes/s burst. Scanning is not slowed or disabled.';
 
 /** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it). */
 export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCount?: (n: number) => void }) {

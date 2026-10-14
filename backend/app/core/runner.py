@@ -37,7 +37,7 @@ from ..netutils import MAX_SCAN_ADDRESSES, AddressSet, TargetError, ip_sort_key
 from ..scanner import scanner_status
 from ..scanner.identify_truenas import looks_like_truenas
 from ..scanner.mock_scanner import LAST_STEP, MockScanner
-from ..scanner.nmap_scanner import VPN_PORT_MAX_RATE, NmapScanner, nmap_is_privileged
+from ..scanner.nmap_scanner import NmapScanner, nmap_is_privileged
 from ..scanner.types import (
     HostObservation,
     PortProfile,
@@ -56,22 +56,15 @@ from .web_capture.manager import web_capture_manager
 
 log = logging.getLogger(__name__)
 
-# Mild clamps only: a /16 over S2S must still finish in hours (like a LAN scan), not days.
-VPN_S2S_MAX_PARALLELISM = 2
-VPN_S2S_PORT_BATCH = 16
-
-
 def effective_scan_settings(cfg: ScanSettings, vpn_s2s: bool) -> ScanSettings:
-    """Scan settings for one scan. VPN S2S networks keep the admin's timing and chunk size, but
-    limit parallel nmap processes and port-batch size so the tunnel sees fewer concurrent bursts.
-    Stored Scan Settings are untouched."""
+    """Scan settings for one scan. VPN S2S keeps the same shape and speed as a normal remote scan;
+    only "fast" is dropped so the tunnel never sees the remote-fast 2000 pps ceiling. Stored
+    Scan Settings are untouched."""
     if not vpn_s2s:
         return cfg
-    return cfg.model_copy(update={
-        "timing": "normal" if cfg.timing == "fast" else cfg.timing,
-        "parallelism": min(cfg.parallelism, VPN_S2S_MAX_PARALLELISM),
-        "port_batch_size": min(cfg.port_batch_size, VPN_S2S_PORT_BATCH),
-    })
+    if cfg.timing != "fast":
+        return cfg
+    return cfg.model_copy(update={"timing": "normal"})
 
 
 def vpn_port_timing(timing: str) -> str:
@@ -223,10 +216,8 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
         )
         if vpn_s2s:
             log.info(
-                "scan %s: VPN S2S profile (parallelism %d, timing %s, chunks of %d, port batches of %d, "
-                "port max-rate %d/s)",
-                scan_id, cfg.parallelism, cfg.timing, cfg.discovery_chunk_size, cfg.port_batch_size,
-                VPN_PORT_MAX_RATE,
+                "scan %s: VPN S2S profile (remote discovery rates, timing %s, parallelism %d)",
+                scan_id, cfg.timing, cfg.parallelism,
             )
 
         has_ports = scan_type in (SCAN_STANDARD, SCAN_FULL)
@@ -277,7 +268,6 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                 host_timeout_minutes=cfg.full_host_timeout_minutes if full else cfg.host_timeout_minutes,
                 os_detection=cfg.os_detection,
                 batch_size=min(cfg.port_batch_size, 16) if full else cfg.port_batch_size,
-                max_rate=VPN_PORT_MAX_RATE if vpn_s2s else None,
             )
             ips = sorted(live, key=ip_sort_key)
             batches = [ips[i:i + profile.batch_size] for i in range(0, len(ips), profile.batch_size)]

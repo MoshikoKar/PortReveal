@@ -1,25 +1,18 @@
-"""Per-network site-to-site VPN flag: mild rate-capped scan profile and API round-trip."""
+"""Per-network site-to-site VPN flag: same speed as remote scans, with a no-fast-burst guard."""
 from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.auth import limiter
-from app.core.runner import (
-    VPN_S2S_MAX_PARALLELISM,
-    VPN_S2S_PORT_BATCH,
-    effective_scan_settings,
-    vpn_port_timing,
-)
+from app.core.runner import effective_scan_settings, vpn_port_timing
 from app.main import app
 from app.scanner.nmap_scanner import (
     DISCOVERY_TIMEOUT_S,
-    VPN_PORT_MAX_RATE,
     build_discovery_args,
-    build_fixed_port_args,
-    build_port_args,
     discovery_max_rate,
     discovery_min_rate,
+    discovery_rtt_ms,
     discovery_timeout,
 )
 from app.scanner.types import PortProfile
@@ -33,47 +26,41 @@ def _arg(args: list[str], flag: str) -> str:
 
 
 # Scan-command integrity invariant; the threat model and full index live in test_nmap_command_integrity.py.
-def test_vpn_discovery_args_are_mildly_capped():
-    # VPN stays near a normal remote scan, but never opens the remote-normal/fast ceiling (1000–2000).
-    for timing, max_rate in (("polite", "300"), ("normal", "400"), ("fast", "400")):
-        args = build_discovery_args(privileged=True, timing=timing, vpn_s2s=True)
-        assert _arg(args, "--max-rate") == max_rate
-        assert int(_arg(args, "--min-rate")) == discovery_min_rate(timing, vpn_s2s=True)
-        assert _arg(args, "--min-parallelism") == "8"
-        assert int(_arg(args, "--max-rate")) < discovery_max_rate(timing, local_l2=False)
-        assert not any(a.startswith("-PU") for a in args)
-    # Flag wins over local L2 tables too (admin said this network is over S2S).
-    local = build_discovery_args(privileged=True, timing="normal", local_l2=True, vpn_s2s=True)
-    assert _arg(local, "--max-rate") == "400" and "--min-parallelism" not in local
+def test_vpn_discovery_matches_remote_rates():
+    # VPN uses the same remote tables that finished /16 S2S discovery in ~1h before the flag.
+    for timing in ("polite", "normal", "fast"):
+        vpn = build_discovery_args(privileged=True, timing=timing, vpn_s2s=True)
+        remote = build_discovery_args(privileged=True, timing=timing, local_l2=False)
+        assert _arg(vpn, "--min-rate") == _arg(remote, "--min-rate")
+        assert _arg(vpn, "--max-rate") == _arg(remote, "--max-rate")
+        assert _arg(vpn, "--min-parallelism") == "32"
+        assert _arg(vpn, "--initial-rtt-timeout") == _arg(remote, "--initial-rtt-timeout")
+        assert _arg(vpn, "--max-rtt-timeout") == _arg(remote, "--max-rtt-timeout")
+        assert discovery_min_rate(timing, vpn_s2s=True) == discovery_min_rate(timing, local_l2=False)
+        assert discovery_max_rate(timing, vpn_s2s=True) == discovery_max_rate(timing, local_l2=False)
+        assert discovery_rtt_ms(timing, vpn_s2s=True) == discovery_rtt_ms(timing, local_l2=False)
+        assert not any(a.startswith("-PU") for a in vpn)
+    # Flag forces remote rates even when a NIC looks like local L2 (ARP path would be wrong over S2S).
+    forced = build_discovery_args(privileged=True, timing="normal", local_l2=True, vpn_s2s=True)
+    assert _arg(forced, "--max-rate") == "1000" and _arg(forced, "--min-parallelism") == "32"
 
 
-def test_vpn_discovery_timeout_covers_rate_floor():
+def test_vpn_discovery_timeout_matches_remote():
     assert discovery_timeout(["10.0.0.0/24"], "normal", vpn_s2s=True) == DISCOVERY_TIMEOUT_S
-    # Lower VPN floor than remote-normal needs a longer worst-case for a large silent chunk.
-    assert discovery_timeout(["10.0.0.0/18"], "normal", vpn_s2s=True) > discovery_timeout(
+    assert discovery_timeout(["10.0.0.0/18"], "normal", vpn_s2s=True) == discovery_timeout(
         ["10.0.0.0/18"], "normal", local_l2=False
     )
 
 
-def test_port_args_carry_vpn_max_rate():
-    capped = PortProfile(full=False, top_ports=3000, max_rate=VPN_PORT_MAX_RATE)
-    assert _arg(build_port_args(True, capped), "--max-rate") == str(VPN_PORT_MAX_RATE)
-    assert _arg(build_fixed_port_args(True, capped, [8080, 11434]), "--max-rate") == str(VPN_PORT_MAX_RATE)
-    assert "--exclude-ports" in build_port_args(True, capped)
-    assert "--max-rate" not in build_port_args(True, PortProfile(full=False))
-
-
-def test_effective_scan_settings_only_mildly_clamp_vpn_networks():
+def test_effective_scan_settings_only_drop_fast_on_vpn():
     cfg = ScanSettings(timing="fast", parallelism=8, discovery_chunk_size=2048, port_batch_size=64)
     assert effective_scan_settings(cfg, False) is cfg
     vpn = effective_scan_settings(cfg, True)
-    assert vpn.timing == "normal"  # only fast is dropped
-    assert vpn.parallelism == VPN_S2S_MAX_PARALLELISM
-    assert vpn.discovery_chunk_size == cfg.discovery_chunk_size  # chunks unchanged
-    assert vpn.port_batch_size == VPN_S2S_PORT_BATCH
-    assert vpn.top_ports == cfg.top_ports and vpn.host_timeout_minutes == cfg.host_timeout_minutes
-    small = effective_scan_settings(ScanSettings(parallelism=1, port_batch_size=4, timing="polite"), True)
-    assert (small.parallelism, small.port_batch_size, small.timing) == (1, 4, "polite")
+    assert vpn.timing == "normal"
+    assert vpn.parallelism == cfg.parallelism and vpn.port_batch_size == cfg.port_batch_size
+    assert vpn.discovery_chunk_size == cfg.discovery_chunk_size
+    normal = ScanSettings(timing="normal", parallelism=4)
+    assert effective_scan_settings(normal, True) is normal  # no copy when nothing changes
     assert cfg.timing == "fast" and cfg.parallelism == 8  # stored settings untouched
     assert [vpn_port_timing(t) for t in ("polite", "normal", "fast")] == ["polite", "normal", "normal"]
 
@@ -94,7 +81,7 @@ class RecordingScanner(ScriptedScanner):
 
 
 @pytest.mark.parametrize("vpn_s2s", [False, True])
-def test_runner_applies_vpn_profile(db, vpn_s2s):
+def test_runner_applies_vpn_flag_without_slowing_batches(db, vpn_s2s):
     net = make_network(db, cidr="10.5.0.0/22", name=f"Site {vpn_s2s}")
     net.vpn_s2s = vpn_s2s
     db.commit()
@@ -102,11 +89,8 @@ def test_runner_applies_vpn_profile(db, vpn_s2s):
     result = scan(scanner, network_id=net.id)
     assert result.status == "completed"
     assert scanner.ctx_vpn and all(v is vpn_s2s for v in scanner.ctx_vpn)
-    if vpn_s2s:
-        assert all(len(b) <= VPN_S2S_PORT_BATCH for b in scanner.port_targets)
-        assert all(p.max_rate == VPN_PORT_MAX_RATE for p in scanner.profiles)
-    else:
-        assert all(p.max_rate is None for p in scanner.profiles)
+    # Port batches and rate caps stay on the admin profile — VPN no longer shrinks them.
+    assert all(p.max_rate is None for p in scanner.profiles)
 
 
 @pytest.fixture

@@ -516,11 +516,11 @@ Large CIDRs are chunked with bounded parallelism; failed/partial scans never
 remove inventory. Discovery caps probe RTT, uses one retry, and bounds probe
 rate (min and max) on both local and routed/VPN paths so silent ranges finish
 without flooding a remote site — duration follows live hosts, not CIDR size.
-Networks marked **Reached over VPN (site-to-site)** (Settings → Networks) keep
-the same scan shape as LAN jobs, with a milder profile: at most 2 parallel nmap
-processes, discovery capped near remote-polite rates (about 150–400 probes/s,
-not the remote-normal/fast burst), and port/service batches capped at 600
-packets/s. Scanning is not disabled — only the flood risk is reduced.
+Networks marked **Reached over VPN (site-to-site)** (Settings → Networks) use
+the same remote discovery rates that finish a /16 in about an hour (~500–1000
+probes/s at normal timing), force that routed profile even if a NIC looks
+local, and drop "fast" timing so the tunnel never sees the 2000 probes/s
+burst. Scanning is not slowed or disabled relative to a normal remote job.
 Discovery uses ICMP/TCP (rate-capped ARP on local segments). No scan or
 enrichment stage sends UDP. Service detection runs `--version-light` and never
 probes telephony signaling ports (H.323 1720, SCCP 2000/2443, CTI 2748, SIP
