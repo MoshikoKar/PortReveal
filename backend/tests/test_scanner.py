@@ -20,9 +20,9 @@ def test_parse_standard_scan_xml():
     run = parse_nmap_xml((FIXTURES / "standard_scan.xml").read_text())
     assert run.finished_ok
     assert 22 in PortScope(run.port_scope) and 8080 in PortScope(run.port_scope) and 9000 not in PortScope(run.port_scope)
-    assert [h.ip for h in run.hosts] == ["10.20.15.22", "10.20.15.23"]  # down host skipped
+    assert [h.ip for h in run.hosts] == ["192.0.2.10", "192.0.2.11"]  # down host skipped
     h = run.hosts[0]
-    assert h.mac == "00:50:56:A1:B2:C3" and h.vendor == "VMware" and h.hostname == "server01.corp.local"
+    assert h.mac == "00:50:56:A1:B2:C3" and h.vendor == "VMware" and h.hostname == "server01.example.com"
     assert [p.port for p in h.ports] == [22, 443, 8080]  # filtered port 80 ignored
     ssh = h.ports[0]
     assert (ssh.service, ssh.product, ssh.version, ssh.method, ssh.confidence) == (

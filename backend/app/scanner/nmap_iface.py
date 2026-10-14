@@ -82,7 +82,7 @@ def parse_nmap_iflist(text: str) -> list[NmapIface]:
         if ipmask in (".", "none", "(none)") or ":" in ipmask:
             continue  # skip IPv6 / empty
         try:
-            # Host bits are the interface's own address (e.g. 192.168.69.102/24).
+            # Host bits are the interface's own address (e.g. 192.0.2.10/24).
             iface = ipaddress.ip_interface(ipmask)
         except ValueError:
             continue

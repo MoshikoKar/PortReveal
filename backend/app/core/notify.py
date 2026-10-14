@@ -273,7 +273,7 @@ def format_sample_digest() -> tuple[str, str, str]:
         "1 change: 1 ports opened\n\n"
         "Ports (1)\n"
         "  Ports opened\n"
-        "    • server01 (10.20.15.22) — TCP/8080\n"
+        "    • server01 (10.0.0.10) — TCP/8080\n"
     )
     html_body = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>{_esc(subject)}</title></head>
@@ -290,7 +290,7 @@ def format_sample_digest() -> tuple[str, str, str]:
   <p style="margin:0 0 12px;font-size:13px;color:#475569;">1 ports opened</p>
   <div style="font-size:15px;font-weight:600;">Ports <span style="font-weight:500;color:#64748b;font-size:13px;">(1)</span></div>
   <div style="margin-top:10px;font-size:13px;font-weight:600;color:#334155;">Ports opened <span style="font-weight:500;color:#64748b;">(1)</span></div>
-  <ul style="margin:4px 0 0;padding:0 0 0 18px;font-size:13px;"><li>server01 (10.20.15.22) — TCP/8080</li></ul>
+  <ul style="margin:4px 0 0;padding:0 0 0 18px;font-size:13px;"><li>server01 (10.0.0.10) — TCP/8080</li></ul>
 </td></tr>
 <tr><td style="padding:12px 20px;background:#f1f5f9;font-size:12px;color:#64748b;border-top:1px solid #e2e8f0;">
   Test email from PortReveal settings.

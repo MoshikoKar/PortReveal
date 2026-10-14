@@ -98,14 +98,14 @@ def test_retention_nulls_baseline_and_port_scan_refs_when_scans_purged(db):
 
 
 def test_email_format_is_categorized_html(db):
-    net = make_network(db, cidr="10.20.15.0/24")
-    scan(ScriptedScanner([host("10.20.15.22", [port(22, "ssh")], hostname="server01")]), network_id=net.id)
-    s = scan(ScriptedScanner([host("10.20.15.22", [port(22, "ssh"), port(8080, "http")], hostname="server01")]),
+    net = make_network(db, cidr="10.0.0.0/24")
+    scan(ScriptedScanner([host("10.0.0.10", [port(22, "ssh")], hostname="server01")]), network_id=net.id)
+    s = scan(ScriptedScanner([host("10.0.0.10", [port(22, "ssh"), port(8080, "http")], hostname="server01")]),
              network_id=net.id)
     ev = events(db, s.id)[0]
     subject, plain, html_body = format_daily_digest([ev], {net.id: net.name})
     assert "Daily summary" in subject and "1 change" in subject
-    assert "Ports" in plain and "server01" in plain and "10.20.15.22" in plain
+    assert "Ports" in plain and "server01" in plain and "10.0.0.10" in plain
     assert "TCP/8080" in plain
     assert "Ports opened" in html_body and "server01" in html_body
     assert "MAC " not in html_body and "<thead>" not in html_body

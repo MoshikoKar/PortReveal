@@ -88,7 +88,7 @@ export function WebCaptureDialog({ preset, onClose, onStarted }: {
             {mode === 'targets' && (
               <label className="field">
                 <textarea rows={3} value={targets} onChange={(e) => setTargets(e.target.value)}
-                  placeholder="10.20.15.22, 10.20.16.0/24, 10.20.17.10-50" />
+                  placeholder="10.0.0.10, 10.0.0.0/24, 10.0.1.10-50" />
                 <span className="hint">IPs, CIDRs, or ranges. Exclusions apply. Not arbitrary URLs.</span>
               </label>
             )}

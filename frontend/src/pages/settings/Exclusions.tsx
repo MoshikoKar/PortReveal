@@ -104,7 +104,7 @@ export function ExclusionsSettings() {
           </>}
         >
           <label className="field">Addresses
-            <textarea rows={4} value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })} placeholder={'10.20.1.5\n10.20.1.10, 10.20.1.11\n10.20.2.10-10.20.2.50\n10.20.9.0/24'} />
+            <textarea rows={4} value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })} placeholder={'10.0.0.5\n10.0.0.10, 10.0.0.11\n10.0.1.10-10.0.1.50\n10.0.9.0/24'} />
             <span className="hint">Single IPs, lists, ranges (a.b.c.d-e.f.g.h or a.b.c.d-N) and CIDRs.</span>
           </label>
           <label className="field">Description<input type="text" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Fragile OT devices" /></label>

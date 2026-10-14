@@ -5,10 +5,10 @@
 <verbose level="0"/>
 <debugging level="0"/>
 <host starttime="1759670001" endtime="1759670030"><status state="up" reason="user-set" reason_ttl="0"/>
-<address addr="10.20.15.22" addrtype="ipv4"/>
+<address addr="192.0.2.10" addrtype="ipv4"/>
 <address addr="00:50:56:a1:b2:c3" addrtype="mac" vendor="VMware"/>
 <hostnames>
-<hostname name="server01.corp.local" type="PTR"/>
+<hostname name="server01.example.com" type="PTR"/>
 </hostnames>
 <ports><extraports state="closed" count="16">
 <extrareasons reason="reset" count="16" proto="tcp" ports="21,23,25,53,110-111,135,139,143,445,993,995,1723,3306,3389,5900"/>
@@ -21,13 +21,13 @@
 <times srtt="250" rttvar="100" to="100000"/>
 </host>
 <host starttime="1759670001" endtime="1759670900" timedout="true"><status state="up" reason="user-set" reason_ttl="0"/>
-<address addr="10.20.15.23" addrtype="ipv4"/>
+<address addr="192.0.2.11" addrtype="ipv4"/>
 <hostnames>
 </hostnames>
 <times srtt="250" rttvar="100" to="100000"/>
 </host>
 <host><status state="down" reason="no-response" reason_ttl="0"/>
-<address addr="10.20.15.24" addrtype="ipv4"/>
+<address addr="192.0.2.12" addrtype="ipv4"/>
 </host>
 <runstats><finished time="1759670900" timestr="Sun Oct  5 14:08:20 2026" summary="Nmap done" elapsed="900.00" exit="success"/><hosts up="2" down="1" total="3"/>
 </runstats>
