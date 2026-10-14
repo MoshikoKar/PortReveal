@@ -56,26 +56,26 @@ from .web_capture.manager import web_capture_manager
 
 log = logging.getLogger(__name__)
 
-VPN_S2S_DISCOVERY_CHUNK = 256
-VPN_S2S_PORT_BATCH = 8
+# Mild clamps only: a /16 over S2S must still finish in hours (like a LAN scan), not days.
+VPN_S2S_MAX_PARALLELISM = 2
+VPN_S2S_PORT_BATCH = 16
 
 
 def effective_scan_settings(cfg: ScanSettings, vpn_s2s: bool) -> ScanSettings:
-    """Scan settings for one scan. VPN S2S networks run serially with polite (rate-capped) discovery
-    and small chunks/batches so the tunnel never sees parallel bursts; stored settings are untouched."""
+    """Scan settings for one scan. VPN S2S networks keep the admin's timing and chunk size, but
+    limit parallel nmap processes and port-batch size so the tunnel sees fewer concurrent bursts.
+    Stored Scan Settings are untouched."""
     if not vpn_s2s:
         return cfg
     return cfg.model_copy(update={
-        "timing": "polite",
-        "parallelism": 1,
-        "discovery_chunk_size": min(cfg.discovery_chunk_size, VPN_S2S_DISCOVERY_CHUNK),
+        "timing": "normal" if cfg.timing == "fast" else cfg.timing,
+        "parallelism": min(cfg.parallelism, VPN_S2S_MAX_PARALLELISM),
         "port_batch_size": min(cfg.port_batch_size, VPN_S2S_PORT_BATCH),
     })
 
 
 def vpn_port_timing(timing: str) -> str:
-    """Port-stage timing on VPN S2S networks. -T2 waits 400 ms between probes, so a 3000-port service
-    scan would outlive the host timeout; the stage is capped by --max-rate instead and only "fast" drops."""
+    """Port-stage timing on VPN S2S networks. Drop only "fast"; the stage is also capped by --max-rate."""
     return "normal" if timing == "fast" else timing
 
 
@@ -223,9 +223,10 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
         )
         if vpn_s2s:
             log.info(
-                "scan %s: VPN S2S profile (serial, polite discovery, chunks of %d, port batches of %d, "
+                "scan %s: VPN S2S profile (parallelism %d, timing %s, chunks of %d, port batches of %d, "
                 "port max-rate %d/s)",
-                scan_id, cfg.discovery_chunk_size, cfg.port_batch_size, VPN_PORT_MAX_RATE,
+                scan_id, cfg.parallelism, cfg.timing, cfg.discovery_chunk_size, cfg.port_batch_size,
+                VPN_PORT_MAX_RATE,
             )
 
         has_ports = scan_type in (SCAN_STANDARD, SCAN_FULL)

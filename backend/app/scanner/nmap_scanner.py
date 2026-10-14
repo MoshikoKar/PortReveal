@@ -64,13 +64,16 @@ _DISCOVERY_MAX_RATE_REMOTE = {"polite": 400, "normal": 1000, "fast": 2000}
 # waiting out nmap's adaptive timeouts; live hosts answer well inside these on routed/VPN paths.
 _DISCOVERY_RTT_MS = {"polite": (300, 1200), "normal": (200, 800), "fast": (100, 400)}
 _DISCOVERY_RTT_MS_REMOTE = {"polite": (200, 800), "normal": (100, 400), "fast": (50, 250)}
-# Site-to-site VPN networks (admin flag): a fixed low ceiling regardless of timing, looser RTT for
-# tunnel latency and no forced parallelism, so discovery never bursts into the tunnel.
-_DISCOVERY_MIN_RATE_VPN = 50
-_DISCOVERY_MAX_RATE_VPN = 150
-_DISCOVERY_RTT_MS_VPN = (400, 1500)
-# Packet-rate cap for every port/service nmap run against a VPN S2S network.
-VPN_PORT_MAX_RATE = 300
+# Site-to-site VPN networks (admin flag): stay close to a normal remote scan, but cap the ceiling
+# near remote-polite so the tunnel never sees the remote-normal/fast burst (500–2000 pps).
+# Timing still comes from Scan Settings (fast is dropped to normal in the runner).
+_DISCOVERY_MIN_RATE_VPN = {"polite": 150, "normal": 200, "fast": 200}
+_DISCOVERY_MAX_RATE_VPN = {"polite": 300, "normal": 400, "fast": 400}
+_DISCOVERY_RTT_MS_VPN = {"polite": (250, 1000), "normal": (150, 600), "fast": (150, 600)}
+# Milder than remote-normal port bursts; high enough that a 3000-port service scan still finishes.
+VPN_PORT_MAX_RATE = 600
+# Cap concurrent probes inside one nmap process (remote uses 32).
+_DISCOVERY_MIN_PARALLELISM_VPN = 8
 _DISCOVERY_RETRIES = 1
 _DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
@@ -135,29 +138,32 @@ def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = Fals
         "--initial-rtt-timeout", f"{initial_rtt}ms",
         "--max-rtt-timeout", f"{max_rtt}ms",
     ]
-    if local_l2 or vpn_s2s:
-        args += ["--max-rate", str(discovery_max_rate(timing, local_l2=local_l2, vpn_s2s=vpn_s2s))]
+    if local_l2:
+        args += ["--max-rate", str(discovery_max_rate(timing, local_l2=True, vpn_s2s=vpn_s2s))]
     else:
+        # VPN keeps a small min-parallelism (not the remote 32) so empty ranges still finish.
+        parallel = _DISCOVERY_MIN_PARALLELISM_VPN if vpn_s2s else _DISCOVERY_MIN_PARALLELISM
         args += [
-            "--min-parallelism", str(_DISCOVERY_MIN_PARALLELISM),
-            "--max-rate", str(discovery_max_rate(timing, local_l2=False)),
+            "--min-parallelism", str(parallel),
+            "--max-rate", str(discovery_max_rate(timing, local_l2=False, vpn_s2s=vpn_s2s)),
         ]
     return args
 
 
 def discovery_min_rate(timing: str, *, local_l2: bool = False, vpn_s2s: bool = False) -> int:
     if vpn_s2s:
-        return _DISCOVERY_MIN_RATE_VPN
-    table = _DISCOVERY_MIN_RATE if local_l2 else _DISCOVERY_MIN_RATE_REMOTE
+        table = _DISCOVERY_MIN_RATE_VPN
+    else:
+        table = _DISCOVERY_MIN_RATE if local_l2 else _DISCOVERY_MIN_RATE_REMOTE
     return table.get(timing, table["normal"])
 
 
 def discovery_max_rate(timing: str, *, local_l2: bool = False, vpn_s2s: bool = False) -> int:
     if vpn_s2s:
-        maximum = _DISCOVERY_MAX_RATE_VPN
+        table = _DISCOVERY_MAX_RATE_VPN
     else:
         table = _DISCOVERY_MAX_RATE_LOCAL if local_l2 else _DISCOVERY_MAX_RATE_REMOTE
-        maximum = table.get(timing, table["normal"])
+    maximum = table.get(timing, table["normal"])
     minimum = discovery_min_rate(timing, local_l2=local_l2, vpn_s2s=vpn_s2s)
     assert maximum >= minimum, "discovery max-rate must be >= min-rate"
     return maximum
@@ -165,10 +171,10 @@ def discovery_max_rate(timing: str, *, local_l2: bool = False, vpn_s2s: bool = F
 
 def discovery_rtt_ms(timing: str, *, local_l2: bool = False, vpn_s2s: bool = False) -> tuple[int, int]:
     if vpn_s2s:
-        initial, maximum = _DISCOVERY_RTT_MS_VPN
+        table = _DISCOVERY_RTT_MS_VPN
     else:
         table = _DISCOVERY_RTT_MS if local_l2 else _DISCOVERY_RTT_MS_REMOTE
-        initial, maximum = table.get(timing, table["normal"])
+    initial, maximum = table.get(timing, table["normal"])
     assert 0 < initial <= maximum, "discovery RTT caps must be positive and ordered"
     return initial, maximum
 
@@ -288,8 +294,13 @@ class NmapScanner:
         local_l2 = bind.device is not None
         vpn = ctx.vpn_s2s
         if vpn:
-            log.info("scan %s: VPN S2S discovery profile (min-rate %d, max-rate %d, RTT %s ms)",
-                     ctx.scan_id, _DISCOVERY_MIN_RATE_VPN, _DISCOVERY_MAX_RATE_VPN, _DISCOVERY_RTT_MS_VPN)
+            log.info(
+                "scan %s: VPN S2S discovery profile (min-rate %d, max-rate %d, RTT %s ms)",
+                ctx.scan_id,
+                discovery_min_rate(self.timing, vpn_s2s=True),
+                discovery_max_rate(self.timing, vpn_s2s=True),
+                discovery_rtt_ms(self.timing, vpn_s2s=True),
+            )
         elif not local_l2:
             log.warning(
                 "scan %s: no local ethernet overlaps targets — ARP/MAC unavailable "
