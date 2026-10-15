@@ -56,12 +56,13 @@ export default function DeviceDetail() {
   const [showClosed, setShowClosed] = useState(false);
   const [portsOpen, setPortsOpen] = useState(false);
   const [scansOpen, setScansOpen] = useState(false);
+  const [eventsOpen, setEventsOpen] = useState(false);
   const [evPage, setEvPage] = useState(1);
   const [scPage, setScPage] = useState(1);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
   const { data: d, error, reload } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
-  const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 25 }, 15000);
+  const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 15 }, 15000);
   const scans = useApi<Paged<ScanRow>>(`/devices/${uuid}/scans`, { page: scPage, page_size: 15 });
   const webIf = useApi<DeviceWebInterfaces>(`/devices/${uuid}/web-interfaces`, undefined, 15000);
 
@@ -209,8 +210,9 @@ export default function DeviceDetail() {
           <ErrorBox error={events.error} />
           {events.data ? (
             <>
-              <EventFeed events={events.data.items} empty="No changes recorded for this device." />
-              <Pager page={evPage} pageSize={25} total={events.data.total} onPage={setEvPage} />
+              <EventFeed events={previewRows(events.data.items, eventsOpen)} empty="No changes recorded for this device." />
+              <SeeAllBar total={events.data.items.length} open={eventsOpen} onToggle={() => setEventsOpen((v) => !v)} />
+              <Pager page={evPage} pageSize={15} total={events.data.total} onPage={setEvPage} />
             </>
           ) : <Loading />}
         </Card>
