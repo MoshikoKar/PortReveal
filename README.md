@@ -36,7 +36,7 @@ Requirements: **Node.js 20.19+** and **Python 3.10+** on `PATH`. Nmap is optiona
 in development (required for real scans).
 
 ```bash
-git clone https://github.com/MoshikoKar/network_finder.git
+git clone https://github.com/MoshikoKar/PortReveal.git
 cd network_finder
 npm install
 npm run setup
@@ -338,7 +338,7 @@ Allow build egress to `storage.googleapis.com:443` (Playwright Chromium) plus th
 usual package indexes. Inbound TCP `APP_PORT` (default `8081`).
 
 ```bash
-git clone https://github.com/MoshikoKar/network_finder.git
+git clone https://github.com/MoshikoKar/PortReveal.git
 cd network_finder
 cp .env.production.example .env
 # Set POSTGRES_PASSWORD, APP_SECRET_KEY (openssl rand -hex 32), TZ, APP_PORT
