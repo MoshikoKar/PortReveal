@@ -90,6 +90,8 @@ export default function WebHosts() {
   const q = sp.get('q') ?? '';
   // Hidden by default: default server pages, errors, blank shells, redirects, no-response
   const showNoApp = sp.get('noapp') === '1';
+  // Services without a screenshot are set aside too (listed with the reason, collapsed by default)
+  const showNoShot = sp.get('noshot') === '1';
   const hidden = new Set((sp.get('hide') ?? '').split(','));
   const noAppFilters = Object.fromEntries(NO_APP_FILTERS.map((f) => [f.id, !hidden.has(f.id)])) as Record<NoAppKind, boolean>;
   const update = (patch: Record<string, string | null>, replace = false) => {
@@ -110,6 +112,8 @@ export default function WebHosts() {
     h.services
       .map((s, index) => ({ h, s, index }))
       .filter(({ s }) => matches(h.hostname, h.ip, s.page.title, s.page.server_header, s.ports.join(' '), endpointUrl(s.page))));
+  const shotCards = cards.filter(({ s }) => isUsefulShot(s.page));
+  const noShotCards = cards.filter(({ s }) => !isUsefulShot(s.page));
   const noApp = (data?.hosts ?? []).filter((h) =>
     !isApp(h) && matches(h.hostname, h.ip, h.hero.title, h.hero.server_header, h.ports.join(' '), h.hero.error_reason, shotNote(h.hero)));
 
@@ -136,7 +140,7 @@ export default function WebHosts() {
       <div className="page-head">
         <div>
           <h1>Web interfaces</h1>
-          <p>HTTP(S) and RTSP services from the latest Web Capture — one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Default server pages, errors, blank pages and redirects are set aside.</p>
+          <p>HTTP(S) and RTSP services from the latest Web Capture — one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Services without a screenshot, default server pages, errors, blank pages and redirects are set aside below.</p>
         </div>
         <input type="search" placeholder="Filter by host, IP, title, port…" value={q} onChange={(e) => update({ q: e.target.value || null }, true)} style={{ width: 260 }} />
       </div>
@@ -147,12 +151,39 @@ export default function WebHosts() {
         </Card>
       ) : (
         <>
-          {cards.length > 0 ? (
+          {shotCards.length > 0 ? (
             <div className="host-grid">
-              {cards.map(({ h, s, index }) => <ServiceCard key={`${h.device_uuid}:${s.scheme}:${s.port}`} h={h} s={s} index={index} />)}
+              {shotCards.map(({ h, s, index }) => <ServiceCard key={`${h.device_uuid}:${s.scheme}:${s.port}`} h={h} s={s} index={index} />)}
             </div>
           ) : (
-            <Card><span className="muted">{q ? 'No web application matches the filter.' : 'No host is serving a web application in the latest captures.'}</span></Card>
+            <Card><span className="muted">{q ? 'No captured web application matches the filter.' : 'No web application has a screenshot in the latest captures on this page.'}</span></Card>
+          )}
+
+          {noShotCards.length > 0 && (
+            <Card
+              title={`No screenshot — ${noShotCards.length} service${noShotCards.length === 1 ? '' : 's'}`}
+              flush
+              actions={<button className="btn sm ghost" aria-expanded={showNoShot} onClick={() => update({ noshot: showNoShot ? null : '1' })}>{showNoShot ? 'Hide' : 'Show'}</button>}
+            >
+              {showNoShot && (
+                <table>
+                  <thead><tr><th>Host</th><th>Service</th><th>Title</th><th>Why no screenshot</th></tr></thead>
+                  <tbody>
+                    {noShotCards.map(({ h, s }) => (
+                      <tr key={`${h.device_uuid}:${s.scheme}:${s.port}`} className="clickable" onClick={() => { window.location.href = `/devices/${h.device_uuid}/web`; }}>
+                        <td>
+                          <Link to={`/devices/${h.device_uuid}/web`} onClick={(e) => e.stopPropagation()}>{h.hostname ?? h.ip}</Link>
+                          {h.hostname && <div className="mono muted small">{h.ip}</div>}
+                        </td>
+                        <td className="mono small">{endpointUrl(s.page)}</td>
+                        <td className="small">{s.page.title ?? <span className="muted">—</span>}</td>
+                        <td className="small muted">{shotNote(s.page)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Card>
           )}
 
           {noApp.length > 0 && (

@@ -14,7 +14,6 @@ from ...models import (
     SCAN_FULL,
     SCAN_STANDARD,
     SCREENSHOT_CAPTURED,
-    WEB_CAPTURE_ACTIVE_STATES,
     WEB_CAPTURE_QUEUED,
     Event,
     Scan,
@@ -22,6 +21,7 @@ from ...models import (
     WebCapture,
     WebPage,
 )
+from ...netutils import ip_sort_key
 from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
 from ..web_storage import resolve_screenshot
@@ -30,6 +30,7 @@ from .inventory import COMMON_RTSP_PORTS, COMMON_WEB_PORTS, find_web_endpoints, 
 log = logging.getLogger(__name__)
 
 AUTO_REQUESTED_BY = "auto-scan"
+ALL_ENDPOINTS = 1_000_000
 
 
 def _port_looks_web(service: str | None, port: int | None) -> bool:
@@ -50,7 +51,8 @@ def _candidate_ips(db: Session, scan: Scan, cfg: WebCaptureSettings, *, baseline
     if not host_ips:
         return set()
 
-    endpoints, _ = find_web_endpoints(db, host_ips, max_endpoints=cfg.max_endpoints)
+    # Candidates are judged over every host; the job itself splits into follow-up jobs when large.
+    endpoints, _ = find_web_endpoints(db, host_ips, max_endpoints=ALL_ENDPOINTS)
     if not endpoints:
         return set()
 
@@ -118,32 +120,41 @@ def maybe_enqueue_auto_web_capture(db: Session, scan: Scan, *, baseline_created:
     if not cfg.enabled or not cfg.auto_after_scan:
         return None
 
-    # Avoid stacking while a capture (any) is already queued/running
-    if db.scalar(select(WebCapture.id).where(WebCapture.status.in_(WEB_CAPTURE_ACTIVE_STATES)).limit(1)):
-        log.info("auto web capture skipped after scan %s: a capture is already active", scan.id)
-        return None
-
-    ips = sorted(_candidate_ips(db, scan, cfg, baseline_created=baseline_created))
+    ips = sorted(_candidate_ips(db, scan, cfg, baseline_created=baseline_created), key=ip_sort_key)
     if not ips:
         return None
 
-    if len(ips) > cfg.max_addresses:
-        log.info(
-            "auto web capture after scan %s: truncating %d hosts to max_addresses=%d",
-            scan.id, len(ips), cfg.max_addresses,
-        )
-        ips = ips[: cfg.max_addresses]
-
-    target_text = ",".join(ips)
-    job = WebCapture(
-        status=WEB_CAPTURE_QUEUED,
-        targets=target_text,
-        target_count=len(ips),
-        requested_by=AUTO_REQUESTED_BY,
-        mock_mode=scanner_status().effective_mode == "mock" or cfg.force_mock,
-        notes=f"Auto-queued after scan {scan.id} ({scan.scan_type}).",
+    # Never drop hosts: a capture already waiting in the queue absorbs these (no stacking of
+    # duplicate jobs); otherwise queue new job(s) of at most max_addresses hosts each, so a big
+    # subnet is covered in order instead of losing the same tail of addresses on every scan.
+    waiting = db.scalar(
+        select(WebCapture).where(WebCapture.status == WEB_CAPTURE_QUEUED,
+                                 WebCapture.requested_by == AUTO_REQUESTED_BY)
+        .order_by(WebCapture.id.desc()).limit(1)
     )
-    db.add(job)
-    db.flush()
-    log.info("auto web capture %s queued after scan %s for %d host(s)", job.id, scan.id, len(ips))
-    return job.id
+    if waiting is not None:
+        merged = sorted(set(waiting.targets.split(",")) | set(ips), key=ip_sort_key)
+        if len(merged) <= cfg.max_addresses:
+            waiting.targets, waiting.target_count = ",".join(merged), len(merged)
+            log.info("auto web capture after scan %s merged into queued capture %s (%d host(s))",
+                     scan.id, waiting.id, len(merged))
+            return waiting.id
+        ips = [ip for ip in ips if ip not in set(waiting.targets.split(","))]
+
+    first_id = None
+    mock = scanner_status().effective_mode == "mock" or cfg.force_mock
+    for start in range(0, len(ips), cfg.max_addresses):
+        chunk = ips[start:start + cfg.max_addresses]
+        job = WebCapture(
+            status=WEB_CAPTURE_QUEUED,
+            targets=",".join(chunk),
+            target_count=len(chunk),
+            requested_by=AUTO_REQUESTED_BY,
+            mock_mode=mock,
+            notes=f"Auto-queued after scan {scan.id} ({scan.scan_type}).",
+        )
+        db.add(job)
+        db.flush()
+        first_id = first_id or job.id
+        log.info("auto web capture %s queued after scan %s for %d host(s)", job.id, scan.id, len(chunk))
+    return first_id

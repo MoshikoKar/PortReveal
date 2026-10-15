@@ -43,7 +43,26 @@ def normalize_hostname(name: str | None) -> str | None:
     if not name:
         return None
     name = name.strip().rstrip(".").lower()
-    return name or None
+    return _collapse_repeated_suffix(name) or None
+
+
+def _collapse_repeated_suffix(name: str) -> str:
+    """``host.corp.com.corp.com`` -> ``host.corp.com``.
+
+    A PTR record entered without its trailing dot gets the zone appended a second time
+    (common in Windows DNS). Only a repeat of two or more labels is collapsed, so
+    ``a.b.b`` style names are left alone.
+    """
+    labels = name.split(".")
+    changed = True
+    while changed:
+        changed = False
+        for k in range(len(labels) // 2, 1, -1):  # k = labels in the repeated suffix, >= 2
+            if labels[-k:] == labels[-2 * k:-k]:
+                labels = labels[:-k]
+                changed = True
+                break
+    return ".".join(labels)
 
 
 def is_generic_hostname(hostname: str | None, ip: str) -> bool:

@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from ...models import (
     WEB_CAPTURE_COMPLETED,
     WEB_CAPTURE_FAILED,
     WEB_CAPTURE_PARTIAL,
+    WEB_CAPTURE_QUEUED,
     WEB_CAPTURE_RUNNING,
     WEB_PAGE_LOGIN,
     WEB_PAGE_STREAM,
@@ -36,7 +38,8 @@ from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
 from ..image_intel import average_hash, ocr_text
 from ..web_storage import delete_capture_files, write_screenshot
-from .classify import BLANK_PAGE_REASON, unusable_page_reason
+from .classify import BLANK_PAGE_REASON, looks_like_login_html, looks_like_login_url, unusable_page_reason
+from .internal import InternalHosts
 from .inventory import find_web_endpoints
 from .mock import mock_probe_endpoint, mock_rtsp_endpoint, placeholder_image
 from .probe import EndpointProbe, probe_endpoint
@@ -101,7 +104,8 @@ ProbeOutcome = tuple[EndpointProbe | None, str | None, bool]
 
 
 def _probe_http_endpoint(ep: dict, cfg: WebCaptureSettings, *, mock: bool, app_paths: list[str],
-                         deadline: float, stop: Callable[[], bool]) -> ProbeOutcome:
+                         deadline: float, stop: Callable[[], bool],
+                         follow: Callable[[str], bool] | None = None) -> ProbeOutcome:
     """Try each host candidate of one HTTP(S) endpoint. Runs on a worker thread: no DB access."""
     if time.monotonic() > deadline:
         return None, None, True
@@ -130,6 +134,7 @@ def _probe_http_endpoint(ep: dict, cfg: WebCaptureSettings, *, mock: bool, app_p
                     app_paths=app_paths,
                     verify_tls=False,
                     cancel_check=stop,
+                    follow=follow,
                 )
             if probe.pages and any(p.http_status for p in probe.pages):
                 break
@@ -184,6 +189,10 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
     had_failures = False
     browser_missing = False
     prefetch: _ProbePrefetcher | None = None
+    # Hosts that did not fit this job (endpoint cap, screenshot budget, time limit), in IP order:
+    # they are queued as a continuation job rather than dropped.
+    deferred: list[str] = []
+    handled = 0
 
     with session_scope() as db:
         job = db.get(WebCapture, capture_id)
@@ -229,7 +238,8 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
 
         with session_scope() as db:
             cfg = get_section(db, WebCaptureSettings)
-            endpoints, inv_notes = find_web_endpoints(db, ips, max_endpoints=cfg.max_endpoints)
+            endpoints, inv_notes = find_web_endpoints(db, ips, max_endpoints=cfg.max_endpoints,
+                                                      deferred=deferred)
             notes.extend(inv_notes)
             job_row = db.get(WebCapture, capture_id)
             scope = (getattr(job_row, "scope", None) or "all").lower()
@@ -253,6 +263,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                 endpoint_data = [e for e in endpoint_data if e["scheme"] not in ("rdp", "vnc")]
             capture_uuid = job_row.uuid
             mock = job_row.mock_mode
+            internal = InternalHosts.load(db, excl)
 
         _update(capture_id, endpoints_found=len(endpoint_data), stage="probing", progress=0.15)
 
@@ -295,14 +306,23 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             endpoint_data,
             cfg.http_concurrency,
             lambda ep, stop: _probe_http_endpoint(ep, cfg, mock=mock, app_paths=discovery_app_paths,
-                                                  deadline=deadline, stop=stop),
+                                                  deadline=deadline, stop=stop, follow=internal.allows),
             cancelled=lambda: ctx.cancelled,
         )
+        started_ips: set[str] = set()
         for idx, ep in enumerate(endpoint_data):
-            if time.monotonic() > deadline:
-                notes.append("Job time limit reached; remaining endpoints skipped.")
-                had_failures = True
+            new_host = ep["ip"] not in started_ips
+            out_of_time = time.monotonic() > deadline
+            # Budget is checked between hosts so a host is never split across jobs.
+            out_of_shots = new_host and shot_budget <= 0 < screenshots_done
+            if out_of_time or out_of_shots:
+                rest = _hosts_from(endpoint_data, idx)
+                deferred[:0] = rest
+                notes.append(("Job time limit" if out_of_time else "Screenshot budget")
+                             + f" reached; {len(rest)} host(s) deferred.")
                 break
+            started_ips.add(ep["ip"])
+            handled += 1
             ctx.check()
             _update(
                 capture_id,
@@ -351,8 +371,9 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             probe, last_err, expired = prefetch.result(idx)
             ctx.check()
             if expired:
-                notes.append("Job time limit reached; remaining endpoints skipped.")
-                had_failures = True
+                rest = _hosts_from(endpoint_data, idx)
+                deferred[:0] = rest
+                notes.append(f"Job time limit reached; {len(rest)} host(s) deferred.")
                 break
             if probe is None:
                 had_failures = True
@@ -474,12 +495,14 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                         allowed_ips=aips,
                         settle_ms=int(cfg.page_settle_seconds * 1000),
                         cancel_check=lambda: ctx.cancelled,
+                        follow=internal.allows,
                     )
                     with session_scope() as db:
                         page = db.get(WebPage, page_id_info.id)
                         if page is None:
                             continue
                         _mark_auth(page, result.auth_scheme)
+                        _mark_landing(page, result.final_url, result.title)
                         if result.status == "captured" and result.data:
                             try:
                                 rel = write_screenshot(cap_uuid, page_uuid, result.data)
@@ -517,6 +540,12 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
 
         prefetch.close()
         ctx.check()
+        if deferred:
+            if handled:
+                cont_id = _queue_continuation(capture_id, list(dict.fromkeys(deferred)))
+                notes.append(f"Continued in capture #{cont_id} for {len(set(deferred))} host(s).")
+            else:
+                had_failures = True  # nothing fit at all: report instead of looping
         status = WEB_CAPTURE_PARTIAL if (had_failures or browser_missing) else WEB_CAPTURE_COMPLETED
         if pages_done == 0 and had_failures:
             status = WEB_CAPTURE_PARTIAL
@@ -780,6 +809,47 @@ def _capture_remote_desktop(
         ))
         pages_done += 1
     return pages_done, screenshots_done, shot_budget, had_failures
+
+
+def _mark_landing(page: WebPage, final_url: str | None, title: str | None) -> None:
+    """The browser was sent on to another internal host (typically the SSO login page)."""
+    if not final_url or _host_port(final_url) == _host_port(page.final_url or page.url):
+        return
+    page.redirect_target = final_url
+    if looks_like_login_url(final_url) or looks_like_login_html(None, title):
+        page.kind = WEB_PAGE_LOGIN
+
+
+def _host_port(url: str) -> tuple[str, int | None]:
+    try:
+        u = urlsplit(url)
+        return (u.hostname or "").lower(), u.port
+    except ValueError:
+        return "", None
+
+
+def _hosts_from(endpoint_data: list[dict], idx: int) -> list[str]:
+    """Distinct IPs of endpoints from ``idx`` on, in order (the current host included)."""
+    return list(dict.fromkeys(e["ip"] for e in endpoint_data[idx:]))
+
+
+def _queue_continuation(capture_id: int, ips: list[str]) -> int:
+    """Queue the hosts a job could not fit as a new job with the same scope and requester."""
+    with session_scope() as db:
+        job = db.get(WebCapture, capture_id)
+        cont = WebCapture(
+            status=WEB_CAPTURE_QUEUED,
+            targets=",".join(ips),
+            target_count=len(ips),
+            scope=job.scope,
+            requested_by=job.requested_by,
+            mock_mode=job.mock_mode,
+            notes=f"Continuation of capture #{capture_id} (job limits).",
+        )
+        db.add(cont)
+        db.flush()
+        log.info("web capture %s: %d host(s) continued in capture %s", capture_id, len(ips), cont.id)
+        return cont.id
 
 
 def _mark_auth(page: WebPage, auth_scheme: str | None) -> None:

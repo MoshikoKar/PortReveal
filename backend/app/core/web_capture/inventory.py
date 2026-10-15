@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ...models import Device
+from ...netutils import ip_sort_key
 from ...scanner.identify_truenas import looks_like_truenas
 from ...scanner.known_ports import AI_LLM_WEB_PORTS, TRUENAS_APPS_TCP_PORTS
 from .rdp import is_rdp_service
@@ -128,8 +129,15 @@ class WebEndpoint:
         return out
 
 
-def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tuple[list[WebEndpoint], list[str]]:
-    """Return endpoints for the given IPs from current inventory, plus skip notes."""
+def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int,
+                       deferred: list[str] | None = None) -> tuple[list[WebEndpoint], list[str]]:
+    """Return endpoints for the given IPs from current inventory, plus skip notes.
+
+    Hosts are taken in numeric IP order and ``max_endpoints`` is applied at host boundaries:
+    the first host that would overflow it, and every host after it, is appended to
+    ``deferred`` (when given) so the caller can capture them in a follow-up job instead of
+    silently dropping the same tail of a large subnet on every run.
+    """
     notes: list[str] = []
     if not ips:
         return [], notes
@@ -140,12 +148,15 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
     by_ip = {d.current_ip: d for d in devices}
 
     endpoints: list[WebEndpoint] = []
-    for ip in sorted(ips):
+    over = False  # endpoint cap reached: remaining hosts with endpoints go to ``deferred``
+    over_hosts: list[str] = []
+    for ip in sorted(ips, key=ip_sort_key):
         dev = by_ip.get(ip)
         if dev is None:
-            notes.append(f"{ip}: no device in inventory.")
+            if not over:
+                notes.append(f"{ip}: no device in inventory.")
             continue
-        found = 0
+        host_eps: list[WebEndpoint] = []
         truenas = looks_like_truenas(
             hostname=dev.hostname, dns_name=dev.dns_name, os_name=dev.os_name, vendor=dev.vendor,
         )
@@ -171,7 +182,7 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
                 scheme = "vnc"
             else:
                 scheme = guess_scheme(p.service, p.port, p.tunnel)
-            endpoints.append(
+            host_eps.append(
                 WebEndpoint(
                     device_id=dev.id,
                     device_port_id=p.id,
@@ -185,12 +196,22 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
                     scheme=scheme,
                 )
             )
-            found += 1
-            if len(endpoints) >= max_endpoints:
-                notes.append(f"Endpoint limit reached ({max_endpoints}); remaining endpoints skipped.")
-                return endpoints, notes
-        if found == 0:
-            notes.append(f"{ip}: No known web/RTSP/RDP/VNC endpoints found in current inventory.")
+        if not host_eps:
+            if not over:
+                notes.append(f"{ip}: No known web/RTSP/RDP/VNC endpoints found in current inventory.")
+            continue
+        if over or (endpoints and len(endpoints) + len(host_eps) > max_endpoints):
+            over = True
+            over_hosts.append(ip)  # only hosts that really have endpoints
+            continue
+        if len(host_eps) > max_endpoints:  # one host alone is larger than a whole job
+            notes.append(f"{ip}: {len(host_eps)} endpoints, only the first {max_endpoints} captured.")
+            host_eps = host_eps[:max_endpoints]
+        endpoints.extend(host_eps)
+    if over_hosts:
+        if deferred is not None:
+            deferred.extend(over_hosts)
+        notes.append(f"Endpoint limit reached ({max_endpoints}); {len(over_hosts)} host(s) deferred.")
     return endpoints, notes
 
 

@@ -85,8 +85,9 @@ def probe_url(
     allowed_ips: set[str],
     max_bytes: int,
     verify_tls: bool,
+    follow: Callable[[str], bool] | None = None,
 ) -> ProbeResult:
-    """GET a URL following only same-target redirects. Never POSTs."""
+    """GET a URL following same-target redirects (and internal ones ``follow`` allows). Never POSTs."""
     result = ProbeResult(url=url, tls_verified=True if (url.startswith("https") and verify_tls) else (
         False if url.startswith("https") else None
     ))
@@ -108,7 +109,9 @@ def probe_url(
                     from urllib.parse import urljoin
                     next_url = urljoin(current, loc)
                     result.redirect_target = next_url
-                    if redirect_is_external(current, next_url, allowed_hosts, allowed_ips):
+                    if redirect_is_external(current, next_url, allowed_hosts, allowed_ips) and not (
+                        follow and follow(next_url)
+                    ):
                         result.external_redirect = True
                         result.final_url = current
                         result.error = "redirect outside target"
@@ -207,6 +210,7 @@ def probe_endpoint(
     app_paths: tuple[str, ...] | None = None,
     verify_tls: bool = False,
     cancel_check: Callable[[], bool] | None = None,
+    follow: Callable[[str], bool] | None = None,
 ) -> EndpointProbe:
     """Probe homepage + limited auth candidates for one endpoint. GET only."""
     ep = EndpointProbe(scheme=scheme, host_used=host, port=port)
@@ -218,7 +222,7 @@ def probe_endpoint(
     with httpx.Client(timeout=timeout, verify=verify_tls, follow_redirects=False,
                       limits=limits, headers={"User-Agent": "PortReveal-WebCapture/1.0"}) as client:
         home = probe_url(client, base, allowed_hosts=allowed_hosts, allowed_ips=allowed_ips,
-                         max_bytes=max_bytes, verify_tls=verify_tls)
+                         max_bytes=max_bytes, verify_tls=verify_tls, follow=follow)
         home.tls_verified = tls_flag
         home.kind = classify_probe(home, WEB_PAGE_HOME)
         if cancel_check and cancel_check():
@@ -261,7 +265,7 @@ def probe_endpoint(
                 break
             # Skip if clearly same as home URL we already have
             pr = probe_url(client, url, allowed_hosts=allowed_hosts, allowed_ips=allowed_ips,
-                           max_bytes=max_bytes, verify_tls=verify_tls)
+                           max_bytes=max_bytes, verify_tls=verify_tls, follow=follow)
             pr.tls_verified = tls_flag
             pr.kind = classify_probe(pr, suggested)
             if pr.error and pr.http_status is None and not pr.external_redirect:

@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from .classify import BLANK_PAGE_REASON, auth_challenge_scheme, unusable_page_reason
 
@@ -61,6 +61,7 @@ class ScreenshotResult:
     error: str | None = None
     title: str | None = None
     body_text: str | None = None
+    final_url: str | None = None  # where the browser ended up (e.g. an internal SSO login)
     # HTTP auth challenge seen while loading (page itself, or the API calls of a single-page app
     # such as WildFly's HAL console, which loads with 200 and then gets 401 from /management).
     auth_scheme: str | None = None
@@ -94,6 +95,34 @@ def meta_refresh_target(content: str | None, base_url: str) -> str | None:
     m = META_REFRESH_RE.match(content)
     target = m.group(1).strip() if m else ""
     return urljoin(base_url, target) if target else None
+
+
+_NET_ERRORS = {
+    "ERR_CONNECTION_REFUSED": "connection refused",
+    "ERR_CONNECTION_TIMED_OUT": "timed out",
+    "ERR_TIMED_OUT": "timed out",
+    "ERR_NAME_NOT_RESOLVED": "DNS name not found",
+    "ERR_CONNECTION_RESET": "connection reset",
+    "ERR_ADDRESS_UNREACHABLE": "address unreachable",
+    "ERR_ABORTED": "blocked: outside the scanned networks",
+    "ERR_SSL_PROTOCOL_ERROR": "TLS error",
+}
+
+
+def _load_error(start_url: str, nav_failure: list[str]) -> str:
+    """Why the browser ended on its error page, naming the URL that failed when it is not the start."""
+    if not nav_failure:
+        return "browser could not load the page"
+    failed_url, failure = nav_failure
+    code = failure.replace("net::", "").strip()
+    reason = _NET_ERRORS.get(code, code.lower().replace("err_", "").replace("_", " ") or "failed")
+    try:
+        u = urlsplit(failed_url)
+        start = urlsplit(start_url)
+        where = u.netloc if (u.hostname, u.port) != (start.hostname, start.port) else None
+    except ValueError:
+        where = None
+    return f"redirect to {where} failed ({reason})" if where else f"page failed to load ({reason})"
 
 
 def _settle(page, navs: list[int], budget_ms: int, cancel_check: Callable[[], bool] | None) -> dict:
@@ -151,6 +180,7 @@ def take_screenshot(
     allowed_ips: set[str],
     settle_ms: int = 8000,
     cancel_check: Callable[[], bool] | None = None,
+    follow: Callable[[str], bool] | None = None,
 ) -> ScreenshotResult:
     """Load URL passively and capture a viewport image. Soft-fails if browser missing.
 
@@ -190,12 +220,15 @@ def take_screenshot(
                 # http:// start redirects to https later. If the proxy cannot connect either,
                 # Chromium gets a direct try. Redirects are still issued back to the browser, so
                 # the same-target guard below still applies.
+                def _may_visit(target: str) -> bool:
+                    return is_same_target(url, target, allowed_hosts, allowed_ips) or bool(follow and follow(target))
+
                 def _route_handler(route):
                     req = route.request
                     if req.url.startswith("file:"):
                         return route.abort()
                     nav = req.is_navigation_request() and req.frame == page.main_frame
-                    if nav and not is_same_target(url, req.url, allowed_hosts, allowed_ips):
+                    if nav and not _may_visit(req.url):
                         return route.abort()
                     if req.url.startswith("https:"):
                         try:
@@ -216,13 +249,23 @@ def take_screenshot(
                         return
                     try:
                         scheme = auth_challenge_scheme(resp.status, resp.headers)
-                        if scheme and is_same_target(url, resp.url, allowed_hosts, allowed_ips):
+                        if scheme and _may_visit(resp.url):
                             auth.append(scheme)
+                    except Exception:
+                        pass
+
+                nav_failure: list[str] = []
+
+                def _on_request_failed(req):
+                    try:
+                        if req.is_navigation_request() and req.frame == page.main_frame:
+                            nav_failure[:] = [req.url, req.failure or ""]
                     except Exception:
                         pass
 
                 page.route("**/*", _route_handler)
                 page.on("framenavigated", _on_nav)
+                page.on("requestfailed", _on_request_failed)
                 page.on("response", _on_response)
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -233,11 +276,9 @@ def take_screenshot(
                     return ScreenshotResult(status="skipped", error="cancelled")
                 current = page.url or ""
                 if current.startswith("chrome-error:"):
-                    return ScreenshotResult(status="failed", error="browser could not load the page")
+                    return ScreenshotResult(status="failed", error=_load_error(url, nav_failure))
                 try:
-                    if current and current != "about:blank" and not is_same_target(
-                        url, current, allowed_hosts, allowed_ips
-                    ):
+                    if current and current != "about:blank" and not _may_visit(current):
                         return ScreenshotResult(status="failed", error="redirect outside target")
                 except Exception:
                     pass
@@ -247,7 +288,7 @@ def take_screenshot(
                 if not state.get("visible"):
                     return ScreenshotResult(
                         status="skipped", error=BLANK_PAGE_REASON, title=title, body_text=body_text,
-                        auth_scheme=auth_scheme,
+                        auth_scheme=auth_scheme, final_url=current or None,
                     )
                 # Probe-time HTML can look like a real SPA shell; after JS the page may only be
                 # "Not Found" or a stock Tomcat/IIS welcome — treat those as unusable. A page
@@ -260,7 +301,7 @@ def take_screenshot(
                 png = page.screenshot(type="png", full_page=False)
                 return ScreenshotResult(
                     status="captured", data=_to_webp(png), title=title, body_text=body_text,
-                    auth_scheme=auth_scheme,
+                    auth_scheme=auth_scheme, final_url=current or None,
                 )
             finally:
                 browser.close()

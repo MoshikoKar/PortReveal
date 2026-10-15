@@ -305,6 +305,16 @@ def unusable_page_reason(
     )
 
 
+_LOGIN_URL_RE = re.compile(
+    r"/(?:oauth2?/authorize|openid-connect/auth|protocol/openid-connect|saml2?/|sso/|adfs/ls|"
+    r"login|signin|sign-in|logon|auth/realms)", re.I)
+
+
+def looks_like_login_url(url: str | None) -> bool:
+    """SSO / login endpoints (OAuth authorize, Keycloak, SAML, ADFS, …) by path."""
+    return bool(url and _LOGIN_URL_RE.search(url))
+
+
 def looks_like_login_html(html: str | None, title: str | None) -> bool:
     blob = f"{title or ''} {html or ''}"[:20_000]
     if not blob:

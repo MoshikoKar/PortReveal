@@ -111,11 +111,17 @@ port/service/IP/absence changes → quiet steps). Reset with `npm run mock:reset
 
 Post-scan stills of remote UIs found in inventory: **HTTP(S)** (Playwright),
 **RTSP** (ffmpeg), **RDP** (FreeRDP), and **VNC** (built-in RFB client; `vncsnapshot` optional fallback).
-One Web Capture job; galleries are split — **Web** (HTTP/RTSP) and **Remote**
-(RDP/VNC). Not an nmap stage. Auto-queue after standard/full scans is under
-**Settings → Web capture**. Manual jobs from Device details, Devices multi-select,
-or **Scans → Web captures**. On **Remote**, admins can **Recapture remotes**
-(RDP/VNC inventory only) and filter **With screenshot** vs **Open · no screenshot**.
+Galleries are split — **Web** (HTTP/RTSP) and **Remote** (RDP/VNC). Not an nmap
+stage. Large jobs that hit endpoint or time limits queue a **continuation** for the
+remaining hosts (numeric IP order) instead of dropping the same tail every run;
+auto-queue after standard/full scans merges into a waiting job or splits by
+`max_addresses`. HTTP(S) capture follows redirects to other **internal** hosts
+(inventory / configured networks) so SSO login pages are reached. On **Web**,
+services without a screenshot are listed separately (collapsed by default).
+Auto-queue is under **Settings → Web capture**. Manual jobs from Device details,
+Devices multi-select, or **Scans → Web captures**. On **Remote**, admins can
+**Recapture remotes** (RDP/VNC inventory only) and filter **With screenshot** vs
+**Open · no screenshot**.
 
 | Target | Tool on `PATH` | Install |
 |---|---|---|
