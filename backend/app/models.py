@@ -285,7 +285,7 @@ class DevicePort(Base):
     product: Mapped[str | None] = mapped_column(String(255))
     version: Mapped[str | None] = mapped_column(String(255))
     extra_info: Mapped[str | None] = mapped_column(String(255))
-    method: Mapped[str | None] = mapped_column(String(20))  # nmap: probed | table
+    method: Mapped[str | None] = mapped_column(String(20))  # nmap: probed | table; verified
     confidence: Mapped[int | None] = mapped_column(Integer)
     cpe: Mapped[str | None] = mapped_column(String(500))  # space-separated nmap CPE strings
     tunnel: Mapped[str | None] = mapped_column(String(10))  # nmap service tunnel ("ssl")

@@ -644,6 +644,10 @@ TRUENAS_APPS_TCP_PORTS: tuple[int, ...] = (
 # excluded — see TRUENAS_APPS_TCP_PORTS.
 STANDARD_EXTRA_TCP_PORTS: tuple[int, ...] = tuple(sorted(set(AI_LLM_TCP_PORTS) | set(WEB_DEV_TCP_PORTS)))
 
+# Telephony signaling ports are never probed: -sV probes into SCCP/SIP/H.323/CTI listeners have
+# repeatedly crashed Cisco CUCM and similar call servers. H.323, SCCP, SCCP-TLS, CTI, SIP, SIP-TLS.
+NEVER_PROBE_TCP_PORTS: tuple[int, ...] = (1720, 2000, 2443, 2748, 5060, 5061)
+
 # Short list for host-discovery SYN/connect probes (keep discovery cheap): the AI API ports
 # plus the handful of dev-server ports that most often identify a live app box.
 AI_LLM_DISCOVERY_TCP_PORTS: tuple[int, ...] = (

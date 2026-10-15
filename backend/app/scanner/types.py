@@ -19,15 +19,15 @@ class PortObservation:
     product: str | None = None
     version: str | None = None
     extra_info: str | None = None
-    method: str | None = None  # probed | table
+    method: str | None = None  # nmap: probed | table; PortReveal: verified (see verify_services)
     confidence: int | None = None
     cpe: str | None = None  # space-separated CPE strings nmap matched
     tunnel: str | None = None  # "ssl" when nmap found the service inside TLS
 
     @property
     def reliable(self) -> bool:
-        """True when nmap actually fingerprinted the service (not just a port-number guess)."""
-        return self.method == "probed" or (self.confidence or 0) >= 8
+        """True when the service came from a response (not just a port-number guess)."""
+        return self.method in ("probed", "verified") or (self.confidence or 0) >= 8
 
 
 @dataclass

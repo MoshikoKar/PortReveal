@@ -60,6 +60,7 @@ from ..models import (
 from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.known_ports import merge_port_scope
 from ..scanner.types import HostObservation, PortObservation
+from ..scanner.verify_services import VERIFIED_METHOD, WEAK_SERVICE_LABELS
 from ..settings_store import PresenceSettings, ScanSettings, get_section
 from .identity import identity_hostname, match_hosts, normalize_hostname, normalize_mac
 
@@ -122,7 +123,13 @@ def _norm(v: str | None) -> str:
 
 
 def _is_reliable(method: str | None, confidence: int | None) -> bool:
-    return method == "probed" or (confidence or 0) >= 8
+    return method in ("probed", VERIFIED_METHOD) or (confidence or 0) >= 8
+
+
+def _weak_label(service: str | None, product: str | None, version: str | None, method: str | None) -> bool:
+    """nmap label from a bare status-line soft match (or none) that verification re-checks."""
+    return (method != VERIFIED_METHOD and not product and not version
+            and _norm(service) in WEAK_SERVICE_LABELS)
 
 
 class _Applier:
@@ -419,13 +426,20 @@ class _Applier:
             if not row.service and po.service:
                 self._set_service(row, po)
             return
+        # A verified label is never overwritten by an unverified weak guess (verification
+        # can miss a run, e.g. host busy); that would flap the service on every scan.
+        if row.method == VERIFIED_METHOD and _weak_label(po.service, po.product, po.version, po.method):
+            return
         label = device_label(dev)
         port_txt = f"{row.protocol.upper()}/{row.port}"
         old = describe_service(row.service, row.product, row.version)
         new_product = po.product or row.product
         new_version = po.version if po.product else (po.version or row.version)
         new = describe_service(po.service or row.service, new_product, new_version)
-        old_reliable = _is_reliable(row.method, row.confidence)
+        # Verification correcting an old weak guess (rtsp -> http) is an identification, not a change.
+        old_reliable = _is_reliable(row.method, row.confidence) and not (
+            po.method == VERIFIED_METHOD and _weak_label(row.service, row.product, row.version, row.method)
+        )
         op, np_ = _norm(row.product), _norm(po.product)
         etype = None
         if old_reliable:

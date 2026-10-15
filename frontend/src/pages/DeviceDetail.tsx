@@ -22,6 +22,21 @@ function previewRows<T>(items: T[], open: boolean): T[] {
   return open ? items : items.slice(0, PREVIEW_ROWS);
 }
 
+/** How the service label was established. nmap reports bare protocol soft matches as
+ *  probed/10 too, so "fingerprinted" needs a product or version behind it. */
+function IdentityBadge({ method, product, version }: { method: string | null; product: string | null; version: string | null }) {
+  if (method === 'verified') {
+    return <span className="badge ok" title="PortReveal confirmed the protocol with its own request">verified</span>;
+  }
+  if (method === 'probed' && (product || version)) {
+    return <span className="badge ok" title="nmap matched a product signature">fingerprinted</span>;
+  }
+  if (method === 'probed') {
+    return <span className="badge medium" title="nmap matched only a protocol pattern in the response; no product identified">protocol match</span>;
+  }
+  return <span className="badge outline" title="Guessed from the port number">port guess</span>;
+}
+
 /** Bottom bar; omitted when the list already fits in the preview. */
 function SeeAllBar({ total, open, onToggle }: { total: number; open: boolean; onToggle: () => void }) {
   if (total <= PREVIEW_ROWS) return null;
@@ -122,7 +137,7 @@ export default function DeviceDetail() {
                             </>
                           ) : <span className="muted">—</span>}
                         </td>
-                        <td className="small">{p.method === 'probed' ? <span className="badge ok">fingerprinted</span> : <span className="badge outline" title="Guessed from the port number">port guess</span>}{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
+                        <td className="small"><IdentityBadge method={p.method} product={p.product} version={p.version} />{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
                         <td className="nowrap small">{fmtTime(p.opened_at)}</td>
                         <td className="nowrap small">{relTime(p.last_seen)}</td>
                       </tr>

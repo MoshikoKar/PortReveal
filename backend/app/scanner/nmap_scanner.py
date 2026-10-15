@@ -20,6 +20,7 @@ from ..netutils import PortScope
 from .identify_truenas import host_looks_like_truenas
 from .known_ports import (
     AI_LLM_DISCOVERY_TCP_PORTS,
+    NEVER_PROBE_TCP_PORTS,
     STANDARD_EXTRA_TCP_PORTS,
     TRUENAS_APPS_TCP_PORTS,
     merge_port_scope,
@@ -35,6 +36,7 @@ from .types import (
     ScanStageError,
     StageResult,
 )
+from .verify_services import verify_hosts
 
 log = logging.getLogger(__name__)
 
@@ -72,9 +74,8 @@ _DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
 # No scan stage sends UDP: unanswered UDP dominates scan time, and fragile embedded UDP
 # services (SNMP/IPMI/CoAP/SSDP/TFTP) can misbehave when probed.
-# Telephony signaling ports are never probed: -sV probes into SCCP/SIP/H.323/CTI listeners have
-# repeatedly crashed Cisco CUCM and similar call servers. H.323, SCCP, SCCP-TLS, CTI, SIP, SIP-TLS.
-_NEVER_PROBE_TCP_PORTS = "1720,2000,2443,2748,5060,5061"
+# Telephony signaling ports are never probed (see known_ports.NEVER_PROBE_TCP_PORTS).
+_NEVER_PROBE_TCP_PORTS = ",".join(str(p) for p in NEVER_PROBE_TCP_PORTS)
 # Without a MAC, only these nmap "up" reasons count as a real device. TCP "reset" /
 # "conn-refused" are excluded: Docker Desktop NAT often answers that for every IP.
 _TRUSTED_DISCOVERY_REASONS = frozenset({
@@ -359,6 +360,8 @@ class NmapScanner:
             elif h.ports is None:
                 h.port_scan_failed = True
             hosts.append(h)
+        # nmap soft-matches (e.g. "rtsp" from an echoed status line) look like real fingerprints.
+        verify_hosts(hosts, ctx)
         return StageResult(hosts=hosts, port_scope=port_scope)
 
     def _run(self, args: list[str], targets: list[str], timeout: float, ctx: ScanContext, label: str,
