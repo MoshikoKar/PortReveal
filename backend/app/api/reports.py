@@ -4,7 +4,7 @@ from __future__ import annotations
 import ipaddress
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,8 @@ SCORE_BUCKET = 10
 MAX_BUCKET = 100 // SCORE_BUCKET - 1  # the last bucket is 90-100
 MAX_ROWS = 200
 IPV4_SPACE = 2 ** 32
+HEATMAP_PREFIX = 24
+HEATMAP_CELLS = 2 ** (32 - HEATMAP_PREFIX)
 
 
 def _host(d: Device, networks: dict[int, str]) -> dict:
@@ -146,53 +148,51 @@ def subnet_heatmap(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """/24 grid coloured by exposure score (LAN version of Shodan Maps).
+    """/24 grids coloured by exposure score (LAN version of Shodan Maps).
 
-    Without `subnet`, returns the densest /24. With `subnet=10.0.1.0/24`, returns that grid.
+    Returns one grid per IPv4 /24 that has at least one known host, sorted by address.
+    With `subnet` (an IPv4 /24 in CIDR form), returns only that grid.
     """
-    ok = device_visible(db)
+    only_base: int | None = None
     if subnet:
         try:
             net = ipaddress.ip_network(subnet, strict=False)
         except ValueError as exc:
-            from fastapi import HTTPException
             raise HTTPException(422, str(exc)) from exc
-        if net.version != 4 or net.prefixlen != 24:
-            from fastapi import HTTPException
-            raise HTTPException(422, "heatmap requires an IPv4 /24")
-        base = int(net.network_address)
-    else:
-        # Pick the /24 with the most hosts
-        ip_key = ipv4_int_expr(db.get_bind().dialect.name, Device.current_ip)
-        block = (ip_key // 256).label("block")
-        top = db.execute(
-            select(block, func.count().label("n")).where(ok, Device.current_ip.like("%.%.%.%"))
-            .group_by(block).order_by(func.count().desc()).limit(1)
-        ).first()
-        if not top or top[0] is None:
-            return {"subnet": None, "cells": [], "hosts": 0}
-        base = int(top[0]) * 256
-        net = ipaddress.IPv4Network((base, 24))
+        if net.version != 4 or net.prefixlen != HEATMAP_PREFIX:
+            raise HTTPException(422, f"heatmap requires an IPv4 /{HEATMAP_PREFIX}")
+        only_base = int(net.network_address)
 
-    devices = db.scalars(select(Device).where(ok, Device.current_ip.like("%.%.%.%"))).all()
-    by_host: dict[int, Device] = {}
+    devices = db.scalars(
+        select(Device).where(device_visible(db), Device.current_ip.like("%.%.%.%"))
+    ).all()
+    blocks: dict[int, dict[int, Device]] = defaultdict(dict)
     for d in devices:
         try:
             addr = int(ipaddress.IPv4Address(d.current_ip))
         except ValueError:
             continue
-        if addr & ~0xFF == base:
-            by_host[addr & 0xFF] = d
-    cells = []
-    for i in range(256):
-        d = by_host.get(i)
-        cells.append({
-            "host": i,
-            "ip": str(ipaddress.IPv4Address(base + i)),
-            "present": d is not None,
-            "score": (d.exposure_score or 0) if d else 0,
-            "uuid": d.uuid if d else None,
-            "hostname": d.hostname if d else None,
-            "status": d.status if d else None,
-        })
-    return {"subnet": str(net), "cells": cells, "hosts": len(by_host), "query": f"net:{net}"}
+        base = addr & ~(HEATMAP_CELLS - 1)
+        if base == 0 or (only_base is not None and base != only_base):
+            continue
+        blocks[base][addr & (HEATMAP_CELLS - 1)] = d
+
+    items = []
+    for base in sorted(blocks):
+        by_host = blocks[base]
+        assert by_host, "only occupied /24s are collected"
+        net = ipaddress.IPv4Network((base, HEATMAP_PREFIX))
+        cells = []
+        for i in range(HEATMAP_CELLS):
+            d = by_host.get(i)
+            cells.append({
+                "host": i,
+                "ip": str(ipaddress.IPv4Address(base + i)),
+                "present": d is not None,
+                "score": (d.exposure_score or 0) if d else 0,
+                "uuid": d.uuid if d else None,
+                "hostname": d.hostname if d else None,
+                "status": d.status if d else None,
+            })
+        items.append({"subnet": str(net), "hosts": len(by_host), "query": f"net:{net}", "cells": cells})
+    return {"items": items}

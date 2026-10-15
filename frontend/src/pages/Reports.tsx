@@ -205,46 +205,52 @@ interface HeatCell {
   host: number; ip: string; present: boolean; score: number;
   uuid: string | null; hostname: string | null; status: string | null;
 }
-interface Heatmap { subnet: string | null; cells: HeatCell[]; hosts: number; query?: string }
+interface HeatGrid { subnet: string; hosts: number; query: string; cells: HeatCell[] }
+
+const HEAT_COLUMNS = 16;
+const HEAT_TILE_WIDTH = 170;
+
+function HeatTile({ grid, maxScore }: { grid: HeatGrid; maxScore: number }) {
+  const nav = useNavigate();
+  return (
+    <div style={{ width: HEAT_TILE_WIDTH }}>
+      <Link to={searchLink(grid.query)} className="small mono">{grid.subnet}</Link>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${HEAT_COLUMNS}, 1fr)`, gap: 1, marginTop: 4 }}>
+        {grid.cells.map((c) => (
+          <button
+            key={c.host}
+            type="button"
+            title={c.present ? `${c.ip}${c.hostname ? ` (${c.hostname})` : ''} · score ${c.score}` : c.ip}
+            disabled={!c.uuid}
+            onClick={() => c.uuid && nav(`/devices/${c.uuid}`)}
+            style={{
+              aspectRatio: '1', border: 0, borderRadius: 1, padding: 0, cursor: c.uuid ? 'pointer' : 'default',
+              background: c.present
+                ? `color-mix(in srgb, var(--high) ${(c.score / maxScore) * 100}%, var(--ok))`
+                : 'var(--bg-2, #eee)',
+              opacity: c.present ? 1 : 0.35,
+            }}
+          />
+        ))}
+      </div>
+      <div className="muted small" style={{ marginTop: 4 }}>{grid.hosts} hosts</div>
+    </div>
+  );
+}
 
 function HeatmapCard() {
-  const nav = useNavigate();
-  const heat = useApi<Heatmap>('/reports/heatmap');
-  const data = heat.data;
-  const cells = data?.cells ?? [];
-  const maxScore = Math.max(1, ...cells.map((c) => c.score));
+  const heat = useApi<{ items: HeatGrid[] }>('/reports/heatmap');
+  const grids = heat.data?.items ?? [];
+  const maxScore = Math.max(1, ...grids.flatMap((g) => g.cells.map((c) => c.score)));
   return (
-    <Card title="Subnet heatmap" flush actions={
-      data?.subnet ? <Link to={searchLink(data.query || `net:${data.subnet}`)} className="small">{data.subnet} →</Link> : null
-    }>
+    <Card title="Subnet heatmaps" flush>
       <ReportBlurb>
-        /24 grid coloured by exposure score (LAN map). Empty cells have no known host.
+        One /24 grid per subnet with known hosts, coloured by exposure score on a shared scale. Empty cells have no known host.
       </ReportBlurb>
       <ErrorBox error={heat.error} />
-      {!data ? (!heat.error && <Loading />) : !data.subnet ? <Empty>No IPv4 hosts for a heatmap yet.</Empty> : (
-        <div style={{ padding: '0.75rem 1rem 1rem' }}>
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(16, 1fr)', gap: 2,
-            maxWidth: 640,
-          }}>
-            {cells.map((c) => (
-              <button
-                key={c.host}
-                type="button"
-                title={c.present ? `${c.ip}${c.hostname ? ` (${c.hostname})` : ''} · score ${c.score}` : c.ip}
-                disabled={!c.uuid}
-                onClick={() => c.uuid && nav(`/devices/${c.uuid}`)}
-                style={{
-                  aspectRatio: '1', border: 0, borderRadius: 2, padding: 0, cursor: c.uuid ? 'pointer' : 'default',
-                  background: c.present
-                    ? `color-mix(in srgb, var(--high) ${(c.score / maxScore) * 100}%, var(--ok))`
-                    : 'var(--bg-2, #eee)',
-                  opacity: c.present ? 1 : 0.35,
-                }}
-              />
-            ))}
-          </div>
-          <div className="muted small" style={{ marginTop: 8 }}>{data.hosts} hosts in {data.subnet}</div>
+      {!heat.data ? (!heat.error && <Loading />) : !grids.length ? <Empty>No IPv4 hosts for a heatmap yet.</Empty> : (
+        <div style={{ padding: '0.75rem 1rem 1rem', display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
+          {grids.map((g) => <HeatTile key={g.subnet} grid={g} maxScore={maxScore} />)}
         </div>
       )}
     </Card>

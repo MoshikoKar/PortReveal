@@ -139,6 +139,12 @@ def test_reports_dashboard_and_zone(admin):
     subnets = admin.get("/api/reports/subnets").json()["items"]
     assert subnets == [{"subnet": "10.0.0.0/24", "hosts": 2, "active": 2, "max_score": 35, "avg_score": 22.5,
                         "query": "net:10.0.0.0/24"}]
+    heat = admin.get("/api/reports/heatmap").json()["items"]
+    assert [(g["subnet"], g["hosts"], len(g["cells"])) for g in heat] == [(s["subnet"], s["hosts"], 256) for s in subnets]
+    assert sum(c["present"] for c in heat[0]["cells"]) == heat[0]["hosts"]
+    one = admin.get("/api/reports/heatmap", params={"subnet": subnets[0]["subnet"]}).json()["items"]
+    assert [g["subnet"] for g in one] == [subnets[0]["subnet"]]
+    assert admin.get("/api/reports/heatmap", params={"subnet": "not-a-net"}).status_code == 422
 
     dash = admin.get("/api/dashboard").json()
     assert dash["exposure"]["medium"] == 1 and dash["exposure"]["top"][0]["score"] == 35
