@@ -10,6 +10,7 @@ import httpx
 
 from ...models import WEB_PAGE_HOME, WEB_PAGE_LOGIN, WEB_PAGE_OTHER, WEB_PAGE_REGISTER
 from .classify import (
+    auth_challenge_scheme,
     candidate_paths_for_endpoint,
     extract_title,
     looks_like_login_html,
@@ -41,6 +42,7 @@ class ProbeResult:
     tls_verified: bool | None = None
     error: str | None = None
     kind: str = WEB_PAGE_OTHER
+    auth_scheme: str | None = None  # HTTP authentication challenge on 401/407
 
 
 @dataclass
@@ -96,6 +98,7 @@ def probe_url(
                 result.http_status = resp.status_code
                 result.content_type = resp.headers.get("content-type")
                 result.server_header = resp.headers.get("server")
+                result.auth_scheme = auth_challenge_scheme(resp.status_code, resp.headers)
                 if resp.status_code in (301, 302, 303, 307, 308):
                     loc = resp.headers.get("location")
                     if not loc:
@@ -176,7 +179,7 @@ def classify_probe(pr: ProbeResult, suggested: str) -> str:
     path = urlparse(pr.final_url or pr.url).path or "/"
     if pr.external_redirect and suggested == WEB_PAGE_HOME:
         return WEB_PAGE_HOME
-    if looks_like_login_html(pr.html, pr.title) or suggested == WEB_PAGE_LOGIN:
+    if pr.auth_scheme or looks_like_login_html(pr.html, pr.title) or suggested == WEB_PAGE_LOGIN:
         if suggested == WEB_PAGE_REGISTER:
             return WEB_PAGE_REGISTER
         return WEB_PAGE_LOGIN
@@ -231,7 +234,7 @@ def probe_endpoint(
             return ep
 
         # No application at "/" (error or default server page): also look where apps usually live
-        root_unusable = bool(unusable_page_reason(hs, home.title, home.html, home.body_text))
+        root_unusable = bool(unusable_page_reason(hs, home.title, home.html, home.body_text, home.auth_scheme))
         candidates = candidate_paths_for_endpoint(
             base, home.html, allowed_hosts, allowed_ips, max_candidates,
             discovery=max_discovery if root_unusable else 0,
@@ -265,7 +268,7 @@ def probe_endpoint(
                 continue
             # A guessed path that errors (or shows the server's default page) is not a page of this site
             if not pr.external_redirect and unusable_page_reason(
-                pr.http_status, pr.title, pr.html, pr.body_text
+                pr.http_status, pr.title, pr.html, pr.body_text, pr.auth_scheme
             ):
                 continue
             fkey = (pr.final_url or pr.url).rstrip("/") or pr.url
@@ -311,7 +314,7 @@ def probe_endpoint(
     def _is_unusable(pr: ProbeResult) -> bool:
         if pr.external_redirect:
             return False
-        return bool(unusable_page_reason(pr.http_status, pr.title, pr.html, pr.body_text))
+        return bool(unusable_page_reason(pr.http_status, pr.title, pr.html, pr.body_text, pr.auth_scheme))
 
     # When a real app was found (e.g. /console/), do not also keep the 404 / JBoss welcome
     # home probe — it clutters the UI next to the live page.

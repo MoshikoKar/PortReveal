@@ -665,6 +665,9 @@ class WebPage(Base):
     screenshot_status: Mapped[str] = mapped_column(String(20), default=SCREENSHOT_NOT_REQUESTED)
     screenshot_relpath: Mapped[str | None] = mapped_column(String(500))
     capture_error: Mapped[str | None] = mapped_column(String(500))
+    # WWW-Authenticate scheme (Basic, Digest, NTLM, Negotiate, Bearer) when the page or the API
+    # calls it makes answer 401: a login-protected application, not an error page.
+    auth_scheme: Mapped[str | None] = mapped_column(String(20))
     phash: Mapped[str | None] = mapped_column(String(32))  # perceptual hash of screenshot
     ocr_text: Mapped[str | None] = mapped_column(Text)  # optional OCR of screenshot
     captured_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

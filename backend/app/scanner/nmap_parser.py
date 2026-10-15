@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from defusedxml import ElementTree as ET
 
+from .response_fp import apply_servicefp
 from .types import HostObservation, PortObservation, ScanStageError
 
 
@@ -14,6 +15,10 @@ class ParsedRun:
     port_scope: str | None = None  # TCP port list from <scaninfo services=...>
     finished_ok: bool = True
     error: str | None = None
+
+
+# nmap soft matches (protocol pattern only, no product/version) are not full fingerprints.
+SOFT_MATCH_CONFIDENCE = 7
 
 
 def _clean(value: str | None) -> str | None:
@@ -96,6 +101,12 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
                     po.cpe = " ".join(dict.fromkeys(cpes))[:500] or None
                     if not obs.os_name and svc.get("ostype"):
                         obs.os_name = svc.get("ostype")
+                    if not po.product and not po.version:
+                        # Unmatched replies are still in servicefp: identify HTTP(S) from them for free.
+                        # Otherwise a probed label without product is a bare protocol (soft) match,
+                        # which nmap still reports as conf 10.
+                        if not apply_servicefp(po, svc.get("servicefp")) and po.method == "probed":
+                            po.confidence = min(po.confidence or SOFT_MATCH_CONFIDENCE, SOFT_MATCH_CONFIDENCE)
                 obs.ports.append(po)
         run.hosts.append(obs)
     return run

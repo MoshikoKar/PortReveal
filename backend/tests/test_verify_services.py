@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import socketserver
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
@@ -71,15 +72,23 @@ def test_only_weak_labels_need_verification():
     assert not needs_verification(nmap_soft(23, "telnet"))
     assert not needs_verification(nmap_soft(443, "tcpwrapped"))
     assert not needs_verification(nmap_soft(5060, "sip"))  # telephony: never probed
+    # port-table guess: nmap already tried GET + TLS there, nothing to learn
+    assert not needs_verification(PortObservation(port=7050, service="unknown", method="table", confidence=3))
     assert not needs_verification(PortObservation(port=80, protocol="udp", service="rtsp", method="probed"))
     assert not needs_verification(PortObservation(port=80, service="http", method=VERIFIED_METHOD))
+    # HTTP soft matches carry no product: checked to find one
+    assert needs_verification(nmap_soft(8080, "http-proxy"))
+    assert needs_verification(nmap_soft(8443, "https-alt"))
+    assert not needs_verification(PortObservation(port=80, service="http", product="nginx", method="probed"))
 
 
 def test_echoing_web_server_labelled_rtsp_becomes_http():
     with tcp_server(echo_httpd) as p:
         po = nmap_soft(p, "rtsp")
         assert verify_port("127.0.0.1", po)
-    assert (po.service, po.product, po.method, po.confidence) == ("http", "embedded httpd", VERIFIED_METHOD, 10)
+    # protocol + product, no version: 9 on PortReveal's scale; the 401 challenge is kept as info
+    assert (po.service, po.product, po.method, po.confidence) == ("http", "embedded httpd", VERIFIED_METHOD, 9)
+    assert po.extra_info == "Basic auth required"
 
 
 def test_real_rtsp_server_keeps_label():
@@ -143,3 +152,67 @@ def test_verification_correction_is_identification_and_not_flapped(db):
     assert not [t for t in event_types(db, s.id) if t.startswith(("service_", "tag_"))]
     p80 = next(p for p in device_by_ip(db, "10.0.0.7").ports if p.port == 80)
     assert (p80.service, p80.product, p80.method) == ("http", "embedded httpd", VERIFIED_METHOD)
+
+
+UNDERTOW_404 = (b"HTTP/1.0 404 Not Found\r\nX-Frame-Options: SAMEORIGIN\r\nContent-Type: text/html\r\n\r\n"
+                b"<html><head><title>Error</title></head><body>404 - Not Found</body></html>")
+
+
+def test_http_soft_match_gets_product_from_response():
+    po = nmap_soft(8080, "http-proxy")
+    assert verify_port("10.0.0.9", po, send=lambda *_: UNDERTOW_404)
+    assert (po.service, po.product, po.extra_info, po.confidence) == ("http", "Undertow", None, 9)
+
+
+def test_tls_only_port_silent_to_plaintext_is_retried_over_tls():
+    """Netty/Keycloak TLS port nmap mislabelled plain "rtsp": plaintext gets silence, TLS gets HTTP."""
+    calls: list[tuple[bool, bytes]] = []
+
+    def send(_ip: str, _port: int, tls: bool, payload: bytes) -> bytes | None:
+        calls.append((tls, payload[:7]))
+        if not tls:
+            return b""  # connected, server said nothing
+        return b"HTTP/1.0 200 OK\r\n\r\n<html><h2>Keycloak Management Interface</h2></html>"
+
+    po = nmap_soft(9000, "rtsp")
+    assert verify_port("10.0.0.9", po, send=send)
+    assert (po.service, po.tunnel, po.product, po.extra_info) == (
+        "http", "ssl", "Keycloak", "Keycloak Management Interface")
+    assert calls == [(False, b"OPTIONS"), (False, b"GET / H"), (True, b"GET / H")]
+
+
+def test_unreachable_port_is_not_retried_over_tls():
+    calls: list[bool] = []
+
+    def send(_ip: str, _port: int, tls: bool, _payload: bytes) -> bytes | None:
+        calls.append(tls)
+        return None  # no connection at all
+
+    assert not verify_port("10.0.0.9", nmap_soft(8088, "unknown"), send=send)
+    assert calls == [False]
+
+
+def test_verify_hosts_checks_one_port_at_a_time_per_host():
+    active: dict[str, int] = {}
+    peak: dict[str, int] = {}
+    lock = threading.Lock()
+
+    def send(ip: str, _port: int, _tls: bool, _payload: bytes) -> bytes | None:
+        with lock:
+            active[ip] = active.get(ip, 0) + 1
+            peak[ip] = max(peak.get(ip, 0), active[ip])
+        time.sleep(0.02)
+        with lock:
+            active[ip] -= 1
+        return b"HTTP/1.0 200 OK\r\n\r\n"
+
+    hosts = [HostObservation(ip=f"10.0.0.{i}", ports=[nmap_soft(p, "unknown") for p in (8080, 8081, 8082)])
+             for i in (1, 2, 3)]
+    assert verify_hosts(hosts, ScanContext(1), send=send) == 9
+    assert peak == {"10.0.0.1": 1, "10.0.0.2": 1, "10.0.0.3": 1}
+
+
+def test_verify_hosts_stops_at_time_budget():
+    hosts = [HostObservation(ip="10.0.0.1", ports=[nmap_soft(8080, "unknown")])]
+    assert verify_hosts(hosts, ScanContext(1), send=lambda *_: b"HTTP/1.0 200 OK\r\n\r\n", budget_s=0) == 0
+    assert hosts[0].ports[0].service == "unknown"

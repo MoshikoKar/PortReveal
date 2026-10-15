@@ -1,5 +1,5 @@
 import { Link, useSearchParams } from 'react-router-dom';
-import { HttpBadge, endpointUrl, isRtspPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
+import { HttpBadge, ShotImg, endpointUrl, isRtspPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
 import { Card, ErrorBox, Loading, Pager } from '../components/ui';
 import type { WebHost, WebHostPage, WebService } from '../types';
 import { WEB_HOSTS_PAGE_SIZE, relTime, useApi } from '../util';
@@ -55,7 +55,7 @@ function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number
   return (
     <Link to={`/devices/${h.device_uuid}/web`} className="host-card">
       {isUsefulShot(p) ? (
-        <div className="shot-img"><img src={shotUrl(p)} alt="" loading="lazy" /></div>
+        <div className="shot-img"><ShotImg src={shotUrl(p)} alt="" loading="lazy" /></div>
       ) : (
         <div className="shot-img shot-ph"><span>{p.screenshot_status === 'captured' ? 'No screenshot' : shotNote(p)}</span></div>
       )}

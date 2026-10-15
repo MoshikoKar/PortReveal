@@ -93,13 +93,22 @@ def web_page_out(p: WebPage) -> dict:
         "has_screenshot": _has_shot(p),
         "error_reason": _error_reason(p),
         "capture_error": p.capture_error,
+        "auth_scheme": p.auth_scheme,
         "captured_at": p.captured_at,
         "can_live": _is_rtsp_page(p),
     }
 
 
 def _has_shot(p: WebPage) -> bool:
-    return bool(p.screenshot_relpath and p.screenshot_status == SCREENSHOT_CAPTURED)
+    """A captured screenshot whose file is really on disk.
+
+    The row alone is not proof: files can be gone (data dir restored/moved without
+    web-captures, disk cleanup), and the UI would then render a broken image.
+    """
+    return bool(
+        p.screenshot_relpath and p.screenshot_status == SCREENSHOT_CAPTURED
+        and resolve_screenshot(p.screenshot_relpath) is not None
+    )
 
 
 def _classification_capture_error(err: str | None) -> str | None:
@@ -125,12 +134,15 @@ def _error_reason(p: WebPage) -> str | None:
     # RTSP / RDP / VNC have no HTTP status; usable when inventory recorded the endpoint.
     if _is_rtsp_page(p) or _is_desktop_page(p):
         return None
+    # Behind an HTTP auth challenge: a login-protected application, not an error page
+    if p.auth_scheme and p.http_status in (401, 407):
+        return None
     # Prefer a classification reason stored at capture time (body/JS evidence is not on the row)
     classified = _classification_capture_error(p.capture_error)
     if classified:
         return classified
     # Live rematch from title/status (HTML is not retained after capture)
-    return unusable_page_reason(p.http_status, p.title)
+    return unusable_page_reason(p.http_status, p.title, auth_scheme=p.auth_scheme)
 
 
 def _useful_shot(p: WebPage) -> bool:

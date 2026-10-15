@@ -320,6 +320,7 @@ export interface WebPage {
   /** Set when the page is an error response (HTTP 4xx/5xx, no response, or an error title). */
   error_reason: string | null;
   capture_error: string | null;
+  auth_scheme?: string | null;
   captured_at: string;
   /** True for RTSP/RTSPS pages that can be watched live via the MJPEG proxy. */
   can_live?: boolean;

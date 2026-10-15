@@ -200,15 +200,31 @@ def _visible_text(html: str | None, body_text: str | None = None) -> str:
     return re.sub(r"\s+", " ", " ".join(parts)).strip()
 
 
+def auth_challenge_scheme(http_status: int | None, headers) -> str | None:
+    """Scheme of an HTTP authentication challenge (``Basic``, ``Digest``, ``NTLM`` …) on 401/407."""
+    if http_status not in (401, 407) or headers is None:
+        return None
+    value = headers.get("www-authenticate") or headers.get("proxy-authenticate") or ""
+    scheme = value.strip().split(None, 1)[0].rstrip(",") if value.strip() else ""
+    return scheme[:20] or None
+
+
 def error_page_reason(
     http_status: int | None,
     title: str | None,
     html: str | None = None,
     body_text: str | None = None,
+    auth_scheme: str | None = None,
 ) -> str | None:
-    """Why a page is an error page not worth a screenshot, or None for a real page."""
+    """Why a page is an error page not worth a screenshot, or None for a real page.
+
+    A 401/407 that carries an authentication challenge is a login-protected application
+    (browser credential prompt), not an error.
+    """
     if http_status is None:
         return "no HTTP response"
+    if auth_scheme and http_status in (401, 407):
+        return None
     if http_status >= 400:
         return f"error page (HTTP {http_status})"
     if title and ERROR_TITLE_RE.search(title):
@@ -267,6 +283,7 @@ def unusable_page_reason(
     title: str | None,
     html: str | None = None,
     body_text: str | None = None,
+    auth_scheme: str | None = None,
 ) -> str | None:
     """Why a page shows no usable application, or None for a real page.
 
@@ -279,6 +296,8 @@ def unusable_page_reason(
     """
     if http_status is not None and 300 <= http_status < 400:
         return "redirect"
+    if auth_scheme and http_status in (401, 407):
+        return None
     return (
         error_page_reason(http_status, title, html, body_text)
         or default_page_reason(title, html, body_text)

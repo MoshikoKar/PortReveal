@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from urllib.parse import urljoin
 
-from .classify import BLANK_PAGE_REASON, unusable_page_reason
+from .classify import BLANK_PAGE_REASON, auth_challenge_scheme, unusable_page_reason
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +61,9 @@ class ScreenshotResult:
     error: str | None = None
     title: str | None = None
     body_text: str | None = None
+    # HTTP auth challenge seen while loading (page itself, or the API calls of a single-page app
+    # such as WildFly's HAL console, which loads with 200 and then gets 401 from /management).
+    auth_scheme: str | None = None
 
 
 def playwright_available() -> bool:
@@ -202,13 +205,25 @@ def take_screenshot(
                     return route.continue_()
 
                 navs = [0]
+                auth: list[str] = []
 
                 def _on_nav(frame):
                     if frame == page.main_frame:
                         navs[0] += 1
 
+                def _on_response(resp):
+                    if auth:
+                        return
+                    try:
+                        scheme = auth_challenge_scheme(resp.status, resp.headers)
+                        if scheme and is_same_target(url, resp.url, allowed_hosts, allowed_ips):
+                            auth.append(scheme)
+                    except Exception:
+                        pass
+
                 page.route("**/*", _route_handler)
                 page.on("framenavigated", _on_nav)
+                page.on("response", _on_response)
                 try:
                     page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 except Exception:
@@ -228,20 +243,24 @@ def take_screenshot(
                     pass
                 title = (state.get("title") or None) or None
                 body_text = (state.get("text") or None) or None
+                auth_scheme = auth[0] if auth else None
                 if not state.get("visible"):
                     return ScreenshotResult(
-                        status="skipped", error=BLANK_PAGE_REASON, title=title, body_text=body_text
+                        status="skipped", error=BLANK_PAGE_REASON, title=title, body_text=body_text,
+                        auth_scheme=auth_scheme,
                     )
                 # Probe-time HTML can look like a real SPA shell; after JS the page may only be
-                # "Not Found" or a stock Tomcat/IIS welcome — treat those as unusable.
-                reason = unusable_page_reason(200, title, body_text=body_text)
+                # "Not Found" or a stock Tomcat/IIS welcome — treat those as unusable. A page
+                # behind an auth challenge is a login, whatever its "401 Unauthorized" text says.
+                reason = None if auth_scheme else unusable_page_reason(200, title, body_text=body_text)
                 if reason:
                     return ScreenshotResult(
                         status="skipped", error=reason, title=title, body_text=body_text
                     )
                 png = page.screenshot(type="png", full_page=False)
                 return ScreenshotResult(
-                    status="captured", data=_to_webp(png), title=title, body_text=body_text
+                    status="captured", data=_to_webp(png), title=title, body_text=body_text,
+                    auth_scheme=auth_scheme,
                 )
             finally:
                 browser.close()

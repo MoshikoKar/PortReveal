@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...models import (
     EV_DEVICE_DISCOVERED,
     EV_PORT_OPENED,
+    EV_SERVICE_CHANGED,
+    EV_SERVICE_DETECTED,
     SCAN_FULL,
     SCAN_STANDARD,
+    SCREENSHOT_CAPTURED,
     WEB_CAPTURE_ACTIVE_STATES,
     WEB_CAPTURE_QUEUED,
     Event,
@@ -21,6 +24,7 @@ from ...models import (
 )
 from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
+from ..web_storage import resolve_screenshot
 from .inventory import COMMON_RTSP_PORTS, COMMON_WEB_PORTS, find_web_endpoints, is_rtsp_service, is_web_service
 
 log = logging.getLogger(__name__)
@@ -63,6 +67,9 @@ def _candidate_ips(db: Session, scan: Scan, cfg: WebCaptureSettings, *, baseline
             interesting.add(ev.ip)
         elif ev.event_type == EV_PORT_OPENED and _port_looks_web(ev.new_value, ev.port):
             interesting.add(ev.ip)
+        elif ev.event_type in (EV_SERVICE_CHANGED, EV_SERVICE_DETECTED):
+            # Re-identified service (e.g. a mislabelled "rtsp" port now known to be HTTP)
+            interesting.add(ev.ip)
 
     # Never-captured endpoints (covers silent baseline adds and first-time enrichment)
     captured_ports = set(
@@ -74,6 +81,23 @@ def _candidate_ips(db: Session, scan: Scan, cfg: WebCaptureSettings, *, baseline
     )
     for e in endpoints:
         if e.device_port_id not in captured_ports:
+            interesting.add(e.ip)
+
+    # Stale captures: the newest page of an endpoint was taken with another scheme (the port was
+    # re-identified, e.g. rtsp -> http) or claims a screenshot whose file is gone. Without this
+    # such hosts keep a dead tile forever, since "unchanged" hosts are never captured again.
+    latest_ids = select(func.max(WebPage.id)).where(
+        WebPage.device_port_id.in_([e.device_port_id for e in endpoints])
+    ).group_by(WebPage.device_port_id)
+    latest = {p.device_port_id: p for p in db.scalars(select(WebPage).where(WebPage.id.in_(latest_ids))).all()}
+    for e in endpoints:
+        page = latest.get(e.device_port_id)
+        if page is None:
+            continue
+        if page.scheme != e.scheme or (
+            page.screenshot_status == SCREENSHOT_CAPTURED and page.screenshot_relpath
+            and resolve_screenshot(page.screenshot_relpath) is None
+        ):
             interesting.add(e.ip)
 
     if baseline_created:

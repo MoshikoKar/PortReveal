@@ -83,10 +83,12 @@ def is_probable_web_port(service: str | None, port: int, *, truenas: bool) -> bo
     return False
 
 
-def guess_scheme(service: str | None, port: int) -> str:
+def guess_scheme(service: str | None, port: int, tunnel: str | None = None) -> str:
+    """``tunnel`` is nmap's TLS flag: "ssl" when the service was found inside TLS."""
+    tls = tunnel == "ssl"
     if is_rtsp_service(service):
         s = (service or "").lower()
-        if "ssl" in s or "rtsps" in s:
+        if tls or "ssl" in s or "rtsps" in s:
             return "rtsps"
         return "rtsp"
     if is_rdp_service(service, port):
@@ -94,7 +96,7 @@ def guess_scheme(service: str | None, port: int) -> str:
     if is_vnc_service(service, port):
         return "vnc"
     s = (service or "").lower()
-    if "https" in s or "ssl" in s or port in (443, 8443, 9443, 10443):
+    if tls or "https" in s or "ssl" in s or port in (443, 8443, 9443, 10443):
         return "https"
     return "http"
 
@@ -162,13 +164,13 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int) -> tup
             if not (by_rtsp or by_rdp or by_vnc or by_web):
                 continue
             if by_rtsp:
-                scheme = "rtsps" if (p.service or "").lower().find("ssl") >= 0 else "rtsp"
+                scheme = "rtsps" if (p.tunnel == "ssl" or "ssl" in (p.service or "").lower()) else "rtsp"
             elif by_rdp:
                 scheme = "rdp"
             elif by_vnc:
                 scheme = "vnc"
             else:
-                scheme = guess_scheme(p.service, p.port)
+                scheme = guess_scheme(p.service, p.port, p.tunnel)
             endpoints.append(
                 WebEndpoint(
                     device_id=dev.id,

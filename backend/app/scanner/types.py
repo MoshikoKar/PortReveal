@@ -10,6 +10,9 @@ from typing import Protocol
 
 log = logging.getLogger(__name__)
 
+# Service identified by PortReveal from a response (nmap servicefp or its own request).
+VERIFIED_METHOD = "verified"
+
 
 @dataclass
 class PortObservation:
@@ -27,7 +30,7 @@ class PortObservation:
     @property
     def reliable(self) -> bool:
         """True when the service came from a response (not just a port-number guess)."""
-        return self.method in ("probed", "verified") or (self.confidence or 0) >= 8
+        return self.method in ("probed", VERIFIED_METHOD) or (self.confidence or 0) >= 8
 
 
 @dataclass

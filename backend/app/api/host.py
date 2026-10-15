@@ -13,6 +13,7 @@ from ..auth.deps import current_user
 from ..core.mockdata import device_visible
 from ..core.query.search import http_out
 from ..core.tagging import tags_by_device
+from ..core.web_storage import resolve_screenshot
 from ..db import get_db
 from ..models import (
     SCREENSHOT_CAPTURED,
@@ -57,7 +58,8 @@ def host_document(ip: str, db: Session = Depends(get_db), user: User = Depends(c
     for page in db.scalars(select(WebPage).where(
         WebPage.device_id == dev.id, WebPage.screenshot_status == SCREENSHOT_CAPTURED,
     ).order_by(WebPage.captured_at.desc())):
-        shots.setdefault(page.device_port_id, page)
+        if resolve_screenshot(page.screenshot_relpath) is not None:  # skip rows whose file is gone
+            shots.setdefault(page.device_port_id, page)
     data: list[dict] = []
     for p in sorted((x for x in dev.ports if x.is_open), key=lambda x: (x.port, x.protocol)):
         entry: dict = {

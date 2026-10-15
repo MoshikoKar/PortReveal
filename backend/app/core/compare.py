@@ -59,8 +59,8 @@ from ..models import (
 )
 from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.known_ports import merge_port_scope
-from ..scanner.types import HostObservation, PortObservation
-from ..scanner.verify_services import VERIFIED_METHOD, WEAK_SERVICE_LABELS
+from ..scanner.types import VERIFIED_METHOD, HostObservation, PortObservation
+from ..scanner.verify_services import WEAK_SERVICE_LABELS
 from ..settings_store import PresenceSettings, ScanSettings, get_section
 from .identity import identity_hostname, match_hosts, normalize_hostname, normalize_mac
 

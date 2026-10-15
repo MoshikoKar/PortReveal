@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ImgHTMLAttributes, type KeyboardEvent } from 'react';
 import { RtspLivePlayer, liveStreamUrl } from './RtspLivePlayer';
 import type { WebPage, WebPageKind } from '../types';
 import { fmtTime } from '../util';
@@ -14,6 +14,13 @@ export const KIND_LABELS: Record<WebPageKind, string> = {
 };
 
 export const shotUrl = (p: WebPage) => `/api/web-pages/${p.id}/screenshot`;
+
+/** Screenshot image that turns into a note when the file cannot be loaded — never a broken icon. */
+export function ShotImg({ alt, ...rest }: ImgHTMLAttributes<HTMLImageElement> & { src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span className="shot-missing">Screenshot unavailable</span>;
+  return <img alt={alt} {...rest} onError={() => setFailed(true)} />;
+}
 
 export const isRtspPage = (p: WebPage) =>
   p.can_live === true || p.scheme === 'rtsp' || p.scheme === 'rtsps';
@@ -80,6 +87,7 @@ export function shotNote(p: WebPage): string {
     const t = p.redirect_target ? hostOf(p.redirect_target) ?? pathOf(p.redirect_target) : null;
     return t ? `Redirects to ${t}` : 'Redirect';
   }
+  if (p.auth_scheme) return `Login required (${p.auth_scheme} authentication)`;
   if (p.http_status === 401 || p.http_status === 403) return 'Authentication required';
   if (p.error_reason?.startsWith('default server page')) {
     const m = p.error_reason.match(/\(([^)]+)\)/);
@@ -100,6 +108,7 @@ export function PageFlags({ p }: { p: WebPage }) {
     <>
       {p.external_redirect && <span className="badge medium" title={p.redirect_target ?? undefined}>external redirect</span>}
       {p.tls_verified === false && <span className="badge outline" title="Certificate was not verified">TLS unverified</span>}
+      {p.auth_scheme && <span className="badge medium" title="The server asks for credentials (HTTP authentication challenge)">{p.auth_scheme} auth</span>}
     </>
   );
 }
@@ -114,7 +123,7 @@ export function ShotTile({ p, onOpen }: { p: WebPage; onOpen?: () => void }) {
       {isUsefulShot(p) ? (
         <button className="shot-img" onClick={onOpen} title={rtsp ? 'Open stream' : 'Open preview'}>
           {/* width/height only hint the 16:10 tile ratio; CSS sizes the image. */}
-          <img src={shotUrl(p)} alt={p.title ?? p.url} loading="lazy" decoding="async" width={320} height={200} />
+          <ShotImg src={shotUrl(p)} alt={p.title ?? p.url} loading="lazy" decoding="async" width={320} height={200} />
         </button>
       ) : (
         <div className="shot-img shot-ph"><span>{shotNote(p)}</span></div>
@@ -210,7 +219,7 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
             />
           </div>
         ) : p.has_screenshot ? (
-          <img src={shotUrl(p)} alt={p.title ?? p.url} decoding="async" />
+          <ShotImg src={shotUrl(p)} alt={p.title ?? p.url} decoding="async" />
         ) : (
           <div className="rtsp-ph" style={{ minWidth: 320, minHeight: 200 }}><span>{shotNote(p)}</span></div>
         )}

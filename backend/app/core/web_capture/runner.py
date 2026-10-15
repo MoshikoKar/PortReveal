@@ -23,6 +23,7 @@ from ...models import (
     WEB_CAPTURE_FAILED,
     WEB_CAPTURE_PARTIAL,
     WEB_CAPTURE_RUNNING,
+    WEB_PAGE_LOGIN,
     WEB_PAGE_STREAM,
     DevicePort,
     Exclusion,
@@ -286,9 +287,9 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
         if not mock and any(e["scheme"] == "rdp" for e in endpoint_data) and not freerdp_available():
             notes.append("freerdp unavailable; RDP endpoints recorded without screenshots.")
 
-        # (ip, landing URL) -> (status, relpath, error) of a screenshot already taken in this job,
+        # (ip, landing URL) -> (status, relpath, error, auth scheme) of a screenshot already taken in this job,
         # so e.g. http:80 redirecting to the https:443 page reuses that image instead of reloading it
-        shot_cache: dict[tuple[str, str], tuple[str, str | None, str | None]] = {}
+        shot_cache: dict[tuple[str, str], tuple[str, str | None, str | None, str | None]] = {}
         total = len(endpoint_data)
         prefetch = _ProbePrefetcher(
             endpoint_data,
@@ -372,7 +373,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                         pr.http_status is not None or pr.html
                     )
                     error_reason = unusable_page_reason(
-                        pr.http_status, pr.title, pr.html, getattr(pr, "body_text", None)
+                        pr.http_status, pr.title, pr.html, getattr(pr, "body_text", None), pr.auth_scheme
                     )
                     if pr.external_redirect:
                         shot_status = SCREENSHOT_NOT_REQUESTED
@@ -417,6 +418,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                         screenshot_status=shot_status,
                         screenshot_relpath=shot_path,
                         capture_error=shot_err,
+                        auth_scheme=pr.auth_scheme,
                     )
                     db.add(row)
                     pages_done += 1
@@ -461,7 +463,9 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                         with session_scope() as db:
                             page = db.get(WebPage, page_id_info.id)
                             if page is not None:
-                                page.screenshot_status, page.screenshot_relpath, page.capture_error = cached
+                                (page.screenshot_status, page.screenshot_relpath, page.capture_error,
+                                 auth_scheme) = cached
+                                _mark_auth(page, auth_scheme)
                         continue
                     result = take_screenshot(
                         target_url,
@@ -475,6 +479,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                         page = db.get(WebPage, page_id_info.id)
                         if page is None:
                             continue
+                        _mark_auth(page, result.auth_scheme)
                         if result.status == "captured" and result.data:
                             try:
                                 rel = write_screenshot(cap_uuid, page_uuid, result.data)
@@ -482,7 +487,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                                 page.screenshot_relpath = rel
                                 shot_budget -= 1
                                 screenshots_done += 1
-                                shot_cache[cache_key] = (SCREENSHOT_CAPTURED, rel, page.capture_error)
+                                shot_cache[cache_key] = (SCREENSHOT_CAPTURED, rel, page.capture_error, result.auth_scheme)
                             except Exception:
                                 page.screenshot_status = SCREENSHOT_FAILED
                                 page.capture_error = "screenshot save failed"
@@ -502,7 +507,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                                     or result.error.startswith("redirect ")
                                 )
                             ):
-                                shot_cache[cache_key] = (SCREENSHOT_SKIPPED, None, result.error)
+                                shot_cache[cache_key] = (SCREENSHOT_SKIPPED, None, result.error, result.auth_scheme)
                             if result.error == "Chromium unavailable":
                                 browser_missing = True
                         else:
@@ -775,6 +780,13 @@ def _capture_remote_desktop(
         ))
         pages_done += 1
     return pages_done, screenshots_done, shot_budget, had_failures
+
+
+def _mark_auth(page: WebPage, auth_scheme: str | None) -> None:
+    """The browser hit an HTTP auth challenge (page or its API calls): a login-protected app."""
+    if auth_scheme:
+        page.auth_scheme = page.auth_scheme or auth_scheme
+        page.kind = WEB_PAGE_LOGIN
 
 
 def delete_web_capture(db: Session, capture: WebCapture) -> None:

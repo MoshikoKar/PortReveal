@@ -4,6 +4,7 @@ import { post } from '../api';
 import type { FacetValue, Facets, SavedSearch, SearchHost, SearchService } from '../types';
 import { relTime } from '../util';
 import { DeviceStatusBadge, ErrorBox, Modal, ScoreBadge, confirmDiscard } from './ui';
+import { ShotImg } from './WebShots';
 
 export const FACET_LABELS: Record<string, string> = {
   port: 'Top ports', product: 'Products', tag: 'Tags', type: 'Device types', os: 'Operating systems',
@@ -81,7 +82,7 @@ export function HostResult({ h }: { h: SearchHost }) {
       </div>
       {h.screenshot && (
         <Link to={`/devices/${h.uuid}/web`} className="result-shot" title={h.screenshot.title ?? `Port ${h.screenshot.port}`}>
-          <img src={`/api/web-pages/${h.screenshot.page_id}/screenshot`} alt={h.screenshot.title ?? 'Web screenshot'} loading="lazy" />
+          <ShotImg src={`/api/web-pages/${h.screenshot.page_id}/screenshot`} alt={h.screenshot.title ?? 'Web screenshot'} loading="lazy" />
         </Link>
       )}
     </div>

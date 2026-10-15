@@ -4,7 +4,7 @@ import { del, get, post } from '../api';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { HttpBadge, KIND_LABELS, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
+import { HttpBadge, KIND_LABELS, ShotImg, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
 import { Card, Empty, ErrorBox, Loading, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, Paged, Scan, SnapshotInfo, WebCapture } from '../types';
@@ -346,7 +346,7 @@ export default function Scans() {
                           <td>{p.title ?? '—'} <HttpBadge status={p.http_status} /></td>
                           <td>
                             {isUsefulShot(p) && preview ? (
-                              <Link to={preview}><img src={shotUrl(p)} alt="" loading="lazy" className="thumb" /></Link>
+                              <Link to={preview}><ShotImg src={shotUrl(p)} alt="" loading="lazy" className="thumb" /></Link>
                             ) : <span className="muted small">{shotNote(p)}</span>}
                           </td>
                         </tr>

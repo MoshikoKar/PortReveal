@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { post } from '../api';
-import { HttpBadge, endpointUrl, isDesktopPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
+import { HttpBadge, ShotImg, endpointUrl, isDesktopPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
 import { Card, ErrorBox, Loading, Pager } from '../components/ui';
 import { useApp } from '../context';
 import type { WebCapture, WebHost, WebHostPage, WebService } from '../types';
@@ -19,7 +19,7 @@ function DesktopCard({ h, s, index }: RemoteCard) {
   return (
     <Link to={`/devices/${h.device_uuid}/web`} className="host-card">
       {isUsefulShot(p) ? (
-        <div className="shot-img"><img src={shotUrl(p)} alt="" loading="lazy" /></div>
+        <div className="shot-img"><ShotImg src={shotUrl(p)} alt="" loading="lazy" /></div>
       ) : (
         <div className="shot-img shot-ph"><span>{p.screenshot_status === 'captured' ? 'No screenshot' : shotNote(p)}</span></div>
       )}
