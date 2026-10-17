@@ -88,6 +88,25 @@ def test_device_detail_tags_and_profile(admin):
                        headers={"X-CSRF-Token": viewer.cookies.get("nf_csrf", "")}).status_code == 403
 
 
+def test_device_list_and_detail_expose_os_and_port_product_version(client, db):
+    net = make_network(db)
+    scan(ScriptedScanner([
+        host("10.0.0.50", [port(443, "https", "nginx", "1.24.0")], mac="02:00:00:00:00:50",
+             hostname="web50", os_name="Linux 5.x", os_accuracy=94),
+    ]), network_id=net.id)
+    assert client.post("/api/setup/admin", json={"username": "admin2", "password": "correct-horse-1"}).status_code == 200
+    uuid = _uuid(client, "10.0.0.50")
+
+    listed = client.get("/api/devices", params={"q": "ip:10.0.0.50"}).json()["items"][0]
+    assert (listed["os_name"], listed["os_accuracy"], listed["os_source"]) == ("Linux 5.x", 94, "nmap_os")
+    assert listed["os_detected_at"] is not None
+    chip = listed["open_ports"][0]
+    assert (chip["product"], chip["version"]) == ("nginx", "1.24.0")
+
+    detail = client.get(f"/api/devices/{uuid}").json()
+    assert (detail["os_name"], detail["os_accuracy"], detail["os_source"]) == ("Linux 5.x", 94, "nmap_os")
+
+
 def test_device_detail_eager_loads_related_data_in_three_queries(admin, db):
     uuid = _uuid(admin, "10.0.0.1")
     db.expunge_all()

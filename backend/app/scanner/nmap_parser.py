@@ -69,9 +69,18 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
         user = [n.get("name") for n in names if n.get("name")]
         obs.hostname = _clean((ptr or user or [None])[0])
 
-        osmatch = host.find("os/osmatch")
-        if osmatch is not None and osmatch.get("name"):
-            obs.os_name = f"{osmatch.get('name')} ({osmatch.get('accuracy', '?')}%)"
+        best_name, best_accuracy = None, None
+        for osmatch in host.findall("os/osmatch"):
+            name = osmatch.get("name")
+            if not name:
+                continue
+            accuracy_raw = osmatch.get("accuracy")
+            accuracy = int(accuracy_raw) if accuracy_raw and accuracy_raw.isdigit() else None
+            if best_name is None or (accuracy is not None and (best_accuracy is None or accuracy > best_accuracy)):
+                best_name, best_accuracy = name, accuracy
+        if best_name is not None:
+            obs.os_name = best_name
+            obs.os_accuracy = best_accuracy
 
         timed_out = host.get("timedout") == "true"
         ports_el = host.find("ports")

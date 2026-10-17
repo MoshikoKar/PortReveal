@@ -222,12 +222,20 @@ export function Progress({ value }: { value: number }) {
   return <div className="progress"><div style={{ width: `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%` }} /></div>;
 }
 
-export function PortChips({ ports, max = 8 }: { ports: { port: number; protocol: string; service: string | null }[]; max?: number }) {
+type ChipPort = { port: number; protocol: string; service: string | null; product?: string | null; version?: string | null };
+
+function chipTitle(p: ChipPort): string | undefined {
+  const productVersion = [p.product, p.version].filter(Boolean).join(' ');
+  if (productVersion) return p.service ? `${productVersion} (${p.service})` : productVersion;
+  return p.service ?? undefined;
+}
+
+export function PortChips({ ports, max = 8 }: { ports: ChipPort[]; max?: number }) {
   if (!ports.length) return <span className="muted">—</span>;
   return (
     <span>
       {ports.slice(0, max).map((p) => (
-        <span className="chip" key={`${p.protocol}${p.port}`} title={p.service ?? undefined}>{p.port}</span>
+        <span className="chip" key={`${p.protocol}${p.port}`} title={chipTitle(p)}>{p.port}</span>
       ))}
       {ports.length > max && <span className="muted small">+{ports.length - max}</span>}
     </span>

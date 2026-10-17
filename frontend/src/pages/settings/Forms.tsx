@@ -174,7 +174,10 @@ export function ScanProfileForm({ onDirtyChange }: { onDirtyChange?: (dirty: boo
           <Num label="Keep raw XML (days)" value={s.raw_retention_days} min={1} max={90} onChange={(v) => set({ raw_retention_days: v })} />
         </div>
         <div className="row wrap">
-          <label className="check"><input type="checkbox" checked={s.os_detection} onChange={(e) => set({ os_detection: e.target.checked })} />Basic OS detection (-O, requires privileged nmap)</label>
+          <label className="check" title="Requires a privileged nmap (raw sockets) and sends one UDP probe to a closed port as part of the fingerprint; without privileges this is skipped automatically and the OS is guessed from service/banner data instead.">
+            <input type="checkbox" checked={s.os_detection} onChange={(e) => set({ os_detection: e.target.checked })} />
+            OS detection (-O, requires privileged nmap; sends one UDP probe to a closed port)
+          </label>
           <label className="check"><input type="checkbox" checked={s.keep_raw_xml} onChange={(e) => set({ keep_raw_xml: e.target.checked })} />Keep raw nmap XML temporarily for troubleshooting</label>
         </div>
         <Msg msg={f.msg} />

@@ -148,6 +148,9 @@ def device_summary(d: Device, open_ports: list[DevicePort] | None = None, networ
         "vendor": d.vendor,
         "hostname": d.hostname,
         "os_name": d.os_name,
+        "os_accuracy": d.os_accuracy,
+        "os_detected_at": d.os_detected_at,
+        "os_source": d.os_source,
         "status": d.status,
         "network_id": d.network_id,
         "network_name": network_name,
@@ -156,7 +159,8 @@ def device_summary(d: Device, open_ports: list[DevicePort] | None = None, networ
         "port_scan_failed": d.port_scan_failed,
         "open_port_count": len(ports),
         "open_ports": [
-            {"port": p.port, "protocol": p.protocol, "service": p.service} for p in sorted(ports, key=lambda x: x.port)
+            {"port": p.port, "protocol": p.protocol, "service": p.service, "product": p.product, "version": p.version}
+            for p in sorted(ports, key=lambda x: x.port)
         ],
     }
 

@@ -98,6 +98,55 @@ def test_service_and_version_changes(db):
     assert "8.9p1" in evs["version_changed"].old_value and "9.6p1" in evs["version_changed"].new_value
 
 
+def test_os_changes_only_after_seen_twice_or_confident_jump(db):
+    net = make_network(db)
+    ports_a = [port(22, "ssh", "OpenSSH", "8.9p1")]
+    scan(ScriptedScanner([host("10.0.0.1", ports_a, mac=MAC_A, hostname="srv-a.corp",
+                                os_name="Linux 5.x", os_accuracy=90)]), network_id=net.id)
+    d = device_by_ip(db, "10.0.0.1")
+    assert (d.os_name, d.os_accuracy, d.os_source) == ("Linux 5.x", 90, "nmap_os")
+
+    # A single low-confidence sighting of a different OS is parked, not applied: no event, no change.
+    maybe_windows = [host("10.0.0.1", ports_a, mac=MAC_A, hostname="srv-a.corp",
+                           os_name="Windows Server 2019", os_accuracy=92)]
+    s1 = scan(ScriptedScanner(maybe_windows), network_id=net.id)
+    assert event_types(db, s1.id) == []
+    assert device_by_ip(db, "10.0.0.1").os_name == "Linux 5.x"
+
+    # Seen again (same candidate): now committed, with an os_changed event (classification may also
+    # re-tag the device from the new OS name, which is incidental to this test).
+    s2 = scan(ScriptedScanner(maybe_windows), network_id=net.id)
+    assert "os_changed" in event_types(db, s2.id)
+    d = device_by_ip(db, "10.0.0.1")
+    assert (d.os_name, d.os_accuracy) == ("Windows Server 2019", 92)
+    os_event = next(e for e in events(db, s2.id) if e.event_type == "os_changed")
+    assert os_event.old_value == "Linux 5.x" and os_event.new_value == "Windows Server 2019"
+
+
+def test_os_change_commits_immediately_on_confident_accuracy_jump(db):
+    net = make_network(db)
+    ports_a = [port(22, "ssh", "OpenSSH", "8.9p1")]
+    scan(ScriptedScanner([host("10.0.0.1", ports_a, mac=MAC_A, hostname="srv-a.corp",
+                                os_name="Linux 4.x", os_accuracy=80)]), network_id=net.id)
+
+    confident = [host("10.0.0.1", ports_a, mac=MAC_A, hostname="srv-a.corp",
+                       os_name="Linux 5.x", os_accuracy=95)]  # +15 on first sighting crosses the +10 bar
+    s = scan(ScriptedScanner(confident), network_id=net.id)
+    assert event_types(db, s.id) == ["os_changed"]
+    d = device_by_ip(db, "10.0.0.1")
+    assert (d.os_name, d.os_accuracy) == ("Linux 5.x", 95)
+
+
+def test_os_fallback_source_is_distinguished_from_nmap_os(db):
+    net = make_network(db)
+    ports_a = [port(22, "ssh", "OpenSSH", "8.9p1")]
+    # os_accuracy=None models the service-ostype fallback (no -O run): os_source is "service", not "nmap_os".
+    scan(ScriptedScanner([host("10.0.0.1", ports_a, mac=MAC_A, hostname="srv-a.corp", os_name="Linux")]),
+         network_id=net.id)
+    d = device_by_ip(db, "10.0.0.1")
+    assert (d.os_name, d.os_accuracy, d.os_source) == ("Linux", None, "service")
+
+
 def test_unreliable_service_guess_does_not_create_change(db):
     net = make_network(db)
     scan(ScriptedScanner(baseline_hosts()), network_id=net.id)

@@ -194,7 +194,7 @@ export default function Devices() {
             </button>
           </div>
         )}
-        {loading && !data ? <SkeletonRows cols={isAdmin ? 9 : 8} /> : !items.length ? <Empty>No devices match.</Empty> : (
+        {loading && !data ? <SkeletonRows cols={isAdmin ? 10 : 9} /> : !items.length ? <Empty>No devices match.</Empty> : (
           <div className="table-wrap">
             <table>
               <thead>
@@ -209,6 +209,7 @@ export default function Devices() {
                   {sortTh('hostname', 'Hostname')}
                   <th>MAC / vendor</th>
                   {sortTh('open_ports', 'Open ports')}
+                  {sortTh('os', 'OS')}
                   <th>Network</th>
                   {sortTh('last_seen', 'Last seen')}
                   {sortTh('first_seen', 'First seen')}
@@ -223,6 +224,9 @@ export default function Devices() {
                     <td>{d.hostname ?? <span className="muted">—</span>}</td>
                     <td><span className="mono">{d.mac ?? '—'}</span>{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
                     <td><PortChips ports={d.open_ports} /></td>
+                    <td className="small" title={d.os_accuracy != null ? `${d.os_accuracy}% confidence` : undefined}>
+                      {d.os_name ?? <span className="muted">—</span>}
+                    </td>
                     <td className="small">{d.network_name ?? <span className="muted">—</span>}</td>
                     <td className="nowrap" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>
                     <td className="nowrap muted small">{fmtTime(d.first_seen)}</td>

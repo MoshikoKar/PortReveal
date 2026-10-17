@@ -99,7 +99,7 @@ class ScanSettings(BaseModel):
     port_batch_size: int = Field(32, ge=1, le=256)
     host_timeout_minutes: int = Field(15, ge=1, le=240)
     full_host_timeout_minutes: int = Field(120, ge=5, le=720)
-    os_detection: bool = False
+    os_detection: bool = True
     disappear_after_missed: int = Field(2, ge=1, le=30)
     mass_change_guard_percent: int = Field(50, ge=10, le=100)
     keep_raw_xml: bool = False

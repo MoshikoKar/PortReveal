@@ -28,8 +28,39 @@ def test_parse_standard_scan_xml():
     assert (ssh.service, ssh.product, ssh.version, ssh.method, ssh.confidence) == (
         "ssh", "OpenSSH", "8.9p1 Ubuntu 3ubuntu0.10", "probed", 10)
     assert h.ports[0].reliable and not h.ports[2].reliable
+    # No <os> element in this fixture: os_name falls back to the ssh service's ostype attribute,
+    # and os_accuracy stays None (fallback guesses are never a numeric nmap -O accuracy).
+    assert h.os_name == "Linux" and h.os_accuracy is None
     timed_out = run.hosts[1]
     assert timed_out.port_scan_failed and timed_out.ports is None
+
+
+def test_parse_os_detection_picks_the_highest_accuracy_osmatch():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.5" addrtype="ipv4"/>
+    <os>
+      <osmatch name="Linux 5.0 - 5.14" accuracy="92"/>
+      <osmatch name="Windows Server 2019" accuracy="98"/>
+      <osmatch name="Linux 4.15 - 5.6" accuracy="90"/>
+    </os>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    h = run.hosts[0]
+    assert h.os_name == "Windows Server 2019" and h.os_accuracy == 98
+
+
+def test_parse_os_detection_missing_accuracy_is_not_a_crash():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.6" addrtype="ipv4"/>
+    <os><osmatch name="Mystery OS"/></os>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    h = run.hosts[0]
+    assert h.os_name == "Mystery OS" and h.os_accuracy is None
 
 
 def test_parse_timed_out_host_keeps_partial_ports():

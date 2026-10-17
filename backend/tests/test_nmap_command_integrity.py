@@ -44,7 +44,9 @@ from app.settings_store import ScanSettings
 
 FINISHED_XML = '<?xml version="1.0"?><nmaprun><runstats><finished exit="success"/></runstats></nmaprun>'
 SHELL_CHARS = set(";&|$`<>\n\r'\"")
-DENIED_OPTIONS = ("--script", "-A", "-iR", "-sU", "-sC")
+# "-O" is not here: it is allowed, but only paired with --osscan-limit --max-os-tries 1
+# (asserted separately in assert_safe_argv) as the single narrow UDP exception (one U1 probe).
+DENIED_OPTIONS = ("--script", "-A", "-iR", "-sU", "-sC", "-PU", "-sY", "-PY")
 CRAFTED_TARGETS = ["10.0.0.1; reboot", "$(id)", "`id`", "10.0.0.2\n-iR 0", "10.0.0.3 && rm -rf /", "--script=evil"]
 
 
@@ -85,6 +87,10 @@ def assert_safe_argv(call: dict) -> None:
         assert not any(arg == d or arg.startswith(d + "=") for d in DENIED_OPTIONS), arg
         assert not arg.startswith("--script"), arg
         assert not SHELL_CHARS & set(arg), arg
+    # The one UDP exception (-O's single U1 probe) only ever appears with its two safety flags.
+    if "-O" in cmd:
+        i = cmd.index("-O")
+        assert cmd[i:i + 4] == ["-O", "--osscan-limit", "--max-os-tries", "1"], cmd
 
 
 def _run(scanner, bind: BindChoice | None, targets=("192.0.2.1", "192.0.2.2")) -> dict:
@@ -177,6 +183,25 @@ def test_scan_ports_every_nmap_run_is_safe(scanner, full, os_detection):
         assert_safe_argv(call)
         assert set(call["targets"].splitlines()) <= set(ips)
         assert not any(ip in call["cmd"] for ip in ips)
+    # os_detection on a privileged scanner requests -O on the primary port-scan run (not the
+    # fixed-port TrueNAS-apps follow-up, which never carries OS detection).
+    saw_os_detection = any("-O" in call["cmd"] for call in PopenSpy.calls)
+    assert saw_os_detection == os_detection
+
+
+@pytest.mark.parametrize("privileged,os_detection,expect_os", [
+    (True, True, True), (True, False, False), (False, True, False), (False, False, False),
+])
+def test_build_port_args_os_detection_is_privileged_and_narrow(privileged, os_detection, expect_os):
+    """-O is only requested when privileged AND enabled, and always with its two safety flags."""
+    profile = PortProfile(full=False, top_ports=1000, timing="fast", os_detection=os_detection)
+    args = nmap_scanner.build_port_args(privileged, profile)
+    assert ("-O" in args) == expect_os
+    if expect_os:
+        i = args.index("-O")
+        assert args[i:i + 4] == ["-O", "--osscan-limit", "--max-os-tries", "1"]
+    for bad in ("-sU", "-PU", "-sY", "-PY"):
+        assert bad not in args
 
 
 def test_unvalidated_strings_reach_nmap_only_as_il_file_lines(scanner):
@@ -202,6 +227,21 @@ def _stored_scan_settings() -> dict:
     with session_scope() as db:
         row = db.get(AppSetting, "scan")
         return dict(row.value) if row else {}
+
+
+def test_os_detection_defaults_on_for_a_fresh_install(client):
+    """A fresh install (no stored `scan` settings row) picks up the new default; see 0013_os_detection."""
+    assert _stored_scan_settings() == {}
+    assert client.get("/api/settings/scan").json()["os_detection"] is True
+    assert ScanSettings().os_detection is True
+
+
+def test_os_detection_stays_off_for_an_install_that_stored_it_explicitly(client):
+    """0013_os_detection does not rewrite existing rows: an explicit stored `false` is preserved."""
+    before = client.get("/api/settings/scan").json() | {"os_detection": False}
+    assert client.put("/api/settings/scan", json=before).status_code == 200
+    assert _stored_scan_settings()["os_detection"] is False
+    assert client.get("/api/settings/scan").json()["os_detection"] is False
 
 
 @pytest.mark.parametrize("timing", ["polite", "normal", "fast"])

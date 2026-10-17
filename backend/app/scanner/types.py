@@ -40,6 +40,7 @@ class HostObservation:
     vendor: str | None = None
     hostname: str | None = None
     os_name: str | None = None
+    os_accuracy: int | None = None  # set only when os_name came from nmap -O (osmatch), not a fallback guess
     # nmap <status reason="..."> from host discovery (e.g. arp-response, reset)
     reason: str | None = None
     # None = no port data for this host in this stage/scan
@@ -54,7 +55,9 @@ class HostObservation:
         self.mac = self.mac or other.mac
         self.vendor = self.vendor or other.vendor
         self.hostname = self.hostname or other.hostname
-        self.os_name = other.os_name or self.os_name
+        if other.os_name:
+            self.os_name = other.os_name
+            self.os_accuracy = other.os_accuracy
         self.reason = self.reason or other.reason
         if other.extra_tcp_ports:
             merged = set(self.extra_tcp_ports or ())

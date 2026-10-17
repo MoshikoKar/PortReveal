@@ -72,8 +72,10 @@ _DISCOVERY_RTT_MS_REMOTE = {"polite": (200, 800), "normal": (100, 400), "fast": 
 _DISCOVERY_RETRIES = 1
 _DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
-# No scan stage sends UDP: unanswered UDP dominates scan time, and fragile embedded UDP
-# services (SNMP/IPMI/CoAP/SSDP/TFTP) can misbehave when probed.
+# No scan stage sends UDP, with one narrow exception: OS detection (-O) fires a single U1
+# probe at a closed port as part of its fingerprint. Every other UDP form (-sU, -PU, -sY,
+# -PY, a general UDP scan) stays forbidden — unanswered UDP dominates scan time, and fragile
+# embedded UDP services (SNMP/IPMI/CoAP/SSDP/TFTP) can misbehave when probed.
 # Telephony signaling ports are never probed (see known_ports.NEVER_PROBE_TCP_PORTS).
 _NEVER_PROBE_TCP_PORTS = ",".join(str(p) for p in NEVER_PROBE_TCP_PORTS)
 # Without a MAC, only these nmap "up" reasons count as a real device. TCP "reset" /
@@ -259,7 +261,9 @@ def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     base.mac = base.mac or extra.mac
     base.vendor = base.vendor or extra.vendor
     base.hostname = base.hostname or extra.hostname
-    base.os_name = extra.os_name or base.os_name
+    if extra.os_name:
+        base.os_name = extra.os_name
+        base.os_accuracy = extra.os_accuracy
 
 
 class NmapScanner:

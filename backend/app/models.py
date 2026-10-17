@@ -70,6 +70,7 @@ EV_TAG_REMOVED = "tag_removed"
 EV_WATCH_MATCH = "watch_match"
 EV_POLICY_VIOLATION = "policy_violation"
 EV_BANNER_CHANGED = "banner_changed"
+EV_OS_CHANGED = "os_changed"
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -85,6 +86,7 @@ EVENT_TYPES = (
     EV_WATCH_MATCH,
     EV_POLICY_VIOLATION,
     EV_BANNER_CHANGED,
+    EV_OS_CHANGED,
 )
 # Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
 ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION)
@@ -103,6 +105,7 @@ EVENT_SEVERITY = {
     EV_TAG_ADDED: "info",
     EV_TAG_REMOVED: "info",
     EV_BANNER_CHANGED: "info",
+    EV_OS_CHANGED: "low",
 }
 
 SEVERITIES = ("high", "medium", "low", "info")
@@ -224,6 +227,12 @@ class Device(Base):
     hostname: Mapped[str | None] = mapped_column(String(255), index=True)
     dns_name: Mapped[str | None] = mapped_column(String(255))
     os_name: Mapped[str | None] = mapped_column(String(255))
+    os_accuracy: Mapped[int | None] = mapped_column(Integer)
+    os_detected_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    os_source: Mapped[str | None] = mapped_column(String(20))  # nmap_os | service | ssh | http | snmp | ntlm
+    # Flap guard (compare.py): an OS name that differs from os_name but hasn't yet been seen twice
+    # or crossed the +10 accuracy bar. {"name": str, "accuracy": int | None} or None.
+    os_pending: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default=DEVICE_ACTIVE, index=True)
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)  # retention purge

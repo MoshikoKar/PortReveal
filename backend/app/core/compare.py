@@ -41,6 +41,7 @@ from ..models import (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_REAPPEARED,
     EV_IP_CHANGED,
+    EV_OS_CHANGED,
     EV_PORT_CLOSED,
     EV_PORT_OPENED,
     EV_SERVICE_CHANGED,
@@ -275,12 +276,13 @@ class _Applier:
             if dev is None:
                 dev = Device(
                     current_ip=h.ip, mac=mac, vendor=h.vendor if mac else None, hostname=hostname,
-                    dns_name=hostname, os_name=h.os_name, status=DEVICE_ACTIVE, first_seen=now,
+                    dns_name=hostname, status=DEVICE_ACTIVE, first_seen=now,
                     last_seen=now, missed_scans=0, network_id=net.id if net else None,
                     port_scan_failed=False,
                 )
                 dev.ports = []
                 dev.ips = [DeviceIP(ip=h.ip, first_seen=now, last_seen=now)]
+                self._apply_os(dev, h, mode, device_label(dev))
                 self.db.add(dev)
             else:
                 label = device_label(dev)
@@ -298,8 +300,7 @@ class _Applier:
                 if hostname:
                     dev.hostname = hostname
                     dev.dns_name = hostname
-                if h.os_name:
-                    dev.os_name = h.os_name
+                self._apply_os(dev, h, mode, label)
                 dev.status = DEVICE_ACTIVE
                 dev.missed_scans = 0
                 dev.absence_days, dev.absence_counted_on, dev.absence_alerted = 0, None, False
@@ -404,6 +405,37 @@ class _Applier:
             if row.is_open and key not in seen and row.protocol == "tcp" and row.port in scope:
                 closures.append((dev, row, mode))
         return closures
+
+    def _apply_os(self, dev: Device, h: HostObservation, mode: str, label: str) -> None:
+        """Commit an OS guess with a flap guard: a name that differs from the current one only
+        replaces it once it has been seen twice in a row, or arrives with accuracy at least ten
+        points above the current guess (spec 3.5) — otherwise it is parked as `os_pending`.
+        """
+        name = h.os_name
+        if not name:
+            return
+        accuracy = h.os_accuracy
+        source = "nmap_os" if accuracy is not None else "service"
+        if dev.os_name is None:
+            dev.os_name, dev.os_accuracy, dev.os_source = name, accuracy, source
+            dev.os_detected_at, dev.os_pending = self.now, None
+            return
+        if _norm(name) == _norm(dev.os_name):
+            dev.os_accuracy = accuracy if accuracy is not None else dev.os_accuracy
+            dev.os_source = source
+            dev.os_detected_at, dev.os_pending = self.now, None
+            return
+        pending = dev.os_pending or {}
+        seen_before = _norm(pending.get("name") or "") == _norm(name)
+        confident_jump = accuracy is not None and accuracy >= (dev.os_accuracy or 0) + 10
+        if seen_before or confident_jump:
+            old_name = dev.os_name
+            dev.os_name, dev.os_accuracy, dev.os_source = name, accuracy, source
+            dev.os_detected_at, dev.os_pending = self.now, None
+            self.emit(dev, EV_OS_CHANGED, mode, f"OS of {label} changed: {old_name} -> {name}",
+                      old=old_name, new=name)
+        else:
+            dev.os_pending = {"name": name, "accuracy": accuracy}
 
     @staticmethod
     def _set_service(row: DevicePort, po: PortObservation, force: bool = False) -> None:

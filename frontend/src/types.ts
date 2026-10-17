@@ -112,6 +112,9 @@ export interface DeviceSummary {
   vendor: string | null;
   hostname: string | null;
   os_name: string | null;
+  os_accuracy: number | null;
+  os_detected_at: string | null;
+  os_source: string | null;
   status: DeviceStatus;
   network_id: number | null;
   network_name: string | null;
@@ -119,7 +122,7 @@ export interface DeviceSummary {
   last_seen: string;
   port_scan_failed: boolean;
   open_port_count: number;
-  open_ports: { port: number; protocol: string; service: string | null }[];
+  open_ports: { port: number; protocol: string; service: string | null; product: string | null; version: string | null }[];
 }
 
 export interface DevicePort {

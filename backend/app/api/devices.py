@@ -100,6 +100,9 @@ def _device_order_by(db: Session, sort: str, order: str) -> list:
         return [directed(_open_port_count_expr()), directed(ip_key, flip=True), directed(Device.id)]
     if sort == "status":
         return [directed(Device.status), directed(ip_key), directed(Device.id)]
+    if sort == "os":
+        os_key = func.coalesce(func.nullif(Device.os_name, ""), "~")
+        return [directed(os_key), directed(ip_key), directed(Device.id)]
     return [directed(ip_key), directed(Device.id)]
 
 
@@ -110,7 +113,7 @@ def list_devices(
     network_id: int | None = None,
     port: int | None = Query(None, ge=1, le=65535),
     service: str | None = Query(None, max_length=100),
-    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status)$"),
+    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status|os)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
@@ -137,7 +140,7 @@ def list_device_uuids(
     network_id: int | None = None,
     port: int | None = Query(None, ge=1, le=65535),
     service: str | None = Query(None, max_length=100),
-    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status)$"),
+    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status|os)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),

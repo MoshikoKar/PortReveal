@@ -159,7 +159,15 @@ export default function DeviceDetail() {
             <dt>Previous IPs</dt><dd className="mono">{d.previous_ips.length ? d.previous_ips.join(', ') : '—'}</dd>
             <dt>MAC</dt><dd className="mono">{d.mac ?? '— (not on scanner L2 segment)'}</dd>
             <dt>Vendor</dt><dd>{d.vendor ?? '—'}</dd>
-            <dt>OS guess</dt><dd>{d.os_name ?? '—'}</dd>
+            <dt>OS guess</dt>
+            <dd>
+              {d.os_name ?? '—'}
+              {d.os_name && d.os_accuracy != null && <span className="muted small"> ({d.os_accuracy}% confidence)</span>}
+              {d.os_name && d.os_source && <span className="badge outline" style={{ marginLeft: 6 }}>{d.os_source}</span>}
+              {d.os_name && d.os_detected_at && (
+                <span className="muted small"> · detected {relTime(d.os_detected_at)}</span>
+              )}
+            </dd>
             <dt>Network</dt><dd>{d.network_name ?? '—'}{d.zone && <span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
             <dt>Device type</dt><dd>{d.type ?? '—'}{d.classified_at && <span className="muted small"> (classified {relTime(d.classified_at)})</span>}</dd>
             <dt>First seen</dt><dd>{fmtTime(d.first_seen)}</dd>
