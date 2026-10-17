@@ -29,9 +29,11 @@ def port(n: int, service: str = "http", product: str | None = None, version: str
 
 
 def host(ip: str, ports: list[PortObservation] | None = None, mac: str | None = None,
-         hostname: str | None = None, os_name: str | None = None, os_accuracy: int | None = None) -> HostObservation:
+         hostname: str | None = None, os_name: str | None = None, os_accuracy: int | None = None,
+         rtt_ms: float | None = None) -> HostObservation:
     return HostObservation(ip=ip, mac=mac, hostname=hostname, vendor="TestVendor" if mac else None,
-                           os_name=os_name, os_accuracy=os_accuracy, ports=ports if ports is not None else [])
+                           os_name=os_name, os_accuracy=os_accuracy, rtt_ms=rtt_ms,
+                           ports=ports if ports is not None else [])
 
 
 class ScriptedScanner:

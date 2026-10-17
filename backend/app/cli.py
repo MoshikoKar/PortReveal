@@ -126,7 +126,9 @@ def cmd_retention(_args) -> int:
     from .settings_store import RetentionSettings, ScanSettings, get_section
 
     with session_scope() as db:
-        counts = run_retention(db, get_section(db, RetentionSettings).days, get_section(db, ScanSettings).raw_retention_days)
+        ret = get_section(db, RetentionSettings)
+        counts = run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days,
+                               rtt_days=ret.rtt_sample_days)
     print(json.dumps(counts))
     return 0
 

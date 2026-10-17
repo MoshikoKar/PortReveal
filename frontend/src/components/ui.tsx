@@ -72,6 +72,18 @@ export function ScoreBadge({ score }: { score: number | null | undefined }) {
   return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`Exposure score ${s} / 100`}>{s}</span>;
 }
 
+const IP_ASSIGNMENT: Record<string, [string, string, string]> = {
+  static: ['ok', 'Static', 'This IP has stayed on this device for a while'],
+  dynamic: ['medium', 'Dynamic', 'This device has recently used more than one IP (DHCP-style)'],
+  unknown: ['outline', 'Unknown', 'Not enough address history yet to tell'],
+};
+
+export function IpAssignmentBadge({ value }: { value: string | null | undefined }) {
+  if (!value) return null;
+  const [cls, label, title] = IP_ASSIGNMENT[value] ?? ['outline', value, undefined as unknown as string];
+  return <span className={`badge ${cls}`} title={title}>{label}</span>;
+}
+
 export function MockBadge({ mode }: { mode: string | null }) {
   if (mode !== 'mock') return null;
   return <span className="badge medium" title="Produced by the mock scanner (simulated data)">SIMULATED</span>;

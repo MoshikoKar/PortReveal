@@ -209,7 +209,7 @@ def tick(now: datetime | None = None) -> None:
         rt = now.replace(hour=RETENTION_TIME[0], minute=RETENTION_TIME[1], second=0, microsecond=0)
         if now >= rt and state.get("last_retention_date") != today:
             ret = get_section(db, RetentionSettings)
-            ret_counts, stale_captures = purge_expired(db, ret.days)
+            ret_counts, stale_captures = purge_expired(db, ret.days, rtt_days=ret.rtt_sample_days)
             retention_files = (ret.days, get_section(db, ScanSettings).raw_retention_days)
             state["last_retention_date"] = today
             changed = True

@@ -189,6 +189,9 @@ class LdapSettings(BaseModel):
 
 class RetentionSettings(BaseModel):
     days: int = Field(365, ge=7, le=3650)
+    # RTT samples (device_rtt_samples) churn far faster than everything else here (one row per
+    # scan per device), so they get their own, shorter window instead of riding on `days`.
+    rtt_sample_days: int = Field(90, ge=7, le=365)
 
 
 class WebCaptureSettings(BaseModel):

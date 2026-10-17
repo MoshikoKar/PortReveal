@@ -15,6 +15,7 @@ from .. import metrics
 from ..db import session_scope, utcnow
 from ..models import Device, Event, Scan, ScanHost
 from .exposure import apply_scores, unique_services
+from .ip_assignment import apply_ip_assignment
 from .tagging import apply_tags, load_facts
 from .watches import evaluate_all
 
@@ -45,6 +46,7 @@ def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | No
         facts = load_facts(db, ids[i:i + REFRESH_CHUNK])
         events += len(apply_tags(db, facts, now=now, scan_id=scan_id, report_ids=report_ids))
         apply_scores(db, facts, unique, now=now)
+        apply_ip_assignment(db, facts, now=now)
         db.flush()
     return events
 

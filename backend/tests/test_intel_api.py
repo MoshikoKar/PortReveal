@@ -107,7 +107,10 @@ def test_device_list_and_detail_expose_os_and_port_product_version(client, db):
     assert (detail["os_name"], detail["os_accuracy"], detail["os_source"]) == ("Linux 5.x", 94, "nmap_os")
 
 
-def test_device_detail_eager_loads_related_data_in_three_queries(admin, db):
+def test_device_detail_eager_loads_related_data_in_five_queries(admin, db):
+    # 3 for the device + ports/http + ips (unchanged eager-load shape), plus 2 new reads added for
+    # latency/uptime (spec section 6): one aggregate over scan_hosts for availability_pct, one
+    # select over device_rtt_samples for the RTT chart. Neither loops per-port or per-tag.
     uuid = _uuid(admin, "10.0.0.1")
     db.expunge_all()
     selects: list[str] = []
@@ -123,7 +126,7 @@ def test_device_detail_eager_loads_related_data_in_three_queries(admin, db):
     finally:
         sa_event.remove(bind, "before_cursor_execute", record_select)
 
-    assert len(selects) == 3
+    assert len(selects) == 5
     assert detail["tags"] and detail["profile"]["exposure_factors"]
     assert all("http" in port_data for port_data in detail["ports"])
 

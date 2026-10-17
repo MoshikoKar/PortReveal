@@ -264,7 +264,8 @@ def put_retention(body: RetentionSettings, request: Request, db: Session = Depen
 
 @router.post("/retention/run")
 def run_retention_now(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    counts = run_retention(db, get_section(db, RetentionSettings).days, get_section(db, ScanSettings).raw_retention_days)
+    ret = get_section(db, RetentionSettings)
+    counts = run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days, rtt_days=ret.rtt_sample_days)
     audit(db, user.username, "retention.run", None, counts, _ip(request))
     db.commit()
     return {"ok": True, "deleted": counts}

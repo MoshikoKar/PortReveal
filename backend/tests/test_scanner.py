@@ -31,8 +31,24 @@ def test_parse_standard_scan_xml():
     # No <os> element in this fixture: os_name falls back to the ssh service's ostype attribute,
     # and os_accuracy stays None (fallback guesses are never a numeric nmap -O accuracy).
     assert h.os_name == "Linux" and h.os_accuracy is None
+    assert h.rtt_ms == pytest.approx(0.25)  # <times srtt="250"/> is in microseconds
     timed_out = run.hosts[1]
     assert timed_out.port_scan_failed and timed_out.ports is None
+
+
+def test_parse_rtt_missing_or_invalid_srtt_leaves_rtt_none():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.6" addrtype="ipv4"/>
+    <times srtt="-1" rttvar="0" to="100000"/>
+    </host>
+    <host><status state="up"/>
+    <address addr="10.0.0.7" addrtype="ipv4"/>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    assert run.hosts[0].rtt_ms is None  # negative srtt is not a real measurement
+    assert run.hosts[1].rtt_ms is None  # no <times> element at all
 
 
 def test_parse_os_detection_picks_the_highest_accuracy_osmatch():

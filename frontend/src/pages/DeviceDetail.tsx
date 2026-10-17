@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { del } from '../api';
-import { ExposureCard, ProfileCard, TagEditor, Timeline } from '../components/DeviceIntel';
+import { ExposureCard, ProfileCard, RttCard, TagEditor, Timeline } from '../components/DeviceIntel';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, Loading, MockBadge, Pager, ScanStatusBadge, ScoreBadge } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MockBadge, Pager, ScanStatusBadge, ScoreBadge } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
 import { SCAN_TYPE_LABELS, fmtTime, relTime, useApi } from '../util';
@@ -155,7 +155,7 @@ export default function DeviceDetail() {
           <dl className="dl">
             <dt>Hostname</dt><dd>{d.hostname ?? '—'}</dd>
             <dt>DNS name</dt><dd>{d.dns_name ?? '—'}</dd>
-            <dt>Current IP</dt><dd className="mono">{d.current_ip}</dd>
+            <dt>Current IP</dt><dd className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></dd>
             <dt>Previous IPs</dt><dd className="mono">{d.previous_ips.length ? d.previous_ips.join(', ') : '—'}</dd>
             <dt>MAC</dt><dd className="mono">{d.mac ?? '— (not on scanner L2 segment)'}</dd>
             <dt>Vendor</dt><dd>{d.vendor ?? '—'}</dd>
@@ -184,6 +184,10 @@ export default function DeviceDetail() {
         <Card title="Tags"><TagEditor d={d} isAdmin={isAdmin} onChange={reload} /></Card>
         <ExposureCard d={d} />
         <ProfileCard d={d} isAdmin={isAdmin} onChange={reload} />
+      </div>
+
+      <div className="grid three">
+        <RttCard d={d} />
       </div>
 
       <Card title="Web interfaces" flush

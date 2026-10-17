@@ -115,6 +115,9 @@ export interface DeviceSummary {
   os_accuracy: number | null;
   os_detected_at: string | null;
   os_source: string | null;
+  ip_assignment: 'static' | 'dynamic' | 'unknown' | null;
+  last_rtt_ms: number | null;
+  continuous_since: string | null;
   status: DeviceStatus;
   network_id: number | null;
   network_name: string | null;
@@ -186,6 +189,9 @@ export interface DeviceDetail extends DeviceSummary {
   missed_scans: number;
   last_port_scan_at: string | null;
   full_scanned_at: string | null;
+  availability_pct: number | null;
+  availability_window_days: number;
+  rtt_samples: { rtt_ms: number; sampled_at: string }[];
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
   previous_ips: string[];

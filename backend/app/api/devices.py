@@ -8,6 +8,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
+from ..core.availability import AVAILABILITY_WINDOW_DAYS, availability_pct
 from ..core.exposure import level as exposure_level
 from ..core.mockdata import device_visible, event_visible, scan_visible
 from ..core.query.compile import compile_host
@@ -24,6 +25,7 @@ from ..models import (
     Device,
     DevicePort,
     DeviceProfile,
+    DeviceRttSample,
     DeviceTag,
     Event,
     Network,
@@ -191,12 +193,21 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
     d = _get(db, uuid, detail=True)
     net = d.network
     score = d.exposure_score or 0
+    now = utcnow()
+    rtt_samples = db.scalars(
+        select(DeviceRttSample).where(DeviceRttSample.device_id == d.id)
+        .order_by(DeviceRttSample.sampled_at.desc()).limit(200)
+    ).all()
     out = device_summary(d, network_name=net.name if net else None)
     out.update({
         "dns_name": d.dns_name,
         "missed_scans": d.missed_scans,
         "last_port_scan_at": d.last_port_scan_at,
         "full_scanned_at": d.full_scanned_at,
+        "availability_pct": availability_pct(db, d.id, now=now),
+        "availability_window_days": AVAILABILITY_WINDOW_DAYS,
+        "rtt_samples": [{"rtt_ms": s.rtt_ms, "sampled_at": s.sampled_at}
+                        for s in reversed(rtt_samples)],
         "ports": [{**port_out(p), "cpe": p.cpe.split() if p.cpe else [], "tunnel": p.tunnel,
                    "http": http_out(p.http)}
                   for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],

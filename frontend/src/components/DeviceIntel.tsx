@@ -175,6 +175,45 @@ export function ExposureCard({ d }: { d: DeviceDetail }) {
   );
 }
 
+const RTT_CHART_W = 280;
+const RTT_CHART_H = 48;
+
+/** Minimal dependency-free RTT-over-time sparkline (no chart library needed for one line). */
+function RttSparkline({ samples }: { samples: { rtt_ms: number; sampled_at: string }[] }) {
+  if (samples.length < 2) return null;
+  const values = samples.map((s) => s.rtt_ms);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const step = RTT_CHART_W / (samples.length - 1);
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${(RTT_CHART_H - ((v - min) / span) * RTT_CHART_H).toFixed(1)}`).join(' ');
+  return (
+    <svg width={RTT_CHART_W} height={RTT_CHART_H} role="img" aria-label="RTT over time">
+      <polyline points={points} fill="none" stroke="var(--accent, #4a90d9)" strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+export function RttCard({ d }: { d: DeviceDetail }) {
+  return (
+    <Card title="Latency &amp; uptime">
+      <dl className="dl">
+        <dt>Last RTT</dt>
+        <dd>{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">—</span>}</dd>
+        <dt>Availability ({d.availability_window_days}d)</dt>
+        <dd>{d.availability_pct != null ? `${d.availability_pct}%` : <span className="muted">not enough history</span>}</dd>
+        <dt>Continuous since</dt>
+        <dd>{d.continuous_since ? fmtTime(d.continuous_since) : <span className="muted">—</span>}</dd>
+      </dl>
+      {d.rtt_samples.length >= 2 && (
+        <div className="card-body" style={{ paddingTop: 0 }}>
+          <RttSparkline samples={d.rtt_samples} />
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function timelineLabel(it: TimelineItem) {
   if (it.kind === 'event') {
     return <><span className={`badge ${it.severity}`}>{EVENT_LABELS[it.event_type] ?? it.event_type}</span> <span>{it.message}</span></>;

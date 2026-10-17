@@ -121,6 +121,19 @@ def test_host_fields_lists_ranges_and_wildcards(db, inventory):
     assert ips(db, "first_seen:>30d") == []
 
 
+def test_ip_assignment_and_rtt_fields(db, inventory):
+    web01, web02 = device_by_ip(db, "10.0.0.10"), device_by_ip(db, "10.0.0.11")
+    web01.ip_assignment, web01.last_rtt_ms = "static", 2.5
+    web02.ip_assignment, web02.last_rtt_ms = "dynamic", 40.0
+    db.commit()
+    assert ips(db, "ip_assignment:static") == ["10.0.0.10"]
+    assert ips(db, "ip_assignment:dynamic") == ["10.0.0.11"]
+    assert ips(db, "rtt:<10") == ["10.0.0.10"]
+    assert ips(db, "rtt:>=10") == ["10.0.0.11"]
+    with pytest.raises(QueryError, match="number"):
+        prepare("rtt:fast")
+
+
 def test_http_and_has_fields(db, inventory):
     assert ips(db, "http.title:grafana http.login:true") == ["10.0.0.11"]
     assert ips(db, "http.status:300-399 http.location:/login") == ["10.0.0.10"]

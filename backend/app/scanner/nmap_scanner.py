@@ -264,6 +264,8 @@ def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     if extra.os_name:
         base.os_name = extra.os_name
         base.os_accuracy = extra.os_accuracy
+    if extra.rtt_ms is not None:
+        base.rtt_ms = extra.rtt_ms
 
 
 class NmapScanner:

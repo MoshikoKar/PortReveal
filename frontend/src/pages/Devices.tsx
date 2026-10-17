@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, Pager, PortChips, SkeletonRows, SortTh } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Pager, PortChips, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -220,7 +220,7 @@ export default function Devices() {
                   <tr key={d.uuid} className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
                     <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} /></td>
-                    <td className="mono">{d.current_ip}</td>
+                    <td className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></td>
                     <td>{d.hostname ?? <span className="muted">—</span>}</td>
                     <td><span className="mono">{d.mac ?? '—'}</span>{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
                     <td><PortChips ports={d.open_ports} /></td>

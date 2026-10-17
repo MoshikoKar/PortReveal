@@ -82,6 +82,12 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
             obs.os_name = best_name
             obs.os_accuracy = best_accuracy
 
+        times = host.find("times")
+        if times is not None:
+            srtt = times.get("srtt")  # microseconds
+            if srtt and srtt.lstrip("-").isdigit() and int(srtt) >= 0:
+                obs.rtt_ms = int(srtt) / 1000.0
+
         timed_out = host.get("timedout") == "true"
         ports_el = host.find("ports")
         if timed_out:

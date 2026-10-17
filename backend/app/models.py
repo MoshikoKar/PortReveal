@@ -34,6 +34,11 @@ DEVICE_UNKNOWN = "unknown"          # missed by a scan, not yet confirmed gone
 DEVICE_NOT_DETECTED = "not_detected"  # missed by N consecutive complete scans
 DEVICE_STATUSES = (DEVICE_ACTIVE, DEVICE_UNKNOWN, DEVICE_NOT_DETECTED)
 
+IP_ASSIGNMENT_STATIC = "static"
+IP_ASSIGNMENT_DYNAMIC = "dynamic"
+IP_ASSIGNMENT_UNKNOWN = "unknown"
+IP_ASSIGNMENTS = (IP_ASSIGNMENT_STATIC, IP_ASSIGNMENT_DYNAMIC, IP_ASSIGNMENT_UNKNOWN)
+
 SCAN_QUEUED = "queued"
 SCAN_RUNNING = "running"
 SCAN_COMPLETED = "completed"
@@ -134,6 +139,7 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("users", "source"): USER_SOURCES,
     ("networks", "zone"): NETWORK_ZONES,
     ("devices", "status"): DEVICE_STATUSES,
+    ("devices", "ip_assignment"): IP_ASSIGNMENTS,
     ("device_tags", "source"): TAG_SOURCES,
     ("device_profiles", "criticality"): CRITICALITY_LEVELS,
     ("scans", "scan_type"): SCAN_TYPES,
@@ -217,7 +223,7 @@ class AppSetting(Base):
 
 class Device(Base):
     __tablename__ = "devices"
-    __table_args__ = (one_of("devices", "status"),)
+    __table_args__ = (one_of("devices", "status"), one_of("devices", "ip_assignment"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)
     network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), index=True)
@@ -250,6 +256,12 @@ class Device(Base):
     exposure_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     ssh_hostkey_sha256: Mapped[str | None] = mapped_column(String(64))
+    # Static vs dynamic IP (spec 7): derived from device_ips history in core/ip_assignment.py.
+    ip_assignment: Mapped[str | None] = mapped_column(String(10))
+    # Latency / uptime (spec 6)
+    last_rtt_ms: Mapped[float | None] = mapped_column(Float)
+    # Since when the device has been continuously seen (reset on a not_detected -> seen transition).
+    continuous_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     ports: Mapped[list[DevicePort]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DevicePort.port"
@@ -275,6 +287,17 @@ class DeviceIP(Base):
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     device: Mapped[Device] = relationship(back_populates="ips")
+
+
+class DeviceRttSample(Base):
+    """One RTT measurement (nmap `<times srtt=...>`) for a device's RTT-over-time chart."""
+
+    __tablename__ = "device_rtt_samples"
+    __table_args__ = (Index("ix_device_rtt_samples_device_sampled", "device_id", "sampled_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    rtt_ms: Mapped[float] = mapped_column(Float)
+    sampled_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class DevicePort(Base):

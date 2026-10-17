@@ -41,6 +41,7 @@ class HostObservation:
     hostname: str | None = None
     os_name: str | None = None
     os_accuracy: int | None = None  # set only when os_name came from nmap -O (osmatch), not a fallback guess
+    rtt_ms: float | None = None  # nmap <times srtt=...> (smoothed round-trip time), in milliseconds
     # nmap <status reason="..."> from host discovery (e.g. arp-response, reset)
     reason: str | None = None
     # None = no port data for this host in this stage/scan
@@ -58,6 +59,8 @@ class HostObservation:
         if other.os_name:
             self.os_name = other.os_name
             self.os_accuracy = other.os_accuracy
+        if other.rtt_ms is not None:
+            self.rtt_ms = other.rtt_ms
         self.reason = self.reason or other.reason
         if other.extra_tcp_ports:
             merged = set(self.extra_tcp_ports or ())

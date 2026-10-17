@@ -53,6 +53,7 @@ from ..models import (
     Device,
     DeviceIP,
     DevicePort,
+    DeviceRttSample,
     Event,
     Network,
     Scan,
@@ -278,7 +279,7 @@ class _Applier:
                     current_ip=h.ip, mac=mac, vendor=h.vendor if mac else None, hostname=hostname,
                     dns_name=hostname, status=DEVICE_ACTIVE, first_seen=now,
                     last_seen=now, missed_scans=0, network_id=net.id if net else None,
-                    port_scan_failed=False,
+                    port_scan_failed=False, continuous_since=now,
                 )
                 dev.ports = []
                 dev.ips = [DeviceIP(ip=h.ip, first_seen=now, last_seen=now)]
@@ -293,6 +294,7 @@ class _Applier:
                 if dev.status == DEVICE_NOT_DETECTED:
                     self.emit(dev, EV_DEVICE_REAPPEARED, mode, f"{label} ({h.ip}) is detected again", ip=h.ip,
                               quiet=self.correlate and not dev.absence_alerted)
+                    dev.continuous_since = now
                 if mac and not dev.mac:
                     dev.mac = mac
                 if mac and h.vendor:
@@ -302,6 +304,9 @@ class _Applier:
                     dev.dns_name = hostname
                 self._apply_os(dev, h, mode, label)
                 dev.status = DEVICE_ACTIVE
+                if dev.continuous_since is None:
+                    # Upgraded from a version without this field: best estimate, not a real streak start.
+                    dev.continuous_since = dev.first_seen or now
                 dev.missed_scans = 0
                 dev.absence_days, dev.absence_counted_on, dev.absence_alerted = 0, None, False
                 dev.last_seen = now
@@ -354,6 +359,9 @@ class _Applier:
                 status="port_scan_failed" if h.port_scan_failed else "up",
                 open_ports=len(h.ports) if h.ports is not None else None,
             ))
+            if h.rtt_ms is not None:
+                dev.last_rtt_ms = h.rtt_ms
+                self.db.add(DeviceRttSample(device_id=dev.id, rtt_ms=h.rtt_ms, sampled_at=now))
 
         self._maybe_baseline()
         return self.result

@@ -65,6 +65,8 @@ _HOST_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "status": ("device", lambda: [Device.status]),
     "type": ("device", lambda: [Device.device_type]),
     "score": ("device", lambda: [Device.exposure_score]),
+    "ip_assignment": ("device", lambda: [Device.ip_assignment]),
+    "rtt": ("device", lambda: [Device.last_rtt_ms]),
     "first_seen": ("device", lambda: [Device.first_seen]),
     "new": ("device", lambda: [Device.first_seen]),
     "last_seen": ("device", lambda: [Device.last_seen]),
@@ -270,6 +272,33 @@ def _int(cols: list, term: Term) -> ColumnElement:
     return or_(*out)
 
 
+def _float(cols: list, term: Term) -> ColumnElement:
+    """Like `_int`, but for a continuous value (e.g. RTT in ms): no integer rounding of bounds."""
+    vals = split_value(term)
+    out = []
+    for raw in vals.items:
+        if raw == "*":
+            out.append(or_(*[c.isnot(None) for c in cols]))
+            continue
+        try:
+            n = float(raw)
+        except ValueError:
+            raise QueryError(f"'{term.field}' expects a number, not '{raw}'", term.pos) from None
+        for c in cols:
+            if vals.op == ">":
+                cond = c > n
+            elif vals.op == ">=":
+                cond = c >= n
+            elif vals.op == "<":
+                cond = c < n
+            elif vals.op == "<=":
+                cond = c <= n
+            else:
+                cond = c == n
+            out.append(and_(c.isnot(None), cond))
+    return or_(*out)
+
+
 def _bool(cols: list, term: Term) -> ColumnElement:
     want = parse_bool(term, split_value(term, allow_list=False).items[0])
     return or_(*[c.is_(want) for c in cols])
@@ -333,6 +362,8 @@ def _leaf(spec: FieldSpec, cols: list, term: Term, ctx: Ctx) -> ColumnElement:
         return _exact(cols, term)
     if spec.kind == "int":
         return _int(cols, term)
+    if spec.kind == "float":
+        return _float(cols, term)
     if spec.kind == "bool":
         return _bool(cols, term)
     if spec.kind == "time":
