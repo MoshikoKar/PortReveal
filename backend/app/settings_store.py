@@ -229,6 +229,38 @@ class WebCaptureSettings(BaseModel):
     force_mock: bool = False  # tests / DEV without network
 
 
+class VulnSettings(BaseModel):
+    """Vulnerability risk scoring (spec section 5). Off until an admin enables it: the first enable
+    (or any start with an empty local cache) triggers an automatic background full sync."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    sources: list[str] = Field(default_factory=lambda: ["nvd", "kev", "epss"])
+    sync_interval_hours: int = Field(168, ge=24, le=720)  # default: weekly
+    sync_time: str = "04:00"  # local time HH:MM, best-effort slot for the weekly sync
+    offline_mode: bool = False  # only offline snapshot imports; no outbound feed requests at all
+    nvd_api_key_enc: str = ""  # optional: raises the NVD API rate limit, never required
+    include_potential: bool = True  # show `potential` (imprecise-version) matches, not just `confirmed`
+    min_cvss_display: float = Field(0.0, ge=0.0, le=10.0)
+    # Phase 4: safe/discovery NSE scripts from the fixed SCRIPT_ALLOWLIST, on when vulnerabilities are.
+    scripts_enabled: bool = True
+
+    @field_validator("sources")
+    @classmethod
+    def _sources(cls, v: list[str]) -> list[str]:
+        allowed = {"nvd", "kev", "epss"}
+        bad = [s for s in v if s not in allowed]
+        if bad:
+            raise ValueError(f"unknown vulnerability source(s): {bad}")
+        return sorted(set(v))
+
+    @field_validator("sync_time")
+    @classmethod
+    def _sync_time(cls, v: str) -> str:
+        return _hhmm(v, "sync_time")
+
+
 SECTIONS: dict[str, type[BaseModel]] = {
     "schedule": ScheduleSettings,
     "presence": PresenceSettings,
@@ -237,6 +269,7 @@ SECTIONS: dict[str, type[BaseModel]] = {
     "ldap": LdapSettings,
     "retention": RetentionSettings,
     "web_capture": WebCaptureSettings,
+    "vuln": VulnSettings,
 }
 
 T = TypeVar("T", bound=BaseModel)

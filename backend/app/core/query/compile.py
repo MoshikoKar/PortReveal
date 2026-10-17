@@ -25,10 +25,12 @@ from ...db import utcnow
 from ...models import (
     SCREENSHOT_CAPTURED,
     TAG_SOURCE_SUPPRESSED,
+    VULN_STATE_DISMISSED,
     WEB_PAGE_LOGIN,
     Device,
     DeviceIP,
     DevicePort,
+    DevicePortVuln,
     DeviceProfile,
     DeviceTag,
     Network,
@@ -36,6 +38,7 @@ from ...models import (
     PortSnmp,
     PortTls,
     ServiceBanner,
+    Vulnerability,
     WebPage,
 )
 from .fields import HAS_HOST_VALUES, HAS_PORT_VALUES, HOST, PORT, FieldSpec, resolve
@@ -67,6 +70,8 @@ _HOST_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "score": ("device", lambda: [Device.exposure_score]),
     "ip_assignment": ("device", lambda: [Device.ip_assignment]),
     "rtt": ("device", lambda: [Device.last_rtt_ms]),
+    "risk": ("device", lambda: [Device.risk_score]),
+    "combined": ("device", lambda: [Device.combined_score]),
     "first_seen": ("device", lambda: [Device.first_seen]),
     "new": ("device", lambda: [Device.first_seen]),
     "last_seen": ("device", lambda: [Device.last_seen]),
@@ -111,6 +116,9 @@ _PORT_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "snmp.sysdescr": ("snmp", lambda: [PortSnmp.sys_descr]),
     "snmp.vendor": ("snmp", lambda: [PortSnmp.vendor]),
     "screenshot.text": ("shot", lambda: [WebPage.ocr_text]),
+    "cve": ("vuln", lambda: [Vulnerability.cve_id]),
+    "kev": ("vuln", lambda: [Vulnerability.kev]),
+    "epss": ("vuln", lambda: [Vulnerability.epss]),
 }
 
 _HAS_NEEDS_HTTP = {"http", "login"}
@@ -185,12 +193,16 @@ def needs_shot(node: Node | None) -> bool:
     return _needs_join(node, "shot", set())
 
 
-def join_flags(node: Node | None) -> tuple[bool, bool, bool, bool]:
-    return needs_http(node), needs_tls(node), needs_snmp(node), needs_shot(node)
+def needs_vuln(node: Node | None) -> bool:
+    return _needs_join(node, "vuln", set())
+
+
+def join_flags(node: Node | None) -> tuple[bool, bool, bool, bool, bool]:
+    return needs_http(node), needs_tls(node), needs_snmp(node), needs_shot(node), needs_vuln(node)
 
 
 def service_from(with_http: bool = True, with_tls: bool = False, with_snmp: bool = False,
-                 with_shot: bool = False):
+                 with_shot: bool = False, with_vuln: bool = False):
     """FROM clause: device_ports, outer-joined with enrichment tables when requested."""
     j = DevicePort.__table__
     if with_http:
@@ -204,13 +216,18 @@ def service_from(with_http: bool = True, with_tls: bool = False, with_snmp: bool
             WebPage.device_port_id == DevicePort.id,
             WebPage.screenshot_status == SCREENSHOT_CAPTURED,
         ))
+    if with_vuln:
+        j = j.outerjoin(DevicePortVuln.__table__, and_(
+            DevicePortVuln.device_port_id == DevicePort.id,
+            DevicePortVuln.state != VULN_STATE_DISMISSED,
+        )).outerjoin(Vulnerability.__table__, Vulnerability.cve_id == DevicePortVuln.cve_id)
     return j
 
 
 def service_exists(cond: ColumnElement, with_http: bool, with_tls: bool = False,
-                   with_snmp: bool = False, with_shot: bool = False) -> ColumnElement:
+                   with_snmp: bool = False, with_shot: bool = False, with_vuln: bool = False) -> ColumnElement:
     return exists(
-        select(DevicePort.id).select_from(service_from(with_http, with_tls, with_snmp, with_shot))
+        select(DevicePort.id).select_from(service_from(with_http, with_tls, with_snmp, with_shot, with_vuln))
         .where(DevicePort.device_id == Device.id, DevicePort.is_open.is_(True), cond)
     )
 
@@ -466,11 +483,11 @@ def _row_term(term: Term, ctx: Ctx) -> ColumnElement:
 
 
 def _exists_for(node: Node | None, cond: ColumnElement) -> ColumnElement:
-    http, tls, snmp, shot = join_flags(node)
+    http, tls, snmp, shot, vuln = join_flags(node)
     # Free-text / banner / TLS / SNMP free-text needs enrichment joins when ambiguous
     if node is not None and isinstance(node, Term) and node.field is None:
         http = tls = snmp = True
-    return service_exists(cond, http, tls, snmp, shot)
+    return service_exists(cond, http, tls, snmp, shot, vuln)
 
 
 # --- host context --------------------------------------------------------------------------------

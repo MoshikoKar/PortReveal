@@ -17,6 +17,7 @@ from ..models import Device, Event, Scan, ScanHost
 from .exposure import apply_scores, unique_services
 from .ip_assignment import apply_ip_assignment
 from .tagging import apply_tags, load_facts
+from .vuln.score import apply_risk_scores
 from .watches import evaluate_all
 
 log = logging.getLogger(__name__)
@@ -47,6 +48,13 @@ def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | No
         events += len(apply_tags(db, facts, now=now, scan_id=scan_id, report_ids=report_ids))
         apply_scores(db, facts, unique, now=now)
         apply_ip_assignment(db, facts, now=now)
+        # Flush first: apply_scores may have just inserted this pass's DeviceProfile rows, and
+        # apply_risk_scores re-queries DeviceProfile by device_id -- it must see them to avoid
+        # inserting a second row for the same device (device_profiles.device_id is unique).
+        db.flush()
+        # Re-scores risk/combined from whatever device_port_vulns already holds (no CPE matching,
+        # no network): combined_score depends on exposure_score, which just changed above.
+        apply_risk_scores(db, [f.device.id for f in facts], now=now)
         db.flush()
     return events
 

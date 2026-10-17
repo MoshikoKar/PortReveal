@@ -22,8 +22,11 @@ from ..models import (
     TAG_SOURCE_MANUAL,
     TAG_SOURCE_RULE,
     TAG_SOURCE_SUPPRESSED,
+    VULN_STATE_DISMISSED,
+    VULN_STATE_POTENTIAL,
     Device,
     DevicePort,
+    DevicePortVuln,
     DeviceProfile,
     DeviceRttSample,
     DeviceTag,
@@ -32,6 +35,7 @@ from ..models import (
     Scan,
     ScanHost,
     User,
+    Vulnerability,
     WebCapture,
     WebPage,
 )
@@ -184,7 +188,9 @@ def _profile_out(p: DeviceProfile | None) -> dict:
     return {
         "owner": p.owner if p else None, "location": p.location if p else None,
         "criticality": p.criticality if p else None, "notes": p.notes if p else None,
-        "exposure_factors": (p.exposure_factors or []) if p else [], "updated_at": p.updated_at if p else None,
+        "exposure_factors": (p.exposure_factors or []) if p else [],
+        "risk_factors": (p.risk_factors or []) if p else [],
+        "updated_at": p.updated_at if p else None,
     }
 
 
@@ -216,6 +222,8 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "type": d.device_type,
         "score": score,
         "score_level": exposure_level(score),
+        "risk_level": exposure_level(d.risk_score or 0),
+        "combined_level": exposure_level(d.combined_score or 0),
         "classified_at": d.classified_at,
         "zone": net.zone if net else None,
         "tags": [_tag_out(t) for t in d.tags],
@@ -373,6 +381,78 @@ def device_scans(uuid: str, paging: Paging = Depends(), db: Session = Depends(ge
         "created_at": sh.created_at, "ip": sh.ip, "status": sh.status, "open_ports": sh.open_ports,
     } for sh, s in rows]
     return paged(items, total, paging)
+
+
+def _vuln_out(dpv: DevicePortVuln, port: DevicePort, vuln: Vulnerability) -> dict:
+    return {
+        "cve_id": vuln.cve_id,
+        "port": port.port, "protocol": port.protocol, "service": port.service,
+        "product": port.product, "version": port.version,
+        "matched_cpe": dpv.matched_cpe,
+        "state": dpv.state,
+        "source": dpv.source,
+        "cvss_base": vuln.cvss_base,
+        "cvss_vector": vuln.cvss_vector,
+        "severity": vuln.severity,
+        "kev": vuln.kev,
+        "epss": vuln.epss,
+        "epss_percentile": vuln.epss_percentile,
+        "summary": vuln.summary,
+        "matched_at": dpv.matched_at,
+    }
+
+
+@router.get("/{uuid}/vulns")
+def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Every CVE matched to this device's ports (confirmed, potential and dismissed)."""
+    d = _get(db, uuid)
+    rows = db.execute(
+        select(DevicePortVuln, DevicePort, Vulnerability)
+        .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
+        .where(DevicePort.device_id == d.id)
+    ).all()
+    items = [_vuln_out(dpv, port, vuln) for dpv, port, vuln in rows]
+    items.sort(key=lambda it: (it["state"] == VULN_STATE_DISMISSED, it["kev"] is not True,
+                               -(it["cvss_base"] or 0)))
+    return {"items": items}
+
+
+@router.post("/{uuid}/vulns/{cve_id}/dismiss")
+def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
+                 user: User = Depends(require_admin)):
+    """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
+    d = _get(db, uuid)
+    rows = db.scalars(
+        select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .where(DevicePort.device_id == d.id, DevicePortVuln.cve_id == cve_id)
+    ).all()
+    if not rows:
+        raise HTTPException(404, "No matching vulnerability on this device")
+    for row in rows:
+        row.state = VULN_STATE_DISMISSED
+    audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
+          {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{uuid}/vulns/{cve_id}/dismiss", status_code=204)
+def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
+    d = _get(db, uuid)
+    rows = db.scalars(
+        select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .where(DevicePort.device_id == d.id, DevicePortVuln.cve_id == cve_id,
+               DevicePortVuln.state == VULN_STATE_DISMISSED)
+    ).all()
+    if not rows:
+        raise HTTPException(404, "No dismissed match for this device/CVE")
+    for row in rows:
+        row.state = VULN_STATE_POTENTIAL  # corrected to `confirmed` (if warranted) on the next match run
+    audit(db, user.username, "device.vuln_undismiss", d.hostname or d.current_ip,
+          {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
+    db.commit()
 
 
 @router.delete("/{uuid}", status_code=204)

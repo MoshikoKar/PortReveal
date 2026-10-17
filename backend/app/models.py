@@ -131,6 +131,17 @@ CPE_SOURCE_SSDP = "ssdp"
 CPE_SOURCE_HTTP = "http"
 CPE_SOURCES = (CPE_SOURCE_NMAP, CPE_SOURCE_FAVICON, CPE_SOURCE_SNMP, CPE_SOURCE_SSDP, CPE_SOURCE_HTTP)
 
+# Vulnerability matching (spec section 5): confidence is driven only by version precision, never by
+# backport heuristics. `dismissed` is a manual, learned no — it never reappears for that CVE/port.
+VULN_STATE_CONFIRMED = "confirmed"
+VULN_STATE_POTENTIAL = "potential"
+VULN_STATE_DISMISSED = "dismissed"
+VULN_STATES = (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL, VULN_STATE_DISMISSED)
+
+VULN_SOURCE_CACHE = "cache"        # local NVD/KEV/EPSS cache match (core/vuln/match.py)
+VULN_SOURCE_NMAP_SCRIPT = "nmap_script"  # phase 4: SCRIPT_ALLOWLIST finding (e.g. smb-vuln-ms17-010)
+VULN_SOURCES = (VULN_SOURCE_CACHE, VULN_SOURCE_NMAP_SCRIPT)
+
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
 # migration that rewrites the matching constraint.
@@ -147,6 +158,8 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("scans", "status"): SCAN_STATUSES,
     ("events", "event_type"): EVENT_TYPES,
     ("events", "severity"): SEVERITIES,
+    ("device_port_vulns", "state"): VULN_STATES,
+    ("device_port_vulns", "source"): VULN_SOURCES,
 }
 
 
@@ -255,6 +268,10 @@ class Device(Base):
     device_type: Mapped[str | None] = mapped_column(String(40), index=True)
     exposure_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Vulnerability-based risk (spec section 5): separate from exposure_score above.
+    risk_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    combined_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    risk_scored_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     ssh_hostkey_sha256: Mapped[str | None] = mapped_column(String(64))
     # Static vs dynamic IP (spec 7): derived from device_ips history in core/ip_assignment.py.
     ip_assignment: Mapped[str | None] = mapped_column(String(10))
@@ -409,6 +426,68 @@ class PortCpe(Base):
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
+class Vulnerability(Base):
+    """One CVE record from the local vulnerability cache (NVD + CISA KEV + FIRST EPSS)."""
+
+    __tablename__ = "vulnerabilities"
+    cve_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    cvss_base: Mapped[float | None] = mapped_column(Float)
+    cvss_vector: Mapped[str | None] = mapped_column(String(100))
+    severity: Mapped[str | None] = mapped_column(String(10))  # NVD baseSeverity, informational only
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_modified: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    kev: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
+    kev_added_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    epss: Mapped[float | None] = mapped_column(Float)
+    epss_percentile: Mapped[float | None] = mapped_column(Float)
+    summary: Mapped[str | None] = mapped_column(Text)
+
+
+class VulnCpeMatch(Base):
+    """One CPE 2.3 (optionally version-ranged) that a CVE applies to."""
+
+    __tablename__ = "vuln_cpe_match"
+    __table_args__ = (Index("ix_vuln_cpe_match_vendor_product", "vendor_product"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cve_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.cve_id", ondelete="CASCADE"), index=True)
+    cpe23: Mapped[str] = mapped_column(String(255))
+    vendor_product: Mapped[str] = mapped_column(String(200))  # "vendor:product", lowercased, for fast lookup
+    version_start: Mapped[str | None] = mapped_column(String(100))
+    version_start_incl: Mapped[bool | None] = mapped_column(Boolean)
+    version_end: Mapped[str | None] = mapped_column(String(100))
+    version_end_excl: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class DevicePortVuln(Base):
+    """A CVE matched to one device port, by local CPE cache lookup or an allow-listed nmap script."""
+
+    __tablename__ = "device_port_vulns"
+    __table_args__ = (
+        UniqueConstraint("device_port_id", "cve_id", name="uq_device_port_vuln"),
+        one_of("device_port_vulns", "state"),
+        one_of("device_port_vulns", "source"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), index=True)
+    cve_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.cve_id", ondelete="CASCADE"), index=True)
+    matched_cpe: Mapped[str | None] = mapped_column(String(255))
+    state: Mapped[str] = mapped_column(String(10), default=VULN_STATE_POTENTIAL)
+    source: Mapped[str] = mapped_column(String(15), default=VULN_SOURCE_CACHE)
+    matched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    vulnerability: Mapped[Vulnerability] = relationship(lazy="joined")
+
+
+class VulnFeedState(Base):
+    """Sync bookkeeping for one vulnerability feed source (nvd / kev / epss)."""
+
+    __tablename__ = "vuln_feed_state"
+    source: Mapped[str] = mapped_column(String(10), primary_key=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_modified_cursor: Mapped[str | None] = mapped_column(String(40))
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
 class PortSnmp(Base):
     """Read-only SNMPv2c sys* fields from an open UDP/161 (or TCP) SNMP service."""
 
@@ -467,6 +546,7 @@ class DeviceProfile(Base):
     criticality: Mapped[str | None] = mapped_column(String(10))  # CRITICALITY_LEVELS
     notes: Mapped[str | None] = mapped_column(Text)
     exposure_factors: Mapped[list | None] = mapped_column(JSON)
+    risk_factors: Mapped[list | None] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     device: Mapped[Device] = relationship(back_populates="profile")
 

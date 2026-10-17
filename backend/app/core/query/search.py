@@ -85,8 +85,8 @@ def _rows_from(node: Node | None = None):
     """Open services joined with their device and enrichment metadata (the row context)."""
     if node is None:
         return service_from(True, True, True, False).join(Device.__table__, Device.id == DevicePort.device_id)
-    http, tls, snmp, shot = join_flags(node)
-    return service_from(True, tls, snmp, shot).join(Device.__table__, Device.id == DevicePort.device_id)
+    http, tls, snmp, shot, vuln = join_flags(node)
+    return service_from(True, tls, snmp, shot, vuln).join(Device.__table__, Device.id == DevicePort.device_id)
 
 
 def _host_order(db: Session, sort: str, desc: bool) -> list:
