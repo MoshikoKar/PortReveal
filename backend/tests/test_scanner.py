@@ -223,6 +223,17 @@ def test_invalid_targets_rejected(bad):
         AddressSet.from_specs(bad)
 
 
+@pytest.mark.parametrize("bad", [
+    "10.0.0.1; reboot",  # semicolon split + single-label must not resolve via search domain
+    "reboot",
+    "localhostx",  # single-label, not localhost
+])
+def test_single_label_hostnames_rejected_even_with_allow_hostname(bad):
+    """Ad-hoc scan targets allow hostnames, but not single-label names (except localhost)."""
+    with pytest.raises(TargetError):
+        AddressSet.from_specs(bad, allow_hostname=True)
+
+
 def test_network_size_limit():
     assert validate_network_cidr("10.20.5.0/16") == "10.20.0.0/16"
     with pytest.raises(TargetError):
