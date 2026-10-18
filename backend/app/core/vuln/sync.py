@@ -158,11 +158,27 @@ def upsert_cve(db: Session, data: dict, matches: list[dict]) -> None:
     db.flush()
 
 
+def _unique_cve_count(db: Session) -> int:
+    return db.scalar(select(func.count(Vulnerability.cve_id))) or 0
+
+
+def _refresh_nvd_unique_count(db: Session) -> int:
+    """Persist the unique CVE row count on the NVD feed row (status reads this; never COUNT on poll during import)."""
+    n = _unique_cve_count(db)
+    row = _nvd_feed_state(db)
+    row.record_count = n
+    return n
+
+
 def _update_feed_state(db: Session, source: str, now: datetime, cursor: datetime | None,
                        count: int, error: str | None, *, previous_count: int = 0) -> None:
     """On success, advance the weekly clock and cursor. On failure, record the error but do NOT
     advance ``last_synced_at`` / cursor — otherwise a mid-pagination failure postpones retries for
-    a full sync interval and permanently skips CVEs from the failed page."""
+    a full sync interval and permanently skips CVEs from the failed page.
+
+    For NVD, ``record_count`` is always the unique ``vulnerabilities`` row count (upserts can
+    re-touch the same CVE, so an ingest tally overcounts).
+    """
     row = db.get(VulnFeedState, source)
     if row is None:
         row = VulnFeedState(source=source, record_count=0)
@@ -171,13 +187,18 @@ def _update_feed_state(db: Session, source: str, now: datetime, cursor: datetime
     row.last_error = error
     if error:
         # Keep prior successful cursor/synced_at; bump record_count only with what we wrote this run.
-        if count:
+        if source == "nvd":
+            row.record_count = _unique_cve_count(db)
+        elif count:
             row.record_count = (row.record_count or 0) + count
         return
     row.last_synced_at = now
     if cursor is not None:
         row.last_modified_cursor = cursor.isoformat()
-    row.record_count = previous_count + count if previous_count else (count or row.record_count or 0)
+    if source == "nvd":
+        row.record_count = _unique_cve_count(db)
+    else:
+        row.record_count = previous_count + count if previous_count else (count or row.record_count or 0)
 
 
 def _ingest_nvd_payload(db: Session, payload: dict) -> tuple[int, datetime | None]:
@@ -289,6 +310,9 @@ def import_nvd_json(db: Session, path: str | Path) -> dict:
         count += n
         if lm and (latest is None or lm > latest):
             latest = lm
+        # Unique tally after each file so /settings/vuln/status stays accurate mid-import.
+        _refresh_nvd_unique_count(db)
+        db.commit()
     now = datetime.now(timezone.utc)
     state = _nvd_feed_state(db)
     state.mirror_complete = True

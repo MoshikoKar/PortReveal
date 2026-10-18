@@ -175,13 +175,20 @@ def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require
          if f.source == "nvd" and not f.mirror_complete else None}
         for f in feed_rows
     ]
+    running = sync_running()
     nvd = next((f for f in feed_rows if f.source == "nvd"), None)
-    if nvd is not None:
-        cve_count = nvd.record_count or 0
+    if running:
+        # During import/sync avoid COUNT(*) (SQLite write-lock stalls). Prefer the unique
+        # tally persisted on the NVD feed row at sync/import time.
+        cve_count = (nvd.record_count if nvd is not None else 0) or 0
     else:
+        # Idle: unique CVE rows (corrects older installs that stored an ingest tally).
         cve_count = db.scalar(select(func.count(Vulnerability.cve_id))) or 0
+        if nvd is not None and (nvd.record_count or 0) != cve_count:
+            nvd.record_count = cve_count
+            db.commit()
     return {
-        "sync_running": sync_running(),
+        "sync_running": running,
         "cve_count": cve_count,
         "mirror_start_year": NVD_MIRROR_START_YEAR,
         "feeds": feeds,
