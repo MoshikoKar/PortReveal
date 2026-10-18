@@ -197,6 +197,7 @@ def test_device_vulns_list_dismiss_and_undismiss(admin, db):
 def test_undismiss_restores_risk_score(admin, db):
     """Undo must re-score the device the same way dismiss does (autoflush is off)."""
     from datetime import datetime, timezone
+
     from app.core.vuln.score import apply_risk_scores
     from app.models import DevicePortVuln, Vulnerability
 
