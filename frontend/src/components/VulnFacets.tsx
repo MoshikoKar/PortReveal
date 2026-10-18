@@ -14,39 +14,29 @@ function ageBuckets(counts: Record<AgeBucket, number>): FacetBucket[] {
   return AGE_BUCKETS.map((key) => ({ key, count: counts[key], label: AGE_LABELS[key] }));
 }
 
-function FacetBars({ title, buckets, filterKey, filters, onToggle, clickable = true }: {
+function FacetBars({ title, buckets, filterKey, filters, onToggle }: {
   title: string;
   buckets: FacetBucket[];
-  filterKey?: VulnFilterKey;
+  filterKey: VulnFilterKey;
   filters: VulnFilters;
   onToggle: (key: VulnFilterKey, value: string) => void;
-  clickable?: boolean;
 }) {
   const max = maxOf(buckets.map((b) => b.count));
-  const selected = filterKey ? filters[filterKey] : undefined;
+  const selected = filters[filterKey];
   return (
     <Card title={title}>
       {buckets.length === 0 ? <div className="muted small">No data yet.</div> : (
         <div className="bars">
           {buckets.map((b) => {
             const value = String(b.key);
-            const rowClickable = clickable && !!filterKey && value !== 'unassigned';
             const active = selected === value;
-            const row = (
-              <>
+            return (
+              <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`}
+                style={{ color: 'var(--text-2)', background: 'none', border: 0, padding: 0, width: '100%', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
+                onClick={() => onToggle(filterKey, value)}>
                 <span style={active ? { fontWeight: 600, color: 'var(--accent)' } : undefined}>{b.label ?? value}</span>
                 <span className="bar-track"><span className="bar-fill" style={barFillStyle(b.count, max)} /></span>
                 <span className="right">{b.count}</span>
-              </>
-            );
-            if (!rowClickable) {
-              return <div key={value} className="bar-row" style={{ color: 'var(--text-2)' }}>{row}</div>;
-            }
-            return (
-              <button key={value} type="button" className="bar-row"
-                style={{ color: 'var(--text-2)', background: 'none', border: 0, padding: 0, width: '100%', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
-                onClick={() => filterKey && onToggle(filterKey, value)}>
-                {row}
               </button>
             );
           })}
@@ -72,7 +62,7 @@ function VendorProductFacet({ buckets, filters, onToggleKey }: {
             const value = String(b.key);
             const active = vendorProductFacetActive(filters, value);
             return (
-              <button key={value} type="button" className="bar-row"
+              <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`}
                 style={{ color: 'var(--text-2)', background: 'none', border: 0, padding: 0, width: '100%', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
                 onClick={() => onToggleKey(value)}>
                 <span style={active ? { fontWeight: 600, color: 'var(--accent)' } : undefined}>{b.label ?? value}</span>
@@ -94,17 +84,23 @@ export function VulnFacets({ summary, filters, onToggle, onToggleVendorProduct }
   onToggleVendorProduct: (facetKey: string) => void;
 }) {
   return (
-    <div className="grid halves">
-      <FacetBars title="By OS" buckets={summary.facets.os} filterKey="os_name" filters={filters} onToggle={onToggle} />
-      <FacetBars title="By service" buckets={summary.facets.service} filterKey="service" filters={filters} onToggle={onToggle} />
-      <FacetBars title="By port" buckets={summary.facets.port} filterKey="port" filters={filters} onToggle={onToggle} />
-      <FacetBars title="By network" buckets={summary.facets.network} filterKey="network_id" filters={filters} onToggle={onToggle} />
-      <FacetBars title="By device type" buckets={summary.facets.device_type} filterKey="device_type" filters={filters} onToggle={onToggle} />
-      <VendorProductFacet buckets={summary.facets.vendor_product} filters={filters} onToggleKey={onToggleVendorProduct} />
-      <FacetBars title="By CVE age (published)" buckets={ageBuckets(summary.facets.cve_age)} filterKey="cve_age"
-        filters={filters} onToggle={onToggle} />
-      <FacetBars title="By exposure duration" buckets={ageBuckets(summary.facets.exposure_duration)}
-        filterKey="exposure_duration" filters={filters} onToggle={onToggle} />
-    </div>
+    <>
+      {/* Text-heavy facets stay at two columns. */}
+      <div className="grid halves">
+        <FacetBars title="By OS" buckets={summary.facets.os} filterKey="os_name" filters={filters} onToggle={onToggle} />
+        <VendorProductFacet buckets={summary.facets.vendor_product} filters={filters} onToggleKey={onToggleVendorProduct} />
+      </div>
+      {/* Compact short-label facets: three per row on wide screens. */}
+      <div className="grid three">
+        <FacetBars title="By service" buckets={summary.facets.service} filterKey="service" filters={filters} onToggle={onToggle} />
+        <FacetBars title="By port" buckets={summary.facets.port} filterKey="port" filters={filters} onToggle={onToggle} />
+        <FacetBars title="By network" buckets={summary.facets.network} filterKey="network_id" filters={filters} onToggle={onToggle} />
+        <FacetBars title="By device type" buckets={summary.facets.device_type} filterKey="device_type" filters={filters} onToggle={onToggle} />
+        <FacetBars title="By CVE age (published)" buckets={ageBuckets(summary.facets.cve_age)} filterKey="cve_age"
+          filters={filters} onToggle={onToggle} />
+        <FacetBars title="By exposure duration" buckets={ageBuckets(summary.facets.exposure_duration)}
+          filterKey="exposure_duration" filters={filters} onToggle={onToggle} />
+      </div>
+    </>
   );
 }

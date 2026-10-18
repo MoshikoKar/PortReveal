@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  barFillStyle, barWidthPct, cellIntensity, linePath, maxOf, trendHasData, xScale, yScale,
+  barFillStyle, barWidthPct, cellFillLightness, cellFillStyle, cellIntensity, contrastRatio,
+  linePath, maxOf, readableTextColor, relativeLuminance, trendHasData, xScale, yScale,
 } from './vulnChartMath';
 
 describe('maxOf', () => {
@@ -96,5 +97,38 @@ describe('cellIntensity', () => {
   it('is 0 for an empty cell or an empty matrix', () => {
     expect(cellIntensity(0, 10)).toBe(0);
     expect(cellIntensity(5, 0)).toBe(0);
+  });
+});
+
+describe('cellFillStyle / severity ramp', () => {
+  it('lightness is strictly decreasing Low > Medium > High > Critical even at band edges', () => {
+    // Darkest Low (max count) must still be lighter than lightest Medium (min count), etc.
+    const low = cellFillLightness('low', 100, 100);
+    const mediumLo = cellFillLightness('medium', 1, 100);
+    const mediumHi = cellFillLightness('medium', 100, 100);
+    const highLo = cellFillLightness('high', 1, 100);
+    const highHi = cellFillLightness('high', 100, 100);
+    const critical = cellFillLightness('critical', 1, 100);
+    expect(low).toBeGreaterThan(mediumLo);
+    expect(mediumHi).toBeGreaterThan(highLo);
+    expect(highHi).toBeGreaterThan(critical);
+    expect(cellFillLightness('low', 1, 100)).toBeGreaterThan(low);
+    expect(cellFillLightness('critical', 100, 100)).toBeLessThan(critical);
+  });
+
+  it('uses a warm hsl fill and flips text for WCAG AA contrast', () => {
+    const pale = cellFillStyle('low', 1, 100);
+    const deep = cellFillStyle('critical', 100, 100);
+    expect(pale.background.startsWith('hsl(')).toBe(true);
+    expect(deep.background.startsWith('hsl(')).toBe(true);
+    expect(pale.color).toBe('#141210');
+    expect(deep.color).toBe('#ffffff');
+    // Spot-check AA on the resolved RGB of the pale yellow / deep crimson endpoints.
+    expect(contrastRatio(relativeLuminance(0xf5, 0xd0, 0x4a), relativeLuminance(0x14, 0x12, 0x10))).toBeGreaterThanOrEqual(4.5);
+    expect(readableTextColor(0x7a, 0x14, 0x14)).toBe('#ffffff');
+  });
+
+  it('returns the empty panel color for zero-count cells', () => {
+    expect(cellFillStyle('critical', 0, 10)).toEqual({ background: 'var(--panel-3)', color: 'var(--muted)' });
   });
 });

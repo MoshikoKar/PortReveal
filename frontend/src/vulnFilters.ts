@@ -6,6 +6,7 @@
 export const VULN_FILTER_KEYS = [
   'severity', 'kev', 'epss_min', 'network_id', 'service', 'port', 'os_name', 'device_type',
   'state', 'cve_age', 'exposure_duration', 'risk_band', 'vendor', 'product',
+  'cve_id', 'device_uuid', 'new_since',
 ] as const;
 
 export type VulnFilterKey = typeof VULN_FILTER_KEYS[number];
@@ -93,4 +94,112 @@ export function toggleVendorProductFilter(sp: URLSearchParams, key: string): URL
   }
   next.delete('page');
   return next;
+}
+
+/** Severity-by-network cell: toggle the (network_id, severity) pair together. */
+export function toggleHeatmapCell(
+  sp: URLSearchParams,
+  networkId: number | null,
+  severity: string,
+): URLSearchParams {
+  const netKey = networkId != null ? String(networkId) : 'unassigned';
+  const next = new URLSearchParams(sp);
+  const active = next.get('network_id') === netKey && next.get('severity') === severity;
+  if (active) {
+    next.delete('network_id');
+    next.delete('severity');
+  } else {
+    next.set('network_id', netKey);
+    next.set('severity', severity);
+  }
+  next.delete('page');
+  return next;
+}
+
+/** Scroll the findings table into view after a dashboard filter click. */
+export function scrollToVulnFindings(): void {
+  requestAnimationFrame(() => {
+    document.getElementById('vuln-findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+const FILTER_KEY_LABELS: Record<VulnFilterKey, string> = {
+  severity: 'severity',
+  kev: 'KEV',
+  epss_min: 'EPSS ≥',
+  network_id: 'network',
+  service: 'service',
+  port: 'port',
+  os_name: 'OS',
+  device_type: 'device type',
+  state: 'state',
+  cve_age: 'CVE age',
+  exposure_duration: 'exposure duration',
+  risk_band: 'risk band',
+  vendor: 'vendor',
+  product: 'product',
+  cve_id: 'CVE',
+  device_uuid: 'device',
+  new_since: 'new since',
+};
+
+const AGE_VALUE_LABELS: Record<string, string> = {
+  under_30d: '< 30 days',
+  '30_90d': '30-90 days',
+  '90_365d': '90 days - 1 year',
+  over_365d: '> 1 year',
+  unknown: 'unknown',
+};
+
+function titleCase(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/** Optional lookup tables so chips can show network names / device IPs instead of raw ids. */
+export interface VulnFilterLabelContext {
+  networkNames?: Record<string, string>;
+  deviceLabels?: Record<string, string>;
+}
+
+/** Human-readable value for a filter chip (e.g. under_30d → "< 30 days", network 1 → "Mock Lab"). */
+export function formatVulnFilterValue(
+  key: VulnFilterKey,
+  value: string,
+  ctx: VulnFilterLabelContext = {},
+): string {
+  switch (key) {
+    case 'cve_age':
+    case 'exposure_duration':
+      return AGE_VALUE_LABELS[value] ?? value;
+    case 'network_id':
+      if (value === 'unassigned') return 'Unassigned';
+      return ctx.networkNames?.[value] ?? value;
+    case 'device_uuid':
+      return ctx.deviceLabels?.[value] ?? value;
+    case 'state':
+    case 'severity':
+    case 'risk_band':
+      return titleCase(value);
+    case 'kev':
+      return value === 'true' ? 'yes' : value;
+    case 'epss_min': {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return value;
+      return `${Math.round(n * 100)}%`;
+    }
+    case 'new_since':
+      return value === 'scan' ? 'last scan' : value === 'db' ? 'last DB update' : value;
+    default:
+      return value;
+  }
+}
+
+/** Full chip label: "exposure duration: < 30 days". */
+export function formatVulnFilterChip(
+  key: VulnFilterKey,
+  value: string,
+  ctx: VulnFilterLabelContext = {},
+): string {
+  return `${FILTER_KEY_LABELS[key]}: ${formatVulnFilterValue(key, value, ctx)}`;
 }

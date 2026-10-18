@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { downloadBlob, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
@@ -10,31 +10,72 @@ import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
 import type { VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
 import {
-  buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, toggleVulnFilter,
-  toggleVendorProductFilter, type VulnFilterKey,
+  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, parseVulnFilters, scrollToVulnFindings,
+  setVulnFilter, toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter,
+  VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
 } from '../vulnFilters';
+
+/** Merge optimistic filters into the current URL (keeps page/sort until applySp drops page). */
+function spWithFilters(base: URLSearchParams, filters: VulnFilters): URLSearchParams {
+  const next = new URLSearchParams(base);
+  for (const key of VULN_FILTER_KEYS) {
+    const value = filters[key];
+    if (value) next.set(key, value);
+    else next.delete(key);
+  }
+  return next;
+}
 
 const SEVERITY_COLOR: Record<string, string> = {
   critical: 'var(--high)', high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)',
 };
 
-const FILTER_LABELS: Record<VulnFilterKey, string> = {
-  severity: 'severity', kev: 'KEV', epss_min: 'EPSS ≥', network_id: 'network', service: 'service',
-  port: 'port', os_name: 'OS', device_type: 'device type', state: 'state', cve_age: 'CVE age',
-  exposure_duration: 'exposure duration', risk_band: 'risk band', vendor: 'vendor', product: 'product',
-};
+function labelContextFromSummary(summary: VulnSummary | null | undefined) {
+  const networkNames: Record<string, string> = {};
+  const deviceLabels: Record<string, string> = {};
+  if (!summary) return { networkNames, deviceLabels };
+  for (const b of summary.facets.network) {
+    networkNames[String(b.key)] = b.label ?? String(b.key);
+  }
+  for (const row of summary.severity_by_network) {
+    const key = row.network_id != null ? String(row.network_id) : 'unassigned';
+    networkNames[key] = row.network;
+  }
+  for (const d of summary.top_devices) {
+    deviceLabels[d.uuid] = d.hostname ? `${d.ip} (${d.hostname})` : d.ip;
+  }
+  for (const row of [...summary.new_since_last_scan, ...summary.new_since_last_db_update]) {
+    if (!deviceLabels[row.device_uuid]) deviceLabels[row.device_uuid] = row.device_ip;
+  }
+  return { networkNames, deviceLabels };
+}
 
 export default function Vulnerabilities() {
   const [sp, setSp] = useSearchParams();
-  const filters = parseVulnFilters(sp);
+  const searchKey = sp.toString();
+  // Optimistic copy so chips/active states update on the same click as setSp (URL can lag a tick).
+  const [filters, setFilters] = useState<VulnFilters>(() => parseVulnFilters(sp));
+  useEffect(() => {
+    setFilters(parseVulnFilters(new URLSearchParams(searchKey)));
+  }, [searchKey]);
+
   const page = Number(sp.get('page') || 1);
   const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', undefined, 30000);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const labelCtx = useMemo(() => labelContextFromSummary(data), [data]);
 
-  const toggle = (key: VulnFilterKey, value: string) => setSp(toggleVulnFilter(sp, key, value));
-  const set = (key: VulnFilterKey, value: string | undefined) => setSp(setVulnFilter(sp, key, value));
-  const toggleVendorProduct = (facetKey: string) => setSp(toggleVendorProductFilter(sp, facetKey));
+  const applySp = (next: URLSearchParams, scroll = true) => {
+    setFilters(parseVulnFilters(next));
+    setSp(next);
+    if (scroll) scrollToVulnFindings();
+  };
+  // Toggle against optimistic filters so a second click before the URL catches up still clears.
+  const liveSp = () => spWithFilters(sp, filters);
+  const toggle = (key: VulnFilterKey, value: string) => applySp(toggleVulnFilter(liveSp(), key, value));
+  const set = (key: VulnFilterKey, value: string | undefined, scroll = true) =>
+    applySp(setVulnFilter(liveSp(), key, value), scroll);
+  const toggleVendorProduct = (facetKey: string) => applySp(toggleVendorProductFilter(liveSp(), facetKey));
   const setPage = (p: number) => {
     const next = new URLSearchParams(sp);
     if (p <= 1) next.delete('page');
@@ -61,6 +102,7 @@ export default function Vulnerabilities() {
   const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
   const epssPct = data ? Math.round(data.epss_threshold * 100) : 0;
+  const epssValue = data ? String(data.epss_threshold) : '0.1';
 
   return (
     <>
@@ -82,27 +124,31 @@ export default function Vulnerabilities() {
       </div>
       {exportError && <div className="alert error no-print">{exportError}</div>}
       <ErrorBox error={error} />
+      {/* Chips stay outside the summary loading gate so filter state paints immediately on click. */}
+      {activeFilters.length > 0 && (
+        <div className="row wrap" style={{ gap: 8, marginBottom: 12 }}>
+          <span className="muted small">Filters:</span>
+          {activeFilters.map(([key, value]) => (
+            <button key={key} type="button" className="badge outline" style={{ cursor: 'pointer', border: 0 }}
+              onClick={() => set(key, undefined, false)} title="Remove this filter">
+              {formatVulnFilterChip(key, value, labelCtx)} ✕
+            </button>
+          ))}
+          <button type="button" className="btn sm ghost"
+            onClick={() => applySp(clearVulnFilters(sp), false)}>Clear all</button>
+        </div>
+      )}
       {!data ? (!error && <Loading />) : (
         <>
-          {activeFilters.length > 0 && (
-            <div className="row wrap" style={{ gap: 8, marginBottom: 12 }}>
-              <span className="muted small">Filters:</span>
-              {activeFilters.map(([key, value]) => (
-                <button key={key} type="button" className="badge outline" style={{ cursor: 'pointer', border: 0 }}
-                  onClick={() => set(key, undefined)} title="Remove this filter">
-                  {FILTER_LABELS[key]}: {value} ✕
-                </button>
-              ))}
-              <button type="button" className="btn sm ghost" onClick={() => setSp(clearVulnFilters(sp))}>Clear all</button>
-            </div>
-          )}
-
           <Card className={data.kev_count > 0 ? 'kev-card active' : 'kev-card'}>
             <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
-              onClick={() => toggle('kev', 'true')}>
+              role="button" tabIndex={0} aria-pressed={filters.kev === 'true'}
+              onClick={() => toggle('kev', 'true')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle('kev', 'true'); } }}>
               <div>
                 <div className="label" style={{ fontSize: 13, fontWeight: 600, color: data.kev_count > 0 ? 'var(--high)' : 'var(--muted)' }}>
                   Actively exploited (CISA KEV)
+                  {filters.kev === 'true' && <span className="badge high" style={{ marginLeft: 8 }}>filtered</span>}
                 </div>
                 <div className="muted small">Known to be exploited in the wild — the most urgent findings on this network.</div>
               </div>
@@ -113,20 +159,29 @@ export default function Vulnerabilities() {
           </Card>
 
           <div className="grid kpis">
-            <Kpi label="Critical" value={severity.critical} color={SEVERITY_COLOR.critical} onClick={() => toggle('severity', 'critical')} />
-            <Kpi label="High" value={severity.high} color={SEVERITY_COLOR.high} onClick={() => toggle('severity', 'high')} />
-            <Kpi label="Medium" value={severity.medium} color={SEVERITY_COLOR.medium} onClick={() => toggle('severity', 'medium')} />
-            <Kpi label="Low" value={severity.low} color={SEVERITY_COLOR.low} onClick={() => toggle('severity', 'low')} />
+            <Kpi label="Critical" value={severity.critical} color={SEVERITY_COLOR.critical}
+              active={filters.severity === 'critical'} onClick={() => toggle('severity', 'critical')} />
+            <Kpi label="High" value={severity.high} color={SEVERITY_COLOR.high}
+              active={filters.severity === 'high'} onClick={() => toggle('severity', 'high')} />
+            <Kpi label="Medium" value={severity.medium} color={SEVERITY_COLOR.medium}
+              active={filters.severity === 'medium'} onClick={() => toggle('severity', 'medium')} />
+            <Kpi label="Low" value={severity.low} color={SEVERITY_COLOR.low}
+              active={filters.severity === 'low'} onClick={() => toggle('severity', 'low')} />
             {(severity.unknown ?? 0) > 0 && (
               <Kpi label="Unscored" value={severity.unknown} sub="No CVSS in local cache"
-                onClick={() => toggle('severity', 'unknown')} />
+                active={filters.severity === 'unknown'} onClick={() => toggle('severity', 'unknown')} />
             )}
             <Kpi label={`High exploit probability (EPSS ≥ ${epssPct}%)`} value={data.epss_high_count}
-              sub="FIRST.org exploitation-probability score" onClick={() => set('epss_min', String(data.epss_threshold))} />
+              sub="FIRST.org exploitation-probability score"
+              active={filters.epss_min === epssValue}
+              onClick={() => toggle('epss_min', epssValue)} />
             <Kpi label="High-risk devices" value={risk.high} sub={`${risk.medium} medium · ${risk.low} low`}
-              color={risk.high ? 'var(--high)' : undefined} onClick={() => toggle('risk_band', 'high')} />
-            <Kpi label="Confirmed findings" value={data.confirmed_count} onClick={() => toggle('state', 'confirmed')} />
-            <Kpi label="Potential findings" value={data.potential_count} onClick={() => toggle('state', 'potential')} />
+              color={risk.high ? 'var(--high)' : undefined}
+              active={filters.risk_band === 'high'} onClick={() => toggle('risk_band', 'high')} />
+            <Kpi label="Confirmed findings" value={data.confirmed_count}
+              active={filters.state === 'confirmed'} onClick={() => toggle('state', 'confirmed')} />
+            <Kpi label="Potential findings" value={data.potential_count}
+              active={filters.state === 'potential'} onClick={() => toggle('state', 'potential')} />
           </div>
 
           <Card title="Vulnerability feed">
@@ -165,23 +220,27 @@ export default function Vulnerabilities() {
 
           <Card title="Severity by network" actions={<span className="muted small">Severity is derived from CVSS, not NVD&apos;s label</span>}>
             <VulnHeatmap rows={data.severity_by_network} filters={filters}
-              onCellClick={(networkId, severity) => {
-                let next = toggleVulnFilter(sp, 'severity', severity);
-                next = setVulnFilter(next, 'network_id', networkId != null ? String(networkId) : undefined);
-                setSp(next);
-              }} />
+              onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))} />
           </Card>
 
           <VulnFacets summary={data} filters={filters} onToggle={toggle}
             onToggleVendorProduct={toggleVendorProduct} />
-          <VulnTopLists summary={data} />
-          <VulnFindingsTable
+          <VulnTopLists
+            summary={data}
             filters={filters}
-            page={page}
-            onPage={setPage}
-            onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined)}
-            onChanged={() => { void reload(); }}
+            onToggleCve={(id) => toggle('cve_id', id)}
+            onToggleDevice={(uuid) => toggle('device_uuid', uuid)}
+            onToggleNewSince={(v) => toggle('new_since', v)}
           />
+          <div id="vuln-findings">
+            <VulnFindingsTable
+              filters={filters}
+              page={page}
+              onPage={setPage}
+              onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined, false)}
+              onChanged={() => { void reload(); }}
+            />
+          </div>
         </>
       )}
     </>

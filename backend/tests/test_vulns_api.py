@@ -92,6 +92,49 @@ def test_list_vulns_filters_by_network_service_port_os_device_type(admin, db):
     assert admin.get("/api/vulns", params={"port": 80}).json()["total"] == 1
 
 
+def test_list_vulns_filters_unassigned_network(admin, db):
+    """Facet key network_id=unassigned must round-trip (devices with no network)."""
+    _seed_two_devices(db)
+    orphan = device_by_ip(db, "10.0.0.2")
+    orphan.network_id = None
+    db.commit()
+    body = admin.get("/api/vulns", params={"network_id": "unassigned"}).json()
+    assert body["total"] == 1 and body["items"][0]["cve_id"] == "CVE-2024-MED"
+    assert admin.get("/api/vulns", params={"network_id": "not-a-network"}).status_code == 422
+
+
+def test_list_vulns_filters_by_cve_id_and_device_uuid(admin, db):
+    _net, da, _db = _seed_two_devices(db)
+    by_cve = admin.get("/api/vulns", params={"cve_id": "cve-2024-crit"}).json()
+    assert by_cve["total"] == 1 and by_cve["items"][0]["cve_id"] == "CVE-2024-CRIT"
+    by_device = admin.get("/api/vulns", params={"device_uuid": da.uuid}).json()
+    assert by_device["total"] == 1 and by_device["items"][0]["device_uuid"] == da.uuid
+
+
+def test_list_vulns_filters_new_since_scan_and_db(admin, db):
+    """new_since=scan|db matches the dashboard 'New since …' lists (first_seen/matched_at cutoff)."""
+    from app.models import VulnFeedState, VulnFindingLifecycle
+
+    _seed_two_devices(db)
+    now = utcnow()
+    # Seed ran a completed scan before inserting findings → they count as new since that scan.
+    assert admin.get("/api/vulns", params={"new_since": "scan"}).json()["total"] == 2
+
+    db.add(VulnFeedState(source="nvd", last_synced_at=now - timedelta(hours=1), record_count=1,
+                         mirror_complete=True))
+    db.commit()
+    assert admin.get("/api/vulns", params={"new_since": "db"}).json()["total"] == 2
+
+    # Age matched_at / lifecycle first_seen earlier than the cutoffs → none are "new".
+    for row in db.query(DevicePortVuln).all():
+        row.matched_at = now - timedelta(days=3)
+    for row in db.query(VulnFindingLifecycle).all():
+        row.first_seen_at = now - timedelta(days=3)
+    db.commit()
+    assert admin.get("/api/vulns", params={"new_since": "scan"}).json()["total"] == 0
+    assert admin.get("/api/vulns", params={"new_since": "db"}).json()["total"] == 0
+
+
 def test_list_vulns_state_filter_and_dismissed_excluded_by_default(admin, db):
     _seed_two_devices(db)
     row = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
