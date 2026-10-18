@@ -4,20 +4,24 @@ Report-only: dismiss/undismiss stay on the existing device-scoped endpoints in a
 """
 from __future__ import annotations
 
+import csv
+import io
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func, literal_column, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
 from ..core.mockdata import device_visible
-from ..core.vuln.buckets import severity_bucket_expr
+from ..core.vuln.buckets import severity_bucket, severity_bucket_expr
 from ..core.vuln.display import is_visible
 from ..core.vuln.score import DEFAULT_CVSS
 from ..core.vuln.summary import get_vuln_summary
-from ..db import get_db, utcnow
+from ..db import SessionLocal, get_db, utcnow
 from ..models import (
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
@@ -177,6 +181,73 @@ def list_vulns(
         for dpv, port_row, device, vuln, network_name, first_seen_at in rows
     ]
     return paged(items, total, paging)
+
+
+CSV_COLUMNS = [
+    "cve_id", "device_ip", "device_hostname", "network", "port", "protocol", "service",
+    "cvss_base", "severity", "kev", "epss", "state", "first_seen", "matched_at",
+]
+
+
+def _export_row(dpv: DevicePortVuln, port_row: DevicePort, device: Device, vuln: Vulnerability,
+                network_name: str | None, first_seen_at: datetime | None) -> list:
+    return [
+        vuln.cve_id, device.current_ip, device.hostname or "", network_name or "",
+        port_row.port, port_row.protocol, port_row.service or "",
+        vuln.cvss_base if vuln.cvss_base is not None else "", severity_bucket(vuln.cvss_base),
+        vuln.kev, vuln.epss if vuln.epss is not None else "", dpv.state,
+        first_seen_at.isoformat() if first_seen_at else "",
+        dpv.matched_at.isoformat() if dpv.matched_at else "",
+    ]
+
+
+def _export_lines(filters: FindingFilters, now: datetime) -> Iterator[str]:
+    db = SessionLocal()
+    try:
+        cfg = get_section(db, VulnSettings)
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(CSV_COLUMNS)
+        rows = db.execute(
+            _apply_filters(_rows_base(), db, cfg, filters, now)
+            .order_by(Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), DevicePortVuln.id)
+        )
+        for dpv, port_row, device, vuln, network_name, first_seen_at in rows:
+            writer.writerow(_export_row(dpv, port_row, device, vuln, network_name, first_seen_at))
+            if buf.tell() > 64_000:
+                yield buf.getvalue()
+                buf.seek(0)
+                buf.truncate()
+        yield buf.getvalue()
+    finally:
+        db.close()
+
+
+@router.get("/export")
+def export_vulns(
+    severity: str | None = Query(None, pattern=SEVERITY_PATTERN),
+    kev: bool | None = None,
+    epss_min: float | None = Query(None, ge=0.0, le=1.0),
+    network_id: int | None = None,
+    service: str | None = Query(None, max_length=100),
+    port: int | None = Query(None, ge=1, le=65535),
+    os_name: str | None = Query(None, max_length=255),
+    device_type: str | None = Query(None, max_length=40),
+    state: str | None = Query(None, pattern=STATE_PATTERN),
+    cve_age: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
+    exposure_duration: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
+    user: User = Depends(current_user),
+):
+    """Same filters as GET /api/vulns, no pagination: every matching row, streamed as CSV."""
+    filters = FindingFilters(severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
+                             service=service, port=port, os_name=os_name, device_type=device_type,
+                             state=state, cve_age=cve_age, exposure_duration=exposure_duration)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    return StreamingResponse(
+        _export_lines(filters, utcnow()),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="portreveal-vulns-{stamp}.csv"'},
+    )
 
 
 @router.get("/{cve_id}")

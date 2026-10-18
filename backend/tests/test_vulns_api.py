@@ -168,3 +168,34 @@ def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
     first_seen_values = {dv["first_seen_at"] for dv in body["affected_devices"]}
     assert len(first_seen_values) == 2  # one from the original seed, one from the later sync
     assert body["first_seen_at"] == min(first_seen_values)
+
+
+# --- CSV export --------------------------------------------------------------------------------------
+def test_export_vulns_streams_header_and_rows(admin, db):
+    _seed_two_devices(db)
+    r = admin.get("/api/vulns/export")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers["content-disposition"]
+    lines = r.text.strip().splitlines()
+    header = lines[0].split(",")
+    assert header == ["cve_id", "device_ip", "device_hostname", "network", "port", "protocol", "service",
+                      "cvss_base", "severity", "kev", "epss", "state", "first_seen", "matched_at"]
+    assert len(lines) == 3  # header + 2 findings
+    body = "\n".join(lines)
+    assert "CVE-2024-CRIT" in body and "CVE-2024-MED" in body
+
+
+def test_export_vulns_respects_filters(admin, db):
+    _seed_two_devices(db)
+    r = admin.get("/api/vulns/export", params={"severity": "critical"})
+    lines = r.text.strip().splitlines()
+    assert len(lines) == 2  # header + 1 finding
+    assert "CVE-2024-CRIT" in lines[1] and "CVE-2024-MED" not in lines[1]
+
+
+def test_export_vulns_no_rows_still_returns_header_only(admin, db):
+    _seed_two_devices(db)
+    r = admin.get("/api/vulns/export", params={"network_id": 999999})
+    lines = r.text.strip().splitlines()
+    assert len(lines) == 1
