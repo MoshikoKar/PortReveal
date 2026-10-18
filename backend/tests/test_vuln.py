@@ -702,3 +702,42 @@ def test_sync_due_when_mirror_incomplete(db):
     db.commit()
     cfg = VulnSettings(enabled=True)
     assert sync.sync_due(db, cfg, now=T + timedelta(hours=1)) is True
+
+
+def test_parent_clears_summary_cache_when_sync_child_exits(db):
+    """Child-process refresh only clears the child's cache; the parent must invalidate on reap.
+
+    Repro shape: warm /api/vulns/summary, child sync updates VulnFeedState, status shows the new
+    last_synced_at, but summary kept the old oldest_synced_at until TTL. sync_running() reaping
+    the finished child (same path as the watcher after matching finishes) clears the parent cache.
+    """
+    from app.settings_store import put_section
+
+    put_section(db, VulnSettings(enabled=True, sources=["nvd", "kev", "epss"]))
+    old = T - timedelta(days=3)
+    new = T - timedelta(hours=1)
+    for source in ("nvd", "kev", "epss"):
+        db.add(VulnFeedState(source=source, last_synced_at=old, record_count=0, mirror_complete=True))
+    db.commit()
+    vuln_summary.invalidate_vuln_summary_cache()
+    warm = vuln_summary.get_vuln_summary(db, now=T)
+    assert warm["feed"]["oldest_synced_at"] == old
+
+    for source in ("nvd", "kev", "epss"):
+        db.get(VulnFeedState, source).last_synced_at = new
+    db.commit()
+    # Still cached in this (parent) process — the bug before parent-side reap.
+    assert vuln_summary.get_vuln_summary(db, now=T)["feed"]["oldest_synced_at"] == old
+
+    class _DeadChild:
+        def is_alive(self) -> bool:
+            return False
+
+        def join(self, timeout=None) -> None:
+            return None
+
+    sync._sync_process = _DeadChild()
+    assert sync.sync_running() is False
+    assert sync._sync_process is None
+    fresh = vuln_summary.get_vuln_summary(db, now=T)
+    assert fresh["feed"]["oldest_synced_at"] == new

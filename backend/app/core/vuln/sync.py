@@ -673,8 +673,46 @@ _sync_lock = threading.Lock()
 _sync_process: multiprocessing.Process | None = None
 
 
+def _invalidate_parent_summary_cache() -> None:
+    """Drop the API process's in-memory summary cache.
+
+    ``refresh_after_scan_or_sync`` runs inside the sync child and only clears that child's
+    process-local ``_cache``. Without this, GET /api/vulns/summary keeps serving the pre-sync
+    ``feed.oldest_synced_at`` (and post-match counts) until the 30s TTL expires, while
+    /api/settings/vuln/status already reads fresh rows from the DB.
+    """
+    from .summary import invalidate_vuln_summary_cache
+
+    invalidate_vuln_summary_cache()
+
+
+def _reap_sync_process() -> bool:
+    """If the sync child has exited, join it, clear the handle, invalidate the parent summary cache.
+
+    Returns True when a finished child was reaped (and the parent cache was cleared). Safe to call
+    from both the watcher thread and ``sync_running`` polls; only the first caller invalidates.
+    """
+    global _sync_process
+    with _sync_lock:
+        proc = _sync_process
+        if proc is None or proc.is_alive():
+            return False
+        proc.join(timeout=0)
+        _sync_process = None
+    _invalidate_parent_summary_cache()
+    log.info("vulnerability feed sync child exited; parent summary cache cleared")
+    return True
+
+
+def _watch_sync_process(proc: multiprocessing.Process) -> None:
+    """Join the child so the parent cache clears as soon as sync+match finish, not on the next poll."""
+    proc.join()
+    _reap_sync_process()
+
+
 def sync_running() -> bool:
     """True while the dedicated sync child process is alive (mutual exclusion for a new sync)."""
+    _reap_sync_process()
     return _sync_process is not None and _sync_process.is_alive()
 
 
@@ -729,10 +767,15 @@ def trigger_background_sync(cfg: VulnSettings | None = None) -> bool:
     A thread shares uvicorn's GIL: ORM ingest of yearly NVD feeds freezes the API. A child process
     keeps the UI responsive; SQLite WAL + short commit batches let status polls continue.
     Progress is checkpointed per year (``mirror_next_year``); the scheduler resumes after restarts.
+    When the child exits (after feed sync and local matching/scoring), a watcher clears this
+    process's summary cache so /api/vulns/summary does not wait for the TTL.
     """
     global _sync_process
+    # Reap a finished child (and clear the parent summary cache) before deciding we are busy.
+    if sync_running():
+        return False
     with _sync_lock:
-        if sync_running():
+        if _sync_process is not None and _sync_process.is_alive():
             return False
         cfg_data = cfg.model_dump() if cfg is not None else None
         ctx = multiprocessing.get_context("spawn")
@@ -743,5 +786,11 @@ def trigger_background_sync(cfg: VulnSettings | None = None) -> bool:
             daemon=True,
         )
         _sync_process.start()
+        threading.Thread(
+            target=_watch_sync_process,
+            args=(_sync_process,),
+            name="vuln-sync-watch",
+            daemon=True,
+        ).start()
         log.info("vulnerability feed sync started in process pid=%s", _sync_process.pid)
         return True
