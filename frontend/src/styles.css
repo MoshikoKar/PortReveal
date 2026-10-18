@@ -347,7 +347,9 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .bars { display: flex; flex-direction: column; gap: 8px; }
 .bar-row { display: grid; grid-template-columns: 130px 1fr 40px; gap: 10px; align-items: center; font-size: 12.5px; }
 .bar-track { height: 8px; border-radius: var(--radius-pill); background: var(--panel-3); overflow: hidden; }
-.bar-fill { height: 100%; border-radius: var(--radius-pill); background: var(--bar-color, var(--accent)); }
+/* display:block is required: .bar-fill is a <span>, and inline boxes ignore percentage width
+   (VulnFacets hit this — every track looked empty while Dashboard/Reports set display:block inline). */
+.bar-fill { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--bar-color, var(--accent)); }
 
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }
 table.skeleton tbody tr:hover { background: none; }

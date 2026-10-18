@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { barWidthPct, cellIntensity, linePath, maxOf, trendHasData, xScale, yScale } from './vulnChartMath';
+import {
+  barFillStyle, barWidthPct, cellIntensity, linePath, maxOf, trendHasData, xScale, yScale,
+} from './vulnChartMath';
 
 describe('maxOf', () => {
   it('is at least 1 to avoid division by zero', () => {
@@ -26,6 +28,17 @@ describe('barWidthPct', () => {
   it('clamps to [0, 100]', () => {
     expect(barWidthPct(-1, 10)).toBe(0);
     expect(barWidthPct(20, 10)).toBe(100);
+  });
+});
+
+describe('barFillStyle', () => {
+  it('sets fill width proportional to count / max in the card (0 → empty)', () => {
+    // Mirrors the vuln dashboard bug report: unknown 463 vs nas 109, and <30d 572 vs 30-90d 0.
+    const max = maxOf([463, 109]);
+    expect(barFillStyle(463, max)).toEqual({ width: '100%' });
+    expect(barFillStyle(109, max).width).toBe(`${(109 / 463) * 100}%`);
+    expect(barFillStyle(0, max)).toEqual({ width: '0%' });
+    expect(barFillStyle(572, 572)).toEqual({ width: '100%' });
   });
 });
 

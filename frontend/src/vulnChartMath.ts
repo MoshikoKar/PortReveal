@@ -13,6 +13,13 @@ export function barWidthPct(count: number, max: number): number {
   return Math.min(100, Math.max(0, (count / max) * 100));
 }
 
+/** Inline style for a facet `.bar-fill`: width is count/max of that card (0 → empty).
+ * Fill color comes from CSS (`--bar-color` or `--accent`); callers may set `--bar-color`
+ * for severity-tinted bars. */
+export function barFillStyle(count: number, max: number): { width: string } {
+  return { width: `${barWidthPct(count, max)}%` };
+}
+
 /** Evenly spaced X position for point `index` of `count` across [left, width - right]. */
 export function xScale(index: number, count: number, left: number, right: number, width: number): number {
   if (count <= 1) return left;
