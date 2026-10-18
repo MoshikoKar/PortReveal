@@ -139,6 +139,43 @@ def test_device_vulns_list_dismiss_and_undismiss(admin, db):
     assert admin.post(f"/api/devices/{uuid}/vulns/CVE-NOPE/dismiss", headers=csrf(admin)).status_code == 404
 
 
+def test_device_vulns_min_cvss_uses_default_for_missing_and_never_hides_kev(admin, db):
+    """min_cvss_display must match scoring (None CVSS → DEFAULT_CVSS) and must never hide KEV."""
+    from app.core.vuln.score import DEFAULT_CVSS
+    from app.db import utcnow
+    from app.models import DevicePortVuln, VULN_SOURCE_CACHE
+
+    uuid = _uuid(admin, "10.0.0.1")
+    d = device_by_ip(db, "10.0.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    # Floor above DEFAULT_CVSS so a missing-CVSS non-KEV row would be hidden if treated as 0,
+    # and also hidden if correctly using DEFAULT_CVSS when floor > DEFAULT_CVSS.
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=DEFAULT_CVSS + 0.1))
+    low = Vulnerability(cve_id="CVE-2024-LOW", cvss_base=1.0)
+    missing = Vulnerability(cve_id="CVE-2024-MISS", cvss_base=None, kev=False)
+    kev_missing = Vulnerability(cve_id="CVE-2024-KEV", cvss_base=None, kev=True)
+    high = Vulnerability(cve_id="CVE-2024-HIGH", cvss_base=9.0)
+    db.add_all([low, missing, kev_missing, high])
+    db.flush()
+    for cve in ("CVE-2024-LOW", "CVE-2024-MISS", "CVE-2024-KEV", "CVE-2024-HIGH"):
+        db.add(DevicePortVuln(device_port_id=p.id, cve_id=cve, state=VULN_STATE_CONFIRMED,
+                              source=VULN_SOURCE_CACHE, matched_at=utcnow()))
+    db.commit()
+
+    items = admin.get(f"/api/devices/{uuid}/vulns").json()["items"]
+    ids = {it["cve_id"] for it in items}
+    assert "CVE-2024-HIGH" in ids
+    assert "CVE-2024-LOW" not in ids
+    assert "CVE-2024-MISS" not in ids  # None CVSS ≡ DEFAULT_CVSS < floor
+    assert "CVE-2024-KEV" in ids  # KEV never hidden despite missing CVSS
+
+    # When floor is at DEFAULT_CVSS, missing-CVSS non-KEV is visible (consistent with scoring).
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=DEFAULT_CVSS))
+    db.commit()
+    ids2 = {it["cve_id"] for it in admin.get(f"/api/devices/{uuid}/vulns").json()["items"]}
+    assert "CVE-2024-MISS" in ids2
+
+
 def test_vulnerabilities_report(admin, db):
     uuid = _uuid(admin, "10.0.0.1")
     d = device_by_ip(db, "10.0.0.1")

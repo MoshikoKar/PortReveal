@@ -236,6 +236,7 @@ def test_collect_local_names_empty_ips_is_a_noop(monkeypatch):
 def test_collect_local_names_caps_netbios_batch_size(monkeypatch):
     import app.core.discovery as discovery_mod
 
+    discovery_mod.reset_netbios_cursor()
     seen = []
     monkeypatch.setattr(discovery_mod, "collect_ssdp_names", lambda timeout: {})
     monkeypatch.setattr(discovery_mod, "collect_mdns_names", lambda timeout: {})
@@ -244,6 +245,30 @@ def test_collect_local_names_caps_netbios_batch_size(monkeypatch):
     many_ips = [f"10.0.{i // 256}.{i % 256}" for i in range(discovery_mod.MAX_NETBIOS_QUERIES_PER_PASS + 20)]
     collect_local_names(many_ips)
     assert len(seen) == discovery_mod.MAX_NETBIOS_QUERIES_PER_PASS
+
+
+def test_netbios_batch_rotates_fairly_across_passes(monkeypatch):
+    import app.core.discovery as discovery_mod
+
+    discovery_mod.reset_netbios_cursor()
+    batches = []
+    monkeypatch.setattr(discovery_mod, "collect_ssdp_names", lambda timeout: {})
+    monkeypatch.setattr(discovery_mod, "collect_mdns_names", lambda timeout: {})
+    monkeypatch.setattr(discovery_mod, "query_netbios_names",
+                        lambda ips, timeout: batches.append(list(ips)) or {})
+
+    # 150 IPs, cap 100: two passes must cover disjoint prefixes of the sorted list (round-robin).
+    many_ips = [f"10.0.0.{i}" for i in range(1, 151)]
+    collect_local_names(many_ips, mdns=False, ssdp=False, netbios=True)
+    collect_local_names(many_ips, mdns=False, ssdp=False, netbios=True)
+    assert len(batches) == 2
+    assert len(batches[0]) == discovery_mod.MAX_NETBIOS_QUERIES_PER_PASS
+    assert len(batches[1]) == discovery_mod.MAX_NETBIOS_QUERIES_PER_PASS
+    assert batches[0] != batches[1]
+    # Union of two passes should include hosts beyond the first-100 prefix of the old bug.
+    covered = set(batches[0]) | set(batches[1])
+    assert "10.0.0.150" in covered
+    assert len(covered) >= discovery_mod.MAX_NETBIOS_QUERIES_PER_PASS + 20
 
 
 # --- settings API ------------------------------------------------------------------------------------
@@ -264,18 +289,19 @@ def admin(client):
     return client
 
 
-def test_discovery_settings_default_on_and_roundtrip(admin):
+def test_discovery_settings_default_passive_only_and_roundtrip(admin):
+    """Spec 9.2: default on only for cheap passive listening; active probes are opt-in."""
     r = admin.get("/api/settings/discovery")
     assert r.status_code == 200
     body = r.json()
-    assert body == {"enabled": True, "mdns": True, "ssdp": True, "netbios": True, "timeout_seconds": 2.0}
+    assert body == {"enabled": True, "mdns": True, "ssdp": False, "netbios": False, "timeout_seconds": 2.0}
 
     r = admin.put("/api/settings/discovery", json={
         "enabled": True, "mdns": False, "ssdp": True, "netbios": True, "timeout_seconds": 5.0,
     }, headers=csrf(admin))
     assert r.status_code == 200
-    assert r.json()["mdns"] is False and r.json()["timeout_seconds"] == 5.0
-    assert admin.get("/api/settings/discovery").json()["mdns"] is False
+    assert r.json()["mdns"] is False and r.json()["ssdp"] is True and r.json()["timeout_seconds"] == 5.0
+    assert admin.get("/api/settings/discovery").json()["netbios"] is True
 
 
 def test_discovery_settings_rejects_unknown_fields(admin):

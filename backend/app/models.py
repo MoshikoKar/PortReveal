@@ -305,6 +305,9 @@ class Device(Base):
     # type-classification signal, and a fallback display name when no DNS/nmap hostname is known.
     discovery_name: Mapped[str | None] = mapped_column(String(255))
     discovery_source: Mapped[str | None] = mapped_column(String(10))  # mdns | ssdp | netbios
+    # Last time a local discovery pass heard this name; used to age out quietly instead of wiping
+    # per pass when mDNS/SSDP windows or the NetBIOS query budget miss a host.
+    discovery_name_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Latency / uptime (spec 6)
     last_rtt_ms: Mapped[float | None] = mapped_column(Float)
     # Since when the device has been continuously seen (reset on a not_detected -> seen transition).
@@ -516,6 +519,10 @@ class VulnFeedState(Base):
     last_modified_cursor: Mapped[str | None] = mapped_column(String(40))
     record_count: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
+    # NVD yearly JSON mirror progress (nvd source only). Incomplete mirrors must resume remaining
+    # years; do not treat a partial cache as "bootstrap done".
+    mirror_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    mirror_next_year: Mapped[int | None] = mapped_column(Integer)
 
 
 class VulnJob(Base):

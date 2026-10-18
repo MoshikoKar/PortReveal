@@ -10,9 +10,9 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ...config import get_settings
 from ...db import session_scope, utcnow
@@ -273,6 +273,7 @@ def run_vuln_job(job_id: int, ctx: ScanContext) -> str:
         stats = {"scripts_run": 0, "cves_found": 0}
 
         with session_scope() as db:
+            cfg = get_section(db, VulnSettings)
             stale_error = db.scalar(
                 select(VulnFeedState.last_error).where(VulnFeedState.last_error.isnot(None)).limit(1)
             )
@@ -281,6 +282,15 @@ def run_vuln_job(job_id: int, ctx: ScanContext) -> str:
             else:
                 if stale_error:
                     partial_reason = "Vulnerability cache sync reported an error; matching against a possibly stale cache."
+                else:
+                    last_sync = db.scalar(select(func.max(VulnFeedState.last_synced_at)))
+                    stale_after = timedelta(hours=cfg.sync_interval_hours * 2)
+                    if last_sync is not None and (now - last_sync) > stale_after:
+                        hours = int(cfg.sync_interval_hours * 2)
+                        partial_reason = (
+                            f"Vulnerability cache is older than {hours} hours "
+                            f"(2× sync interval); matching against a stale cache."
+                        )
                 _update(job_id, stage="match", progress=0.2)
                 stats.update(match_devices(db, device_ids, now=now))
 

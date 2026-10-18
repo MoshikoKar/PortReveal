@@ -102,10 +102,22 @@ def _enrich_open_services(db: Session, device_ids: list[int], *, scan_id: int | 
             log.debug("scan %s: local discovery (mDNS/SSDP/NetBIOS) failed", scan_id, exc_info=True)
 
 
+# How long a previously heard local discovery name is kept when later passes miss the host
+# (short mDNS/SSDP windows or NetBIOS budget). Past this, the name ages out.
+DISCOVERY_NAME_TTL_DAYS = 14
+
+
 def _enrich_local_names(db: Session, devices: dict[int, Device]) -> None:
     """Local-only mDNS/SSDP/NetBIOS device names (spec 9.2): a weighted type-classification signal,
     and a fallback display name. Never touches nmap; skipped entirely when disabled or in mock mode
-    (the caller already checks `live`, i.e. a real scanner is configured)."""
+    (the caller already checks `live`, i.e. a real scanner is configured).
+
+    Names persist across passes and age out after ``DISCOVERY_NAME_TTL_DAYS`` without a hear —
+    they are not wiped when a single pass misses the host (NetBIOS cap / quiet mDNS window).
+    """
+    from datetime import timedelta
+
+    from ..db import utcnow
     from ..settings_store import DiscoverySettings
     from .discovery import collect_local_names
 
@@ -113,16 +125,28 @@ def _enrich_local_names(db: Session, devices: dict[int, Device]) -> None:
     if not cfg.enabled or not devices:
         return
     found = collect_local_names(
-        [d.current_ip for d in devices.values()], mdns=cfg.mdns, ssdp=cfg.ssdp, netbios=cfg.netbios,
+        [d.current_ip for d in devices.values() if d.current_ip],
+        mdns=cfg.mdns, ssdp=cfg.ssdp, netbios=cfg.netbios,
         timeout=cfg.timeout_seconds,
     )
+    now = utcnow()
+    ttl = timedelta(days=DISCOVERY_NAME_TTL_DAYS)
     for dev in devices.values():
-        hit = found.get(dev.current_ip)
+        hit = found.get(dev.current_ip) if dev.current_ip else None
         if hit:
             dev.discovery_name, dev.discovery_source = hit
-        else:
-            # Clear stale names when this pass heard nothing for the current IP (spec 9.2).
-            dev.discovery_name, dev.discovery_source = None, None
+            dev.discovery_name_seen_at = now
+            continue
+        if not dev.discovery_name:
+            continue
+        # Pre-TTL rows (no seen_at): start the clock now so a single quiet pass does not wipe them.
+        if dev.discovery_name_seen_at is None:
+            dev.discovery_name_seen_at = now
+            continue
+        if now - dev.discovery_name_seen_at > ttl:
+            dev.discovery_name = None
+            dev.discovery_source = None
+            dev.discovery_name_seen_at = None
 
 
 def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:

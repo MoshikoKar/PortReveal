@@ -274,16 +274,19 @@ class VulnSettings(BaseModel):
 
 
 class DiscoverySettings(BaseModel):
-    """Local-only mDNS/SSDP/NetBIOS device-naming channel (spec section 9.2). On by default: it is
-    cheap (one shared multicast listen/search per scan, plus one short unicast query per device),
-    stays entirely on the LAN, and never runs an nmap UDP scan (-sU stays banned everywhere else)."""
+    """Local-only mDNS/SSDP/NetBIOS device-naming channel (spec section 9.2).
+
+    Spec: default on only when cheap — passive listening without an active network probe.
+    mDNS (passive multicast listen) is on by default; SSDP M-SEARCH and NetBIOS unicast queries
+    are opt-in. Never runs an nmap UDP scan (-sU stays banned everywhere else).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
     mdns: bool = True
-    ssdp: bool = True
-    netbios: bool = True
+    ssdp: bool = False
+    netbios: bool = False
     timeout_seconds: float = Field(2.0, ge=0.5, le=15.0)
 
 

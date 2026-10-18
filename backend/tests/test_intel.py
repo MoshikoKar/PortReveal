@@ -252,6 +252,46 @@ def test_enrich_local_names_skipped_when_discovery_disabled(db, monkeypatch):
     assert device_by_ip(db, "10.0.0.21").discovery_name is None
 
 
+def test_enrich_local_names_persists_across_quiet_pass_and_ages_out(db, monkeypatch):
+    from datetime import timedelta
+
+    from app.core import intel as intel_mod
+    from app.db import utcnow
+
+    net = make_network(db)
+    scan(ScriptedScanner([host("10.0.0.22", [port(445, "microsoft-ds")], mac="02:00:00:00:00:22")]),
+         network_id=net.id)
+    d = device_by_ip(db, "10.0.0.22")
+
+    monkeypatch.setattr("app.core.discovery.collect_local_names",
+                        lambda ips, **kw: {"10.0.0.22": ("NAS-BOX", "mdns")})
+    intel_mod._enrich_local_names(db, {d.id: d})
+    db.commit()
+    db.expire_all()
+    d = device_by_ip(db, "10.0.0.22")
+    assert (d.discovery_name, d.discovery_source) == ("NAS-BOX", "mdns")
+    assert d.discovery_name_seen_at is not None
+    heard_at = d.discovery_name_seen_at
+
+    # Quiet pass: must keep the name (not wipe), and must not refresh seen_at.
+    monkeypatch.setattr("app.core.discovery.collect_local_names", lambda ips, **kw: {})
+    intel_mod._enrich_local_names(db, {d.id: d})
+    db.commit()
+    db.expire_all()
+    d = device_by_ip(db, "10.0.0.22")
+    assert (d.discovery_name, d.discovery_source) == ("NAS-BOX", "mdns")
+    assert d.discovery_name_seen_at == heard_at
+
+    # Past TTL: age out.
+    d.discovery_name_seen_at = utcnow() - timedelta(days=intel_mod.DISCOVERY_NAME_TTL_DAYS + 1)
+    db.commit()
+    intel_mod._enrich_local_names(db, {d.id: d})
+    db.commit()
+    db.expire_all()
+    d = device_by_ip(db, "10.0.0.22")
+    assert d.discovery_name is None and d.discovery_source is None and d.discovery_name_seen_at is None
+
+
 # --- scan pipeline ----------------------------------------------------------------------------------------
 def test_scan_tags_and_scores_silently_then_reports_changes(db):
     net = make_network(db)

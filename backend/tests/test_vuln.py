@@ -298,7 +298,8 @@ def test_sync_nvd_paginates_and_advances_cursor(db):
 
     # A recent cursor keeps this to one 120-day window (a fresh/empty cache instead looks back
     # FULL_SYNC_LOOKBACK_DAYS, which would call this single-window fake fetch many times over).
-    db.add(VulnFeedState(source="nvd", last_modified_cursor=(T - timedelta(days=10)).isoformat(), record_count=0))
+    db.add(VulnFeedState(source="nvd", last_modified_cursor=(T - timedelta(days=10)).isoformat(),
+                         record_count=0, mirror_complete=True))
     db.commit()
     cfg = VulnSettings(enabled=True)
     result = sync.sync_nvd(db, cfg, fetch=fetch, now=T, sleep=lambda _s: None)
@@ -391,7 +392,7 @@ def test_sync_due_disabled_offline_empty_and_interval(db):
     assert sync.sync_due(db, cfg, now=T) is True  # empty cache: sync immediately
 
     db.add(Vulnerability(cve_id="CVE-2024-0001"))
-    db.add(VulnFeedState(source="nvd", last_synced_at=T, record_count=1))
+    db.add(VulnFeedState(source="nvd", last_synced_at=T, record_count=1, mirror_complete=True))
     db.commit()
     assert sync.sync_due(db, cfg, now=T + timedelta(hours=1)) is False
     assert sync.sync_due(db, cfg, now=T + timedelta(hours=200)) is True  # past the 168h default
@@ -409,7 +410,8 @@ def test_sync_all_only_runs_configured_sources(db):
         return gzip.compress(b"cve,epss,percentile\n")
 
     # Recent cursor: one 120-day window instead of a ~10-year first-sync crawl.
-    db.add(VulnFeedState(source="nvd", last_modified_cursor=(T - timedelta(days=1)).isoformat(), record_count=0))
+    db.add(VulnFeedState(source="nvd", last_modified_cursor=(T - timedelta(days=1)).isoformat(),
+                         record_count=0, mirror_complete=True))
     db.commit()
     cfg = VulnSettings(enabled=True, sources=["nvd"])
     sync.sync_all(db, cfg, fetch=fetch, now=T)
@@ -435,7 +437,8 @@ def test_sync_and_rescore_matches_and_scores_after_sync(db):
         return gzip.compress(b"cve,epss,percentile\n")
 
     # Recent cursor: one 120-day window instead of a ~10-year first-sync crawl.
-    db.add(VulnFeedState(source="nvd", last_modified_cursor=(T - timedelta(days=1)).isoformat(), record_count=0))
+    db.add(VulnFeedState(source="nvd", last_modified_cursor=(T - timedelta(days=1)).isoformat(),
+                         record_count=0, mirror_complete=True))
     db.commit()
     cfg = VulnSettings(enabled=True)
     sync.sync_and_rescore(db, cfg, fetch=fetch, now=T)
@@ -445,3 +448,83 @@ def test_sync_and_rescore_matches_and_scores_after_sync(db):
     assert db.query(DevicePortVuln).filter_by(device_port_id=p.id, cve_id="CVE-2024-1111").one().state == \
         VULN_STATE_CONFIRMED
     assert d.risk_score > 0 and d.risk_scored_at is not None
+
+
+def _mirror_year_payload(year: int, cve_id: str) -> bytes:
+    item = {
+        "cve": {
+            "id": cve_id,
+            "published": f"{year}-01-01T00:00:00.000",
+            "lastModified": f"{year}-06-01T00:00:00.000",
+            "descriptions": [{"lang": "en", "value": f"test {cve_id}"}],
+            "metrics": {"cvssMetricV31": [{"cvssData": {
+                "baseScore": 5.0, "baseSeverity": "MEDIUM", "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N",
+            }}]},
+            "configurations": [],
+        }
+    }
+    return gzip.compress(json.dumps({"vulnerabilities": [item]}).encode())
+
+
+def test_sync_nvd_mirror_resumes_remaining_years_after_partial_failure(db, monkeypatch):
+    """A mid-mirror failure must leave resume state so the next sync continues, not skip to API-only."""
+    monkeypatch.setattr(sync, "NVD_MIRROR_START_YEAR", 2024)
+    now = datetime(2025, 6, 15, tzinfo=timezone.utc)
+    calls: list[str] = []
+
+    def fetch_fail_second(url, params, headers):
+        calls.append(url)
+        if sync.NVD_API_URL in url:
+            return json.dumps({"totalResults": 0, "vulnerabilities": []}).encode()
+        if "nvdcve-2.0-2024" in url:
+            return _mirror_year_payload(2024, "CVE-2024-MIRROR")
+        if "nvdcve-2.0-2025" in url:
+            raise RuntimeError("mirror year 2025 failed")
+        if "modified" in url:
+            return gzip.compress(json.dumps({"vulnerabilities": []}).encode())
+        raise AssertionError(f"unexpected url {url}")
+
+    cfg = VulnSettings(enabled=True, sources=["nvd"])
+    result = sync.sync_nvd(db, cfg, fetch=fetch_fail_second, now=now, sleep=lambda _s: None)
+    db.commit()
+    assert result["error"]
+    state = db.get(VulnFeedState, "nvd")
+    assert state.mirror_complete is False
+    assert state.mirror_next_year == 2025
+    assert db.get(Vulnerability, "CVE-2024-MIRROR") is not None
+    assert db.get(Vulnerability, "CVE-2025-MIRROR") is None
+    # Cache is non-empty and a cursor may exist — the old bug skipped the mirror here.
+    assert not sync.is_cache_empty(db)
+
+    calls.clear()
+
+    def fetch_resume(url, params, headers):
+        calls.append(url)
+        if sync.NVD_API_URL in url:
+            return json.dumps({"totalResults": 0, "vulnerabilities": []}).encode()
+        if "nvdcve-2.0-2024" in url:
+            raise AssertionError("2024 already mirrored; must not re-fetch")
+        if "nvdcve-2.0-2025" in url:
+            return _mirror_year_payload(2025, "CVE-2025-MIRROR")
+        if "modified" in url:
+            return gzip.compress(json.dumps({"vulnerabilities": []}).encode())
+        raise AssertionError(f"unexpected url {url}")
+
+    result2 = sync.sync_nvd(db, cfg, fetch=fetch_resume, now=now, sleep=lambda _s: None)
+    db.commit()
+    assert result2["error"] is None
+    state = db.get(VulnFeedState, "nvd")
+    assert state.mirror_complete is True
+    assert state.mirror_next_year is None
+    assert db.get(Vulnerability, "CVE-2025-MIRROR") is not None
+    assert any("nvdcve-2.0-2025" in u for u in calls)
+    assert not any("nvdcve-2.0-2024" in u for u in calls)
+
+
+def test_sync_due_when_mirror_incomplete(db):
+    db.add(Vulnerability(cve_id="CVE-2024-PARTIAL"))
+    db.add(VulnFeedState(source="nvd", last_synced_at=T, record_count=1, mirror_complete=False,
+                         mirror_next_year=2022))
+    db.commit()
+    cfg = VulnSettings(enabled=True)
+    assert sync.sync_due(db, cfg, now=T + timedelta(hours=1)) is True

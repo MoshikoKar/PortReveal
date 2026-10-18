@@ -107,6 +107,28 @@ def test_run_vuln_job_partial_when_cache_empty(db):
     assert "not synced" in (j.notes or j.error or "")
 
 
+def test_run_vuln_job_partial_when_cache_older_than_2x_interval(db):
+    from app.db import utcnow
+    from app.models import VulnFeedState
+
+    d = _device_with_matched_cve(db)
+    put_section(db, VulnSettings(enabled=True, sync_interval_hours=168))
+    # Successful sync, but older than 2×168h.
+    db.add(VulnFeedState(
+        source="nvd", last_synced_at=utcnow() - timedelta(hours=168 * 2 + 1),
+        record_count=1, mirror_complete=True,
+    ))
+    job = enqueue_vuln_job(db, trigger=VULN_JOB_TRIGGER_MANUAL, device_ids=[d.id])
+    db.commit()
+    status = run_vuln_job(job.id, ScanContext(job.id))
+    assert status == VULN_JOB_PARTIAL
+    db.expire_all()
+    j = db.get(VulnJob, job.id)
+    notes = j.notes or j.error or ""
+    assert "stale cache" in notes
+    assert "336" in notes  # 2×168h
+
+
 def test_run_vuln_job_matches_and_scores(db):
     d = _device_with_matched_cve(db)
     job = enqueue_vuln_job(db, trigger=VULN_JOB_TRIGGER_MANUAL, device_ids=[d.id])

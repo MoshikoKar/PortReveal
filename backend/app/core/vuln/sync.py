@@ -199,15 +199,38 @@ def _load_json_bytes(raw: bytes) -> dict:
     return json.loads(text)
 
 
+def _nvd_feed_state(db: Session) -> VulnFeedState:
+    row = db.get(VulnFeedState, "nvd")
+    if row is None:
+        row = VulnFeedState(source="nvd", record_count=0, mirror_complete=False)
+        db.add(row)
+        db.flush()
+    return row
+
+
+def mirror_incomplete(db: Session) -> bool:
+    """True when the yearly NVD JSON mirror has not finished (or has never been attempted)."""
+    state = db.get(VulnFeedState, "nvd")
+    return state is None or not state.mirror_complete
+
+
 def sync_nvd_mirror(db: Session, *, fetch: Fetcher | None = None,
                     now: datetime | None = None, sleep: Callable[[float], None] = time.sleep) -> dict:
-    """Empty-cache bootstrap: inbound download of public NVD JSON 2.0 yearly feeds (spec 5.3)."""
+    """Bootstrap / resume: inbound download of public NVD JSON 2.0 yearly feeds (spec 5.3).
+
+    Progress is persisted per year in ``VulnFeedState.mirror_next_year`` so a mid-mirror failure
+    resumes the remaining years on the next sync instead of skipping to the 120-day API window.
+    """
     fetch = fetch or _default_fetch
     now = now or datetime.now(timezone.utc)
+    state = _nvd_feed_state(db)
+    if state.mirror_complete:
+        return {"count": 0, "error": None, "latest": None, "complete": True}
     count = 0
     latest: datetime | None = None
     error: str | None = None
-    years = list(range(NVD_MIRROR_START_YEAR, now.year + 1))
+    start_year = state.mirror_next_year or NVD_MIRROR_START_YEAR
+    years = list(range(start_year, now.year + 1))
     try:
         for year in years:
             url = f"{NVD_JSON_FEED_BASE}/nvdcve-2.0-{year}.json.gz"
@@ -217,6 +240,10 @@ def sync_nvd_mirror(db: Session, *, fetch: Fetcher | None = None,
             count += n
             if lm and (latest is None or lm > latest):
                 latest = lm
+            # Persist resume cursor after each successful year before the next fetch can fail.
+            state.mirror_next_year = year + 1
+            state.mirror_complete = False
+            db.flush()
             sleep(0.2)
         # Also pull the "modified" feed so very recent edits are not missed.
         mod = fetch(f"{NVD_JSON_FEED_BASE}/nvdcve-2.0-modified.json.gz", None, None)
@@ -224,10 +251,15 @@ def sync_nvd_mirror(db: Session, *, fetch: Fetcher | None = None,
         count += n
         if lm and (latest is None or lm > latest):
             latest = lm
+        state.mirror_complete = True
+        state.mirror_next_year = None
+        db.flush()
     except Exception as exc:
         error = str(exc)
+        state.mirror_complete = False
+        db.flush()
         log.exception("NVD JSON mirror bootstrap failed")
-    return {"count": count, "error": error, "latest": latest}
+    return {"count": count, "error": error, "latest": latest, "complete": bool(state.mirror_complete)}
 
 
 def import_nvd_json(db: Session, path: str | Path) -> dict:
@@ -250,27 +282,31 @@ def import_nvd_json(db: Session, path: str | Path) -> dict:
         if lm and (latest is None or lm > latest):
             latest = lm
     now = datetime.now(timezone.utc)
+    state = _nvd_feed_state(db)
+    state.mirror_complete = True
+    state.mirror_next_year = None
     _update_feed_state(db, "nvd", now, latest or now, count, None)
     return {"count": count, "files": len(files)}
 
 
 def sync_nvd(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
             now: datetime | None = None, sleep: Callable[[float], None] = time.sleep) -> dict:
-    """Incremental NVD sync. Empty cache: public JSON mirror first, then a short API catch-up."""
+    """Incremental NVD sync. Incomplete/empty mirror first, then a short API catch-up."""
     fetch = fetch or _default_fetch
     now = now or datetime.now(timezone.utc)
-    state = db.get(VulnFeedState, "nvd")
-    cursor_start = _parse_dt(state.last_modified_cursor) if state and state.last_modified_cursor else None
+    state = _nvd_feed_state(db)
+    cursor_start = _parse_dt(state.last_modified_cursor) if state.last_modified_cursor else None
     mirror_count = 0
     mirror_error: str | None = None
-    if cursor_start is None and is_cache_empty(db):
+    if not state.mirror_complete:
         mirrored = sync_nvd_mirror(db, fetch=fetch, now=now, sleep=sleep)
         mirror_count = mirrored.get("count") or 0
         if mirrored.get("latest"):
             cursor_start = mirrored["latest"]
-        if mirrored.get("error") and not mirror_count:
+        if mirrored.get("error"):
             mirror_error = mirrored["error"]
-            # Fall through to API lookback so keyless installs still populate eventually.
+            # Fall through to API lookback so keyless installs still populate eventually, but keep
+            # mirror_complete=False so the next sync resumes remaining years.
     window_start = cursor_start or (now - timedelta(days=FULL_SYNC_LOOKBACK_DAYS))
     api_key = decrypt_secret(cfg.nvd_api_key_enc)
     delay = NVD_RATE_DELAY_WITH_KEY if api_key else NVD_RATE_DELAY_NO_KEY
@@ -308,7 +344,11 @@ def sync_nvd(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
         error = str(exc)
         log.exception("NVD vulnerability feed sync failed")
     # Prefer the API error when both failed; keep a single feed_state write (no double INSERT).
-    final_error = error or (mirror_error if not (count + mirror_count) else None)
+    # An incomplete mirror is always an error so sync_due retries promptly.
+    state = _nvd_feed_state(db)
+    if not state.mirror_complete and not mirror_error:
+        mirror_error = f"NVD yearly mirror incomplete; next year {state.mirror_next_year or NVD_MIRROR_START_YEAR}"
+    final_error = error or mirror_error
     _update_feed_state(db, "nvd", now, latest_modified, count + mirror_count, final_error)
     return {"count": count + mirror_count, "error": final_error}
 
@@ -392,10 +432,11 @@ def sync_due(db: Session, cfg: VulnSettings, *, now: datetime | None = None) -> 
 
     Honors ``sync_time`` as a best-effort local-time slot (like the daily digest). A prior
     ``last_error`` on any feed forces an immediate retry so a failed page is not postponed a week.
+    An incomplete NVD yearly mirror also retries immediately so remaining years are not deferred.
     """
     if not cfg.enabled or cfg.offline_mode:
         return False
-    if is_cache_empty(db):
+    if is_cache_empty(db) or mirror_incomplete(db):
         return True
     now = now or datetime.now(timezone.utc)
     if db.scalar(select(VulnFeedState.source).where(VulnFeedState.last_error.isnot(None)).limit(1)):

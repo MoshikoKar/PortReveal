@@ -24,6 +24,29 @@ _SOURCE_PRIORITY = {"ssdp": 0, "mdns": 1, "netbios": 2}
 # refresh pass can never stall on a very large device list (spec section 11: thousands of devices).
 MAX_NETBIOS_QUERIES_PER_PASS = 100
 
+# Round-robin cursor so the NetBIOS budget rotates across the inventory instead of always hitting
+# the first N IPs (large LANs would otherwise never query hosts past the cap).
+_netbios_cursor = 0
+
+
+def reset_netbios_cursor() -> None:
+    """Test helper: restart fair NetBIOS rotation from the beginning of the sorted IP list."""
+    global _netbios_cursor
+    _netbios_cursor = 0
+
+
+def select_netbios_batch(ips: list[str], *, limit: int = MAX_NETBIOS_QUERIES_PER_PASS) -> list[str]:
+    """Return up to ``limit`` IPs, advancing a process-wide round-robin cursor each call."""
+    global _netbios_cursor
+    ordered = sorted({ip for ip in ips if ip})
+    if not ordered:
+        return []
+    n = len(ordered)
+    start = _netbios_cursor % n
+    batch = [ordered[(start + i) % n] for i in range(min(limit, n))]
+    _netbios_cursor = (start + len(batch)) % n
+    return batch
+
 
 def collect_local_names(ips: list[str], *, mdns: bool = True, ssdp: bool = True, netbios: bool = True,
                         timeout: float = 2.0, netbios_timeout: float = 0.5) -> dict[str, tuple[str, str]]:
@@ -53,10 +76,10 @@ def collect_local_names(ips: list[str], *, mdns: bool = True, ssdp: bool = True,
         except Exception:
             log.debug("mDNS discovery failed", exc_info=True)
     if netbios:
-        batch = ips[:MAX_NETBIOS_QUERIES_PER_PASS]
+        batch = select_netbios_batch(ips)
         if len(ips) > MAX_NETBIOS_QUERIES_PER_PASS:
-            log.info("NetBIOS discovery: only querying the first %d of %d devices this pass",
-                     MAX_NETBIOS_QUERIES_PER_PASS, len(ips))
+            log.info("NetBIOS discovery: querying %d of %d devices this pass (round-robin)",
+                     len(batch), len(ips))
         try:
             _merge(query_netbios_names(batch, timeout=netbios_timeout), "netbios")
         except Exception:

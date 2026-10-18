@@ -521,17 +521,17 @@ export function DiscoveryForm({ onDirtyChange }: { onDirtyChange?: (dirty: boole
       <div className="stack">
         <div className="muted small">
           A local-only, LAN-bound channel that strengthens device-type classification with names
-          devices already announce: mDNS/Bonjour (passive listen), SSDP/UPnP (one multicast search),
-          and NetBIOS (one short query per already-known device). Nothing ever leaves the LAN, and
-          this never runs an nmap UDP scan (<code>-sU</code> stays banned everywhere else). On by
-          default because each source is capped to a short, shared time window regardless of how
-          many devices are being scanned.
+          devices already announce. Default on is only the cheap passive path: mDNS/Bonjour listen.
+          SSDP/UPnP (one multicast M-SEARCH) and NetBIOS (short unicast queries, rotated across
+          large inventories) are opt-in. Nothing ever leaves the LAN, and this never runs an nmap
+          UDP scan (<code>-sU</code> stays banned everywhere else). Heard names persist and age
+          out instead of being cleared when a single pass misses a host.
         </div>
         <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable local discovery</label>
         <div className="row wrap">
-          <label className="check small"><input type="checkbox" checked={s.mdns} disabled={!s.enabled} onChange={(e) => set({ mdns: e.target.checked })} />mDNS / Bonjour</label>
-          <label className="check small"><input type="checkbox" checked={s.ssdp} disabled={!s.enabled} onChange={(e) => set({ ssdp: e.target.checked })} />SSDP / UPnP</label>
-          <label className="check small"><input type="checkbox" checked={s.netbios} disabled={!s.enabled} onChange={(e) => set({ netbios: e.target.checked })} />NetBIOS</label>
+          <label className="check small"><input type="checkbox" checked={s.mdns} disabled={!s.enabled} onChange={(e) => set({ mdns: e.target.checked })} />mDNS / Bonjour (passive)</label>
+          <label className="check small"><input type="checkbox" checked={s.ssdp} disabled={!s.enabled} onChange={(e) => set({ ssdp: e.target.checked })} />SSDP / UPnP (active M-SEARCH)</label>
+          <label className="check small"><input type="checkbox" checked={s.netbios} disabled={!s.enabled} onChange={(e) => set({ netbios: e.target.checked })} />NetBIOS (active queries)</label>
         </div>
         <Num label="Timeout per source (seconds)" value={s.timeout_seconds} min={0.5} max={15}
           onChange={(v) => set({ timeout_seconds: v })} hint="mDNS/SSDP listen window; NetBIOS uses a shorter fixed window" />
