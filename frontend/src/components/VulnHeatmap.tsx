@@ -1,5 +1,5 @@
 import type { VulnSummary } from '../types';
-import { cellIntensity, maxOf } from '../vulnChartMath';
+import { cellFillStyle, maxOf } from '../vulnChartMath';
 import type { VulnFilters } from '../vulnFilters';
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
@@ -29,7 +29,9 @@ export function VulnHeatmap({ rows, filters, onCellClick }: {
               <td>{row.network}</td>
               {SEVERITIES.map((s) => {
                 const count = row[s];
-                const active = filters.network_id === String(row.network_id) && filters.severity === s;
+                const netKey = row.network_id != null ? String(row.network_id) : 'unassigned';
+                const active = filters.network_id === netKey && filters.severity === s;
+                const fill = cellFillStyle(s, count, max);
                 return (
                   <td key={s} style={{ padding: 2 }}>
                     <button
@@ -39,10 +41,8 @@ export function VulnHeatmap({ rows, filters, onCellClick }: {
                       onClick={() => onCellClick(row.network_id, s)}
                       style={{
                         width: '100%', height: 28, border: active ? '2px solid var(--accent)' : 0, borderRadius: 3,
-                        padding: 0, cursor: count ? 'pointer' : 'default', color: 'var(--text-1)', fontSize: 12,
-                        background: count
-                          ? `color-mix(in srgb, var(--high) ${Math.round(cellIntensity(count, max) * 100)}%, var(--panel-3))`
-                          : 'var(--panel-3)',
+                        padding: 0, cursor: count ? 'pointer' : 'default', fontSize: 12, fontWeight: 600,
+                        background: fill.background, color: fill.color,
                       }}
                     >
                       {count || ''}

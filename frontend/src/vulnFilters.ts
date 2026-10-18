@@ -6,6 +6,7 @@
 export const VULN_FILTER_KEYS = [
   'severity', 'kev', 'epss_min', 'network_id', 'service', 'port', 'os_name', 'device_type',
   'state', 'cve_age', 'exposure_duration', 'risk_band', 'vendor', 'product',
+  'cve_id', 'device_uuid', 'new_since',
 ] as const;
 
 export type VulnFilterKey = typeof VULN_FILTER_KEYS[number];
@@ -93,4 +94,31 @@ export function toggleVendorProductFilter(sp: URLSearchParams, key: string): URL
   }
   next.delete('page');
   return next;
+}
+
+/** Severity-by-network cell: toggle the (network_id, severity) pair together. */
+export function toggleHeatmapCell(
+  sp: URLSearchParams,
+  networkId: number | null,
+  severity: string,
+): URLSearchParams {
+  const netKey = networkId != null ? String(networkId) : 'unassigned';
+  const next = new URLSearchParams(sp);
+  const active = next.get('network_id') === netKey && next.get('severity') === severity;
+  if (active) {
+    next.delete('network_id');
+    next.delete('severity');
+  } else {
+    next.set('network_id', netKey);
+    next.set('severity', severity);
+  }
+  next.delete('page');
+  return next;
+}
+
+/** Scroll the findings table into view after a dashboard filter click. */
+export function scrollToVulnFindings(): void {
+  requestAnimationFrame(() => {
+    document.getElementById('vuln-findings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }

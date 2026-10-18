@@ -65,3 +65,36 @@ export function cellIntensity(count: number, max: number): number {
   if (max <= 0 || count <= 0) return 0;
   return Math.min(1, count / max);
 }
+
+/** CSS color variables aligned with the rest of the app (KPI / badge severity tones). */
+export const SEVERITY_COLOR_VAR: Record<'critical' | 'high' | 'medium' | 'low', string> = {
+  critical: 'var(--high)',
+  high: 'var(--high)',
+  medium: 'var(--medium)',
+  low: 'var(--ok)',
+};
+
+/** Per-severity mix floors/spans so Low < Medium < High < Critical stays obvious even when a
+ * Low cell has a higher count than a High cell (count only modulates within the severity band). */
+const SEVERITY_MIX: Record<'critical' | 'high' | 'medium' | 'low', { floor: number; span: number }> = {
+  low: { floor: 28, span: 18 },
+  medium: { floor: 48, span: 18 },
+  high: { floor: 68, span: 16 },
+  critical: { floor: 86, span: 14 },
+};
+
+/** Background + readable text for a severity-by-network heatmap cell. */
+export function cellFillStyle(
+  severity: 'critical' | 'high' | 'medium' | 'low',
+  count: number,
+  max: number,
+): { background: string; color: string } {
+  if (count <= 0) return { background: 'var(--panel-3)', color: 'var(--muted)' };
+  const intensity = cellIntensity(count, max);
+  const { floor, span } = SEVERITY_MIX[severity];
+  const pct = floor + Math.round(intensity * span);
+  return {
+    background: `color-mix(in srgb, ${SEVERITY_COLOR_VAR[severity]} ${pct}%, var(--panel-3))`,
+    color: 'var(--text)',
+  };
+}

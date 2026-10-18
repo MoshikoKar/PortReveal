@@ -23,6 +23,8 @@ from ..core.vuln.score import DEFAULT_CVSS, RISK_BANDS, RISK_HIGH_THRESHOLD, RIS
 from ..core.vuln.summary import get_vuln_summary
 from ..db import SessionLocal, get_db, utcnow
 from ..models import (
+    SCAN_COMPLETED,
+    SCAN_PARTIAL,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
     VULN_STATES,
@@ -30,9 +32,11 @@ from ..models import (
     DevicePort,
     DevicePortVuln,
     Network,
+    Scan,
     User,
     VulnCpeMatch,
     Vulnerability,
+    VulnFeedState,
     VulnFindingLifecycle,
 )
 from ..settings_store import VulnSettings, get_section
@@ -45,6 +49,9 @@ AGE_BUCKET_PATTERN = "^(" + "|".join(AGE_BUCKETS) + ")$"
 SEVERITY_PATTERN = "^(critical|high|medium|low|unknown)$"
 RISK_BAND_PATTERN = "^(" + "|".join(RISK_BANDS) + ")$"
 STATE_PATTERN = "^(" + "|".join(VULN_STATES) + ")$"
+NEW_SINCE_PATTERN = "^(scan|db)$"
+# Facet key for devices with no network; round-trips via ?network_id=unassigned.
+NETWORK_UNASSIGNED = "unassigned"
 
 
 @router.get("/summary")
@@ -61,7 +68,8 @@ class FindingFilters:
     severity: str | None = None
     kev: bool | None = None
     epss_min: float | None = None
-    network_id: int | None = None
+    # Integer id as a string, or NETWORK_UNASSIGNED for devices with no network.
+    network_id: str | None = None
     service: str | None = None
     port: int | None = None
     os_name: str | None = None
@@ -72,6 +80,40 @@ class FindingFilters:
     risk_band: str | None = None
     vendor: str | None = None
     product: str | None = None
+    cve_id: str | None = None
+    device_uuid: str | None = None
+    # first_seen/matched_at >= last completed scan ("scan") or newest enabled feed sync ("db").
+    new_since: str | None = None
+
+
+def _parse_network_id_param(raw: str | None) -> str | None:
+    """Accept a numeric network id or the facet sentinel ``unassigned``; reject other strings."""
+    if raw is None or raw == "":
+        return None
+    if raw == NETWORK_UNASSIGNED:
+        return NETWORK_UNASSIGNED
+    try:
+        return str(int(raw))
+    except ValueError as exc:
+        raise HTTPException(422, "network_id must be an integer or 'unassigned'") from exc
+
+
+def _new_since_cutoff(db: Session, kind: str) -> datetime | None:
+    if kind == "scan":
+        return db.scalar(
+            select(Scan.finished_at)
+            .where(Scan.status.in_((SCAN_COMPLETED, SCAN_PARTIAL)), Scan.finished_at.isnot(None))
+            .order_by(Scan.finished_at.desc()).limit(1)
+        )
+    # "db": newest last_synced_at among the sources enabled in settings (same as summary feed).
+    cfg = get_section(db, VulnSettings)
+    timestamps = list(db.scalars(
+        select(VulnFeedState.last_synced_at).where(
+            VulnFeedState.source.in_(cfg.sources),
+            VulnFeedState.last_synced_at.isnot(None),
+        )
+    ))
+    return max(timestamps) if timestamps else None
 
 
 def _lifecycle_join_cond():
@@ -135,7 +177,10 @@ def _apply_filters(q, db: Session, cfg: VulnSettings, f: FindingFilters, now: da
     if f.epss_min is not None:
         q = q.where(Vulnerability.epss.isnot(None), Vulnerability.epss >= f.epss_min)
     if f.network_id is not None:
-        q = q.where(Device.network_id == f.network_id)
+        if f.network_id == NETWORK_UNASSIGNED:
+            q = q.where(Device.network_id.is_(None))
+        else:
+            q = q.where(Device.network_id == int(f.network_id))
     if f.service is not None:
         q = q.where(DevicePort.service == f.service)
     if f.port is not None:
@@ -161,6 +206,17 @@ def _apply_filters(q, db: Session, cfg: VulnSettings, f: FindingFilters, now: da
             q = q.where(Device.combined_score < RISK_MEDIUM_THRESHOLD)
     if f.vendor is not None or f.product is not None:
         q = q.where(_vendor_product_cond(f.vendor, f.product))
+    if f.cve_id is not None:
+        q = q.where(DevicePortVuln.cve_id == normalize_cve_id(f.cve_id))
+    if f.device_uuid is not None:
+        q = q.where(Device.uuid == f.device_uuid)
+    if f.new_since is not None:
+        cutoff = _new_since_cutoff(db, f.new_since)
+        if cutoff is None:
+            q = q.where(literal_column("0") == 1)
+        else:
+            seen_at = func.coalesce(VulnFindingLifecycle.first_seen_at, DevicePortVuln.matched_at)
+            q = q.where(seen_at.isnot(None), seen_at >= cutoff)
     return q
 
 
@@ -196,7 +252,7 @@ def _filters_from_query(
     severity: str | None,
     kev: bool | None,
     epss_min: float | None,
-    network_id: int | None,
+    network_id: str | None,
     service: str | None,
     port: int | None,
     os_name: str | None,
@@ -207,12 +263,16 @@ def _filters_from_query(
     risk_band: str | None,
     vendor: str | None = None,
     product: str | None = None,
+    cve_id: str | None = None,
+    device_uuid: str | None = None,
+    new_since: str | None = None,
 ) -> FindingFilters:
     return FindingFilters(
-        severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
+        severity=severity, kev=kev, epss_min=epss_min, network_id=_parse_network_id_param(network_id),
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration,
         risk_band=risk_band, vendor=vendor, product=product,
+        cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
     )
 
 
@@ -221,7 +281,7 @@ def list_vulns(
     severity: str | None = Query(None, pattern=SEVERITY_PATTERN),
     kev: bool | None = None,
     epss_min: float | None = Query(None, ge=0.0, le=1.0),
-    network_id: int | None = None,
+    network_id: str | None = Query(None, max_length=32),
     service: str | None = Query(None, max_length=100),
     port: int | None = Query(None, ge=1, le=65535),
     os_name: str | None = Query(None, max_length=255),
@@ -232,6 +292,9 @@ def list_vulns(
     risk_band: str | None = Query(None, pattern=RISK_BAND_PATTERN),
     vendor: str | None = Query(None, max_length=100),
     product: str | None = Query(None, max_length=100),
+    cve_id: str | None = Query(None, max_length=32),
+    device_uuid: str | None = Query(None, max_length=64),
+    new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
@@ -244,7 +307,7 @@ def list_vulns(
         severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
-        vendor=vendor, product=product,
+        vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
     )
     total = db.scalar(_apply_filters(_count_base(), db, cfg, filters, now)) or 0
     rows = db.execute(
@@ -304,7 +367,7 @@ def export_vulns(
     severity: str | None = Query(None, pattern=SEVERITY_PATTERN),
     kev: bool | None = None,
     epss_min: float | None = Query(None, ge=0.0, le=1.0),
-    network_id: int | None = None,
+    network_id: str | None = Query(None, max_length=32),
     service: str | None = Query(None, max_length=100),
     port: int | None = Query(None, ge=1, le=65535),
     os_name: str | None = Query(None, max_length=255),
@@ -315,6 +378,9 @@ def export_vulns(
     risk_band: str | None = Query(None, pattern=RISK_BAND_PATTERN),
     vendor: str | None = Query(None, max_length=100),
     product: str | None = Query(None, max_length=100),
+    cve_id: str | None = Query(None, max_length=32),
+    device_uuid: str | None = Query(None, max_length=64),
+    new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
     user: User = Depends(current_user),
 ):
     """Same filters as GET /api/vulns, no pagination: every matching row, streamed as CSV."""
@@ -322,7 +388,7 @@ def export_vulns(
         severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
-        vendor=vendor, product=product,
+        vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
     )
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     return StreamingResponse(

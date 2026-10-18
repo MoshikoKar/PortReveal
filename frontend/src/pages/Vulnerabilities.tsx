@@ -10,8 +10,8 @@ import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
 import type { VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
 import {
-  buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, toggleVulnFilter,
-  toggleVendorProductFilter, type VulnFilterKey,
+  buildVulnQuery, clearVulnFilters, parseVulnFilters, scrollToVulnFindings, setVulnFilter,
+  toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter, type VulnFilterKey,
 } from '../vulnFilters';
 
 const SEVERITY_COLOR: Record<string, string> = {
@@ -22,6 +22,7 @@ const FILTER_LABELS: Record<VulnFilterKey, string> = {
   severity: 'severity', kev: 'KEV', epss_min: 'EPSS ≥', network_id: 'network', service: 'service',
   port: 'port', os_name: 'OS', device_type: 'device type', state: 'state', cve_age: 'CVE age',
   exposure_duration: 'exposure duration', risk_band: 'risk band', vendor: 'vendor', product: 'product',
+  cve_id: 'CVE', device_uuid: 'device', new_since: 'new since',
 };
 
 export default function Vulnerabilities() {
@@ -32,9 +33,14 @@ export default function Vulnerabilities() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
-  const toggle = (key: VulnFilterKey, value: string) => setSp(toggleVulnFilter(sp, key, value));
-  const set = (key: VulnFilterKey, value: string | undefined) => setSp(setVulnFilter(sp, key, value));
-  const toggleVendorProduct = (facetKey: string) => setSp(toggleVendorProductFilter(sp, facetKey));
+  const applySp = (next: URLSearchParams, scroll = true) => {
+    setSp(next);
+    if (scroll) scrollToVulnFindings();
+  };
+  const toggle = (key: VulnFilterKey, value: string) => applySp(toggleVulnFilter(sp, key, value));
+  const set = (key: VulnFilterKey, value: string | undefined, scroll = true) =>
+    applySp(setVulnFilter(sp, key, value), scroll);
+  const toggleVendorProduct = (facetKey: string) => applySp(toggleVendorProductFilter(sp, facetKey));
   const setPage = (p: number) => {
     const next = new URLSearchParams(sp);
     if (p <= 1) next.delete('page');
@@ -61,6 +67,7 @@ export default function Vulnerabilities() {
   const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
   const epssPct = data ? Math.round(data.epss_threshold * 100) : 0;
+  const epssValue = data ? String(data.epss_threshold) : '0.1';
 
   return (
     <>
@@ -89,20 +96,23 @@ export default function Vulnerabilities() {
               <span className="muted small">Filters:</span>
               {activeFilters.map(([key, value]) => (
                 <button key={key} type="button" className="badge outline" style={{ cursor: 'pointer', border: 0 }}
-                  onClick={() => set(key, undefined)} title="Remove this filter">
-                  {FILTER_LABELS[key]}: {value} ✕
+                  onClick={() => set(key, undefined, false)} title="Remove this filter">
+                  {FILTER_LABELS[key]}: {value === 'true' && key === 'kev' ? 'yes' : value === 'scan' ? 'last scan' : value === 'db' ? 'last DB update' : value} ✕
                 </button>
               ))}
-              <button type="button" className="btn sm ghost" onClick={() => setSp(clearVulnFilters(sp))}>Clear all</button>
+              <button type="button" className="btn sm ghost" onClick={() => { setSp(clearVulnFilters(sp)); }}>Clear all</button>
             </div>
           )}
 
           <Card className={data.kev_count > 0 ? 'kev-card active' : 'kev-card'}>
             <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
-              onClick={() => toggle('kev', 'true')}>
+              role="button" tabIndex={0} aria-pressed={filters.kev === 'true'}
+              onClick={() => toggle('kev', 'true')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle('kev', 'true'); } }}>
               <div>
                 <div className="label" style={{ fontSize: 13, fontWeight: 600, color: data.kev_count > 0 ? 'var(--high)' : 'var(--muted)' }}>
                   Actively exploited (CISA KEV)
+                  {filters.kev === 'true' && <span className="badge high" style={{ marginLeft: 8 }}>filtered</span>}
                 </div>
                 <div className="muted small">Known to be exploited in the wild — the most urgent findings on this network.</div>
               </div>
@@ -113,20 +123,29 @@ export default function Vulnerabilities() {
           </Card>
 
           <div className="grid kpis">
-            <Kpi label="Critical" value={severity.critical} color={SEVERITY_COLOR.critical} onClick={() => toggle('severity', 'critical')} />
-            <Kpi label="High" value={severity.high} color={SEVERITY_COLOR.high} onClick={() => toggle('severity', 'high')} />
-            <Kpi label="Medium" value={severity.medium} color={SEVERITY_COLOR.medium} onClick={() => toggle('severity', 'medium')} />
-            <Kpi label="Low" value={severity.low} color={SEVERITY_COLOR.low} onClick={() => toggle('severity', 'low')} />
+            <Kpi label="Critical" value={severity.critical} color={SEVERITY_COLOR.critical}
+              active={filters.severity === 'critical'} onClick={() => toggle('severity', 'critical')} />
+            <Kpi label="High" value={severity.high} color={SEVERITY_COLOR.high}
+              active={filters.severity === 'high'} onClick={() => toggle('severity', 'high')} />
+            <Kpi label="Medium" value={severity.medium} color={SEVERITY_COLOR.medium}
+              active={filters.severity === 'medium'} onClick={() => toggle('severity', 'medium')} />
+            <Kpi label="Low" value={severity.low} color={SEVERITY_COLOR.low}
+              active={filters.severity === 'low'} onClick={() => toggle('severity', 'low')} />
             {(severity.unknown ?? 0) > 0 && (
               <Kpi label="Unscored" value={severity.unknown} sub="No CVSS in local cache"
-                onClick={() => toggle('severity', 'unknown')} />
+                active={filters.severity === 'unknown'} onClick={() => toggle('severity', 'unknown')} />
             )}
             <Kpi label={`High exploit probability (EPSS ≥ ${epssPct}%)`} value={data.epss_high_count}
-              sub="FIRST.org exploitation-probability score" onClick={() => set('epss_min', String(data.epss_threshold))} />
+              sub="FIRST.org exploitation-probability score"
+              active={filters.epss_min === epssValue}
+              onClick={() => toggle('epss_min', epssValue)} />
             <Kpi label="High-risk devices" value={risk.high} sub={`${risk.medium} medium · ${risk.low} low`}
-              color={risk.high ? 'var(--high)' : undefined} onClick={() => toggle('risk_band', 'high')} />
-            <Kpi label="Confirmed findings" value={data.confirmed_count} onClick={() => toggle('state', 'confirmed')} />
-            <Kpi label="Potential findings" value={data.potential_count} onClick={() => toggle('state', 'potential')} />
+              color={risk.high ? 'var(--high)' : undefined}
+              active={filters.risk_band === 'high'} onClick={() => toggle('risk_band', 'high')} />
+            <Kpi label="Confirmed findings" value={data.confirmed_count}
+              active={filters.state === 'confirmed'} onClick={() => toggle('state', 'confirmed')} />
+            <Kpi label="Potential findings" value={data.potential_count}
+              active={filters.state === 'potential'} onClick={() => toggle('state', 'potential')} />
           </div>
 
           <Card title="Vulnerability feed">
@@ -165,23 +184,27 @@ export default function Vulnerabilities() {
 
           <Card title="Severity by network" actions={<span className="muted small">Severity is derived from CVSS, not NVD&apos;s label</span>}>
             <VulnHeatmap rows={data.severity_by_network} filters={filters}
-              onCellClick={(networkId, severity) => {
-                let next = toggleVulnFilter(sp, 'severity', severity);
-                next = setVulnFilter(next, 'network_id', networkId != null ? String(networkId) : undefined);
-                setSp(next);
-              }} />
+              onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(sp, networkId, sev))} />
           </Card>
 
           <VulnFacets summary={data} filters={filters} onToggle={toggle}
             onToggleVendorProduct={toggleVendorProduct} />
-          <VulnTopLists summary={data} />
-          <VulnFindingsTable
+          <VulnTopLists
+            summary={data}
             filters={filters}
-            page={page}
-            onPage={setPage}
-            onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined)}
-            onChanged={() => { void reload(); }}
+            onToggleCve={(id) => toggle('cve_id', id)}
+            onToggleDevice={(uuid) => toggle('device_uuid', uuid)}
+            onToggleNewSince={(v) => toggle('new_since', v)}
           />
+          <div id="vuln-findings">
+            <VulnFindingsTable
+              filters={filters}
+              page={page}
+              onPage={setPage}
+              onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined, false)}
+              onChanged={() => { void reload(); }}
+            />
+          </div>
         </>
       )}
     </>

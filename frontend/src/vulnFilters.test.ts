@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, splitVendorProductKey,
-  toggleVulnFilter, toggleVendorProductFilter, vendorProductFacetActive, vulnFilterLink,
+  toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter, vendorProductFacetActive,
+  vulnFilterLink,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -124,5 +125,37 @@ describe('vendor / product facet filters', () => {
     expect(next.get('vendor')).toBeNull();
     expect(next.get('product')).toBeNull();
     expect(next.get('page')).toBeNull();
+  });
+});
+
+describe('cve_id / device_uuid / new_since filters', () => {
+  it('round-trips through parse / toggle / clear', () => {
+    const cve = toggleVulnFilter(new URLSearchParams(), 'cve_id', 'CVE-2024-1111');
+    expect(parseVulnFilters(cve)).toEqual({ cve_id: 'CVE-2024-1111' });
+    expect(toggleVulnFilter(cve, 'cve_id', 'CVE-2024-1111').get('cve_id')).toBeNull();
+
+    const device = toggleVulnFilter(new URLSearchParams(), 'device_uuid', 'abc');
+    expect(parseVulnFilters(device)).toEqual({ device_uuid: 'abc' });
+
+    const since = toggleVulnFilter(new URLSearchParams(), 'new_since', 'scan');
+    expect(parseVulnFilters(since)).toEqual({ new_since: 'scan' });
+    expect(vulnFilterLink({ new_since: 'db' })).toBe('/vulnerabilities?new_since=db');
+  });
+});
+
+describe('toggleHeatmapCell', () => {
+  it('sets network_id + severity together and clears both on re-click', () => {
+    const set = toggleHeatmapCell(new URLSearchParams(), 7, 'high');
+    expect(set.get('network_id')).toBe('7');
+    expect(set.get('severity')).toBe('high');
+    const cleared = toggleHeatmapCell(set, 7, 'high');
+    expect(cleared.get('network_id')).toBeNull();
+    expect(cleared.get('severity')).toBeNull();
+  });
+
+  it('uses the unassigned sentinel for devices with no network', () => {
+    const set = toggleHeatmapCell(new URLSearchParams(), null, 'low');
+    expect(set.get('network_id')).toBe('unassigned');
+    expect(set.get('severity')).toBe('low');
   });
 });

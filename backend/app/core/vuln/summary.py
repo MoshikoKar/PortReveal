@@ -134,9 +134,9 @@ def _top(counter: Counter, n: int = FACET_LIMIT) -> list[dict]:
 
 
 def _network_facet(findings: list[_Finding], n: int = FACET_LIMIT) -> list[dict]:
-    """Keyed by network_id (not name): the only way GET /api/vulns?network_id=... can filter on
-    what this facet shows. `key` is the string "unassigned" for devices with no network, since
-    that can't round-trip through an integer filter -- `label` is always the display name."""
+    """Keyed by network_id (not name): GET /api/vulns?network_id=... filters on what this facet
+    shows. `key` is the string ``unassigned`` for devices with no network (accepted by the list
+    API); `label` is always the display name."""
     counts: Counter = Counter()
     labels: dict[int | None, str] = {}
     for f in findings:

@@ -18,11 +18,19 @@ export function Card({ title, actions, children, flush, className, id }: {
   );
 }
 
-export function Kpi({ label, value, sub, color, onClick }: {
-  label: string; value: ReactNode; sub?: ReactNode; color?: string; onClick?: () => void;
+export function Kpi({ label, value, sub, color, onClick, active }: {
+  label: string; value: ReactNode; sub?: ReactNode; color?: string; onClick?: () => void; active?: boolean;
 }) {
   return (
-    <div className={`kpi ${onClick ? 'link' : ''}`} style={{ ['--kpi-color' as any]: color }} onClick={onClick}>
+    <div
+      className={`kpi ${onClick ? 'link' : ''} ${active ? 'active' : ''}`}
+      style={{ ['--kpi-color' as any]: color }}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+      aria-pressed={onClick ? !!active : undefined}
+    >
       <div className="label">{label}</div>
       <div className="value">{value}</div>
       {sub !== undefined && <div className="sub">{sub}</div>}

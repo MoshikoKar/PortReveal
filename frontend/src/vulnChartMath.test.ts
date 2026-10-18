@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  barFillStyle, barWidthPct, cellIntensity, linePath, maxOf, trendHasData, xScale, yScale,
+  barFillStyle, barWidthPct, cellFillStyle, cellIntensity, linePath, maxOf, SEVERITY_COLOR_VAR,
+  trendHasData, xScale, yScale,
 } from './vulnChartMath';
 
 describe('maxOf', () => {
@@ -96,5 +97,30 @@ describe('cellIntensity', () => {
   it('is 0 for an empty cell or an empty matrix', () => {
     expect(cellIntensity(0, 10)).toBe(0);
     expect(cellIntensity(5, 0)).toBe(0);
+  });
+});
+
+describe('cellFillStyle', () => {
+  it('uses distinct severity hues so Low < Medium < High < Critical stays obvious', () => {
+    const low = cellFillStyle('low', 100, 100);
+    const medium = cellFillStyle('medium', 1, 100);
+    const high = cellFillStyle('high', 1, 100);
+    const critical = cellFillStyle('critical', 1, 100);
+    expect(low.background).toContain(SEVERITY_COLOR_VAR.low);
+    expect(medium.background).toContain(SEVERITY_COLOR_VAR.medium);
+    expect(high.background).toContain(SEVERITY_COLOR_VAR.high);
+    expect(critical.background).toContain(SEVERITY_COLOR_VAR.critical);
+    // Even a max-count Low cell mixes less of its hue than a min-count Medium cell.
+    const lowPct = Number(low.background.match(/ (\d+)%/)?.[1]);
+    const mediumPct = Number(medium.background.match(/ (\d+)%/)?.[1]);
+    const highPct = Number(high.background.match(/ (\d+)%/)?.[1]);
+    const criticalPct = Number(critical.background.match(/ (\d+)%/)?.[1]);
+    expect(lowPct).toBeLessThan(mediumPct);
+    expect(mediumPct).toBeLessThan(highPct);
+    expect(highPct).toBeLessThan(criticalPct);
+  });
+
+  it('returns the empty panel color for zero-count cells', () => {
+    expect(cellFillStyle('critical', 0, 10).background).toBe('var(--panel-3)');
   });
 });
