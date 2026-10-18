@@ -11,7 +11,7 @@ from app.core import watches
 from app.core.exposure import compute, level
 from app.core.notify import _pending_all, format_daily_digest
 from app.core.tagging import DeviceFacts, Service, apply_tags, classify, load_facts, normalize_tag
-from app.core.watches import evaluate_all
+from app.core.watches import evaluate, evaluate_all
 from app.core.web_capture import CaptureContext, run_web_capture
 from app.db import utcnow
 from app.models import (
@@ -423,3 +423,45 @@ def test_watch_evaluation_walks_matches_in_chunks(db, monkeypatch):
     alerts = sorted(e.ip for e in db.scalars(select(Event).where(Event.event_type == "watch_match")).unique())
     assert alerts == sorted(f"10.0.0.{i}" for i in range(6, 11))
     assert db.get(SavedSearch, search.id).last_count == 10
+
+
+def test_monitor_baselines_then_alerts_matching_host_changes(db):
+    net = make_network(db)
+    a = host("10.0.0.1", [port(22, "ssh")], mac="02:00:00:00:00:01")
+    b = host("10.0.0.2", [port(22, "ssh")], mac="02:00:00:00:00:02")
+    scan(ScriptedScanner([a, b]), network_id=net.id)
+    db.add(SavedSearch(name="Host 10.0.0.1", query="ip:10.0.0.1", kind="monitor"))
+    db.commit()
+    assert evaluate_all(db) == 0
+    db.commit()
+    search = db.scalar(select(SavedSearch))
+    assert search.initialized and search.last_count == 1
+    assert db.scalars(select(Event).where(Event.event_type == "monitor_change")).unique().all() == []
+
+    a.ports = [port(22, "ssh"), port(445, "microsoft-ds")]
+    b.ports = [port(22, "ssh"), port(445, "microsoft-ds")]
+    s = scan(ScriptedScanner([a, b]), network_id=net.id)
+    db.expire_all()
+    alerts = list(db.scalars(select(Event).where(Event.event_type == "monitor_change")).unique())
+    assert [(e.ip, e.port, e.notify, e.new_value) for e in alerts] == [
+        ("10.0.0.1", 445, True, "Host 10.0.0.1")]
+    assert alerts[0].old_value  # source event id, for idempotency
+    assert "change watched by 'Host 10.0.0.1'" in alerts[0].message
+
+    n = evaluate(db, db.get(SavedSearch, search.id), scan_id=s.id)
+    assert n == 0
+    assert len(db.scalars(select(Event).where(Event.event_type == "monitor_change")).unique().all()) == 1
+
+
+def test_digest_always_includes_monitor_alerts(db):
+    net = make_network(db)
+    scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh")])]), network_id=net.id)
+    d = device_by_ip(db, "10.0.0.1")
+    db.add(Event(device_id=d.id, event_type="monitor_change", severity="high", ip=d.current_ip,
+                 new_value="Host 10.0.0.1", old_value="1", message="m", notify=True))
+    db.commit()
+    cfg = NotificationSettings(event_types=[])
+    pending = _pending_all(db, cfg)
+    assert [e.event_type for e in pending] == ["monitor_change"]
+    _, plain, html_body = format_daily_digest(pending)
+    assert "Watches (1)" in plain and "Monitored changes" in html_body and "Host 10.0.0.1" in plain

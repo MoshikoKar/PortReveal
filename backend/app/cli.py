@@ -89,6 +89,9 @@ def cmd_scan(args) -> int:
             if net is None:
                 print(f"network not found: {args.network}")
                 return 1
+            if net.archived_at is not None:
+                print(f"network is archived: {net.name} (restore it in Settings > Networks first)")
+                return 1
             scan = create_scan(db, args.type, network=net, requested_by="cli")
         elif args.targets:
             scan = create_scan(db, args.type, targets=AddressSet.from_specs(args.targets, allow_hostname=True),

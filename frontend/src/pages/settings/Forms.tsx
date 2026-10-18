@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading } from '../../components/ui';
-import type { DiscoverySettings, EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, WebCaptureSettings } from '../../types';
+import type { DiscoverySettings, EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
 import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
 
 function useForm<T>(path: string) {
@@ -428,12 +428,60 @@ const VULN_SOURCES: { id: 'nvd' | 'kev' | 'epss'; label: string; hint: string }[
   { id: 'epss', label: 'FIRST EPSS', hint: 'Exploitation-probability score, used to weight risk' },
 ];
 
+const VULN_STATUS_POLL_RUNNING_MS = 5000;
+const VULN_STATUS_POLL_IDLE_MS = 60000;
+
+function VulnFeedStatusPanel({ status }: { status: VulnStatus | null }) {
+  if (!status) return null;
+  const label = (id: string) => VULN_SOURCES.find((s) => s.id === id)?.label ?? id;
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <div className="row wrap small" style={{ gap: 12 }}>
+        <span><strong>Local CVE cache:</strong> {status.cve_count.toLocaleString()} CVEs</span>
+        {status.sync_running ? <span className="badge medium">sync running</span> : <span className="badge outline">idle</span>}
+      </div>
+      {!status.feeds.length ? (
+        <div className="muted small">No feed has been synced yet.</div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Feed</th><th>Last successful sync</th><th className="right">Records</th><th>Status</th></tr></thead>
+            <tbody>
+              {status.feeds.map((fd) => (
+                <tr key={fd.source}>
+                  <td>{label(fd.source)}</td>
+                  <td title={fd.last_synced_at ? fmtTime(fd.last_synced_at) : undefined}>
+                    {fd.last_synced_at ? relTime(fd.last_synced_at) : <span className="muted">never</span>}
+                  </td>
+                  <td className="right">{fd.record_count.toLocaleString()}</td>
+                  <td className="small">
+                    {fd.source === 'nvd' && fd.mirror_complete === false && (
+                      <div>Yearly mirror in progress: next year {fd.mirror_next_year ?? status.mirror_start_year}</div>
+                    )}
+                    {fd.last_error ? <><span className="badge high">error</span> <span className="muted">{fd.last_error}</span></> : <span className="badge ok">ok</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const f = useForm<VulnSettings>('/settings/vuln');
   const [apiKey, setApiKey] = useState<string | null>(null);
   useReportDirty(f.dirty || apiKey !== null, onDirtyChange);
   const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [statusPoll, setStatusPoll] = useState(VULN_STATUS_POLL_IDLE_MS);
+  const status = useApi<VulnStatus>('/settings/vuln/status', undefined, statusPoll);
+  const running = !!status.data?.sync_running;
+  useEffect(() => {
+    setStatusPoll(running ? VULN_STATUS_POLL_RUNNING_MS : VULN_STATUS_POLL_IDLE_MS);
+  }, [running]);
   if (!f.form) return <Card title="Vulnerability scoring"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   const set = (patch: Partial<VulnSettings>) => f.setForm({ ...s, ...patch });
@@ -452,6 +500,7 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
     try {
       const r = await post<{ ok: boolean; message: string }>('/settings/vuln/sync');
       setSyncMsg({ ok: r.ok, text: r.message });
+      status.reload();
     } catch (e: any) {
       setSyncMsg({ ok: false, text: e.message });
     } finally {
@@ -497,11 +546,13 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           </label>
         </div>
         <Msg msg={f.msg} />
+        <VulnFeedStatusPanel status={status.data} />
         {syncMsg && <div className={`alert ${syncMsg.ok ? 'ok' : 'error'}`}>{syncMsg.text}</div>}
         <div className="row">
           <button className="btn primary" disabled={f.saving} onClick={save}>Save</button>
-          <button className="btn" onClick={syncNow} disabled={!s.enabled || s.offline_mode || syncing}>
-            {syncing ? 'Starting…' : 'Sync feeds now'}
+          <button className="btn" onClick={syncNow} disabled={!s.enabled || s.offline_mode || syncing || running}
+            title="Download the public NVD / CISA KEV / FIRST EPSS feeds into the local cache now">
+            {syncing ? 'Starting…' : running ? 'Sync running…' : 'Sync feeds now'}
           </button>
         </div>
       </div>

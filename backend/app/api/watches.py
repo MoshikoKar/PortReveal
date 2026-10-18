@@ -1,4 +1,4 @@
-"""Saved searches: watches (alert on new matches) and policies (every new match is a violation)."""
+"""Saved searches: watches/policies (new matches) and monitors (changes on matching hosts)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,12 +11,12 @@ from ..core.audit import audit
 from ..core.query.search import prepare
 from ..core.watches import evaluate
 from ..db import get_db
-from ..models import ROLE_ADMIN, SEARCH_KIND_POLICY, SEARCH_KIND_WATCH, SavedSearch, SavedSearchHit, User
+from ..models import ROLE_ADMIN, SEARCH_KIND_MONITOR, SEARCH_KIND_POLICY, SEARCH_KIND_WATCH, SavedSearch, SavedSearchHit, User
 from .common import FULL_REPLACE, UNPAGED_LIST, Row
 
 router = APIRouter(prefix="/api/saved-searches", tags=["saved-searches"])
 
-KINDS = (SEARCH_KIND_WATCH, SEARCH_KIND_POLICY)
+KINDS = (SEARCH_KIND_WATCH, SEARCH_KIND_POLICY, SEARCH_KIND_MONITOR)
 
 
 class SavedSearchIn(BaseModel):

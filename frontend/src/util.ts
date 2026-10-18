@@ -77,6 +77,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   policy_violation: 'Policy violation',
   banner_changed: 'Banner changed',
   os_changed: 'OS changed',
+  monitor_change: 'Monitor change',
 };
 
 export const SCAN_TYPE_LABELS = { discovery: 'Discovery', standard: 'Standard', full: 'Full port' } as const;

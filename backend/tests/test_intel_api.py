@@ -143,6 +143,10 @@ def test_saved_searches_crud_and_ownership(admin):
     r = admin.put(f"/api/saved-searches/{s['id']}", json={"name": "SSH", "query": "port:22", "kind": "policy"},
                   headers=csrf(admin))
     assert r.json()["last_count"] == 1 and r.json()["kind"] == "policy"
+    mon = admin.post("/api/saved-searches",
+                     json={"name": "DC", "query": "ip:10.0.0.1", "kind": "monitor"}, headers=csrf(admin))
+    assert mon.status_code == 201 and mon.json()["kind"] == "monitor"
+    assert admin.delete(f"/api/saved-searches/{mon.json()['id']}", headers=csrf(admin)).status_code == 204
 
     viewer = _viewer(admin)
     vh = {"X-CSRF-Token": viewer.cookies.get("nf_csrf", "")}

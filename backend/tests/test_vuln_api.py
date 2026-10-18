@@ -93,6 +93,29 @@ def test_sync_now_requires_enabled_and_online(admin):
     assert r.status_code == 409  # offline mode
 
 
+def test_vuln_feed_status_reports_cache_and_mirror_progress(admin, db):
+    from app.db import utcnow
+    from app.models import VulnFeedState
+
+    r = admin.get("/api/settings/vuln/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["sync_running"] is False and body["cve_count"] == 0 and body["feeds"] == []
+
+    db.add(Vulnerability(cve_id="CVE-2024-0001", cvss_base=7.5))
+    db.add(VulnFeedState(source="nvd", last_synced_at=utcnow(), record_count=1, mirror_complete=False,
+                         mirror_next_year=2021, last_error="NVD yearly mirror incomplete; next year 2021"))
+    db.add(VulnFeedState(source="kev", last_synced_at=utcnow(), record_count=5, mirror_complete=False))
+    db.commit()
+    body = admin.get("/api/settings/vuln/status").json()
+    assert body["cve_count"] == 1
+    feeds = {f["source"]: f for f in body["feeds"]}
+    assert feeds["nvd"]["mirror_complete"] is False and feeds["nvd"]["mirror_next_year"] == 2021
+    assert feeds["nvd"]["last_error"].startswith("NVD yearly mirror incomplete")
+    assert feeds["kev"]["record_count"] == 5 and feeds["kev"]["mirror_complete"] is None
+    assert feeds["kev"]["mirror_next_year"] is None
+
+
 def test_viewer_cannot_change_vuln_settings(client, db):
     make_network(db)
     assert client.post("/api/setup/admin", json={"username": "owner", "password": "correct-horse-1"}).status_code == 200
@@ -101,6 +124,7 @@ def test_viewer_cannot_change_vuln_settings(client, db):
     client.post("/api/auth/logout", headers=csrf(client))
     assert client.post("/api/auth/login", json={"username": "viewer1", "password": "correct-horse-1"}).status_code == 200
     assert client.get("/api/settings/vuln").status_code == 403
+    assert client.get("/api/settings/vuln/status").status_code == 403
     assert client.put("/api/settings/vuln", json={}, headers=csrf(client)).status_code == 403
 
 

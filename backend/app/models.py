@@ -76,6 +76,7 @@ EV_WATCH_MATCH = "watch_match"
 EV_POLICY_VIOLATION = "policy_violation"
 EV_BANNER_CHANGED = "banner_changed"
 EV_OS_CHANGED = "os_changed"
+EV_MONITOR_CHANGE = "monitor_change"
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -92,14 +93,16 @@ EVENT_TYPES = (
     EV_POLICY_VIOLATION,
     EV_BANNER_CHANGED,
     EV_OS_CHANGED,
+    EV_MONITOR_CHANGE,
 )
 # Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
-ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION)
+ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE)
 EVENT_SEVERITY = {
     EV_DEVICE_DISCOVERED: "high",
     EV_PORT_OPENED: "high",
     EV_WATCH_MATCH: "high",
     EV_POLICY_VIOLATION: "high",
+    EV_MONITOR_CHANGE: "high",
     EV_SERVICE_CHANGED: "medium",
     EV_DEVICE_DISAPPEARED: "medium",
     EV_PORT_CLOSED: "medium",
@@ -123,6 +126,7 @@ TAG_SOURCE_SUPPRESSED = "suppressed"
 TAG_SOURCES = (TAG_SOURCE_RULE, TAG_SOURCE_MANUAL, TAG_SOURCE_SUPPRESSED)
 SEARCH_KIND_WATCH = "watch"
 SEARCH_KIND_POLICY = "policy"
+SEARCH_KIND_MONITOR = "monitor"
 
 CPE_SOURCE_NMAP = "nmap"
 CPE_SOURCE_FAVICON = "favicon"
@@ -236,6 +240,8 @@ class Network(Base):
     vpn_s2s: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     baseline_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Set when removed from Settings: the row and its findings stay, hidden from default views.
+    archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -617,7 +623,7 @@ class DeviceProfile(Base):
 
 
 class SavedSearch(Base):
-    """A named query. Watches alert on new matches; policies treat every match as a violation."""
+    """A named query. Watches/policies alert on new matches; monitors alert on changes to matching hosts."""
 
     __tablename__ = "saved_searches"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -174,7 +174,7 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user))
     scanning = set(db.scalars(select(Scan.network_id).where(Scan.status.in_(SCAN_ACTIVE_STATES))).all())
     networks = [
         {**network_out(n, per_net.get(n.id, 0), per_net_active.get(n.id, 0)), "scan_active": n.id in scanning}
-        for n in db.scalars(select(Network).order_by(Network.name)).all()
+        for n in db.scalars(select(Network).where(Network.archived_at.is_(None)).order_by(Network.name)).all()
     ]
 
     lvl = case((Device.exposure_score >= HIGH_THRESHOLD, "high"),

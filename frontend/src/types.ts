@@ -84,7 +84,7 @@ export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
   | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
   | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed'
-  | 'os_changed';
+  | 'os_changed' | 'monitor_change';
 
 export interface ChangeEvent {
   id: number;
@@ -283,7 +283,7 @@ export interface SavedSearch {
   name: string;
   query: string;
   description: string | null;
-  kind: 'watch' | 'policy';
+  kind: 'watch' | 'policy' | 'monitor';
   alert: boolean;
   created_by: string | null;
   created_at: string;
@@ -459,6 +459,7 @@ export interface Network {
   vpn_s2s: boolean;
   baseline_scan_id: number | null;
   baseline_at: string | null;
+  archived_at: string | null;
   created_at: string;
   device_count: number | null;
   active_count: number | null;
@@ -583,6 +584,22 @@ export interface VulnSettings {
   include_potential: boolean;
   min_cvss_display: number;
   scripts_enabled: boolean;
+}
+
+export interface VulnFeedStatus {
+  source: 'nvd' | 'kev' | 'epss';
+  last_synced_at: string | null;
+  record_count: number;
+  last_error: string | null;
+  mirror_complete: boolean | null;
+  mirror_next_year: number | null;
+}
+
+export interface VulnStatus {
+  sync_running: boolean;
+  cve_count: number;
+  mirror_start_year: number;
+  feeds: VulnFeedStatus[];
 }
 
 export interface DiscoverySettings {

@@ -519,6 +519,53 @@ def test_sync_nvd_mirror_resumes_remaining_years_after_partial_failure(db, monke
     assert not any("nvdcve-2.0-2024" in u for u in calls)
 
 
+def test_mirror_releases_writer_lock_between_years(db, monkeypatch):
+    """Other writers (session touch, scan insert) must get the SQLite lock while the mirror runs."""
+    import sqlite3
+
+    monkeypatch.setattr(sync, "NVD_MIRROR_START_YEAR", 2024)
+    now = datetime(2025, 6, 15, tzinfo=timezone.utc)
+    path = db.get_bind().url.database
+    writes: list[str] = []
+
+    def other_writer() -> None:
+        conn = sqlite3.connect(path, timeout=0.5)
+        try:
+            conn.execute("INSERT INTO app_settings (key, value, updated_at) VALUES (?, '1', '2025-06-15')",
+                         (f"probe-{len(writes)}",))
+            conn.commit()
+            writes.append("ok")
+        finally:
+            conn.close()
+
+    def fetch(url, params, headers):
+        if sync.NVD_API_URL in url:
+            return json.dumps({"totalResults": 0, "vulnerabilities": []}).encode()
+        if "nvdcve-2.0-2025" in url or "modified" in url:
+            other_writer()  # 2024 was ingested just before: its write must already be committed
+            return _mirror_year_payload(2025, "CVE-2025-MIRROR") if "2025" in url else \
+                gzip.compress(json.dumps({"vulnerabilities": []}).encode())
+        if "nvdcve-2.0-2024" in url:
+            return _mirror_year_payload(2024, "CVE-2024-MIRROR")
+        raise AssertionError(f"unexpected url {url}")
+
+    result = sync.sync_nvd(db, VulnSettings(enabled=True, sources=["nvd"]), fetch=fetch, now=now,
+                           sleep=lambda _s: None)
+    assert result["error"] is None
+    assert writes == ["ok", "ok"]
+
+
+def test_ingest_commits_in_batches(db, monkeypatch):
+    monkeypatch.setattr(sync, "INGEST_COMMIT_BATCH", 2)
+    commits: list[int] = []
+    real_commit = db.commit
+    monkeypatch.setattr(db, "commit", lambda: (commits.append(1), real_commit())[1])
+    payload = {"vulnerabilities": [{"cve": {"id": f"CVE-2024-{i:04d}"}} for i in range(5)]}
+    count, _ = sync._ingest_nvd_payload(db, payload)
+    assert count == 5
+    assert len(commits) == 3  # after rows 2 and 4, plus the final one
+
+
 def test_sync_due_when_mirror_incomplete(db):
     db.add(Vulnerability(cve_id="CVE-2024-PARTIAL"))
     db.add(VulnFeedState(source="nvd", last_synced_at=T, record_count=1, mirror_complete=False,

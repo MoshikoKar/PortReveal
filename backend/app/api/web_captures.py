@@ -7,11 +7,12 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, true
 from sqlalchemy.orm import Session, selectinload
 
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
+from ..core.mockdata import archived_hidden_device_ids, device_visible
 from ..core.web_capture import delete_web_capture, run_web_capture, web_capture_manager
 from ..core.web_capture.classify import BLANK_PAGE_REASON, unusable_page_reason
 from ..core.web_capture.rtsp import (
@@ -233,14 +234,33 @@ def web_capture_out(c: WebCapture, *, include_pages: bool = False) -> dict:
     return out
 
 
+def _capture_visible(db: Session, *, include_archived: bool = False):
+    """Jobs that still have at least one page on a visible device, or no pages yet.
+
+    A finished job whose every page belongs to an archived network is hidden unless
+    ``include_archived`` is set — same rule as the Web interfaces gallery.
+    """
+    if include_archived:
+        return true()
+    hidden = archived_hidden_device_ids(db)
+    if not hidden:
+        return true()
+    visible_page = select(WebPage.capture_id).where(
+        or_(WebPage.device_id.is_(None), WebPage.device_id.not_in(hidden))
+    )
+    archived_only = select(WebPage.capture_id).where(WebPage.device_id.in_(hidden))
+    return or_(WebCapture.id.in_(visible_page), ~WebCapture.id.in_(archived_only))
+
+
 @router.get("/api/web-captures")
 def list_web_captures(
     status: str | None = Query(None),
+    include_archived: bool = False,
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    conds = []
+    conds = [_capture_visible(db, include_archived=include_archived)]
     if status:
         conds.append(WebCapture.status == status)
     total = db.scalar(select(func.count(WebCapture.id)).where(*conds)) or 0
@@ -251,9 +271,12 @@ def list_web_captures(
 
 
 @router.get("/api/web-captures/active")
-def active_web_captures(db: Session = Depends(get_db), user: User = Depends(current_user)):
+def active_web_captures(include_archived: bool = False, db: Session = Depends(get_db),
+                        user: User = Depends(current_user)):
     rows = db.scalars(
-        select(WebCapture).where(WebCapture.status.in_(WEB_CAPTURE_ACTIVE_STATES)).order_by(WebCapture.id)
+        select(WebCapture).where(WebCapture.status.in_(WEB_CAPTURE_ACTIVE_STATES),
+                                 _capture_visible(db, include_archived=include_archived))
+        .order_by(WebCapture.id)
     ).all()
     return {
         "running": [web_capture_out(c) for c in rows if c.status == "running"],
@@ -507,6 +530,7 @@ def web_hosts(
         "web",
         description="web = HTTP(S)/RTSP gallery; remote = RDP/VNC desktops only",
     ),
+    include_archived: bool = Query(False, description="also list hosts of archived networks"),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
@@ -514,12 +538,15 @@ def web_hosts(
     """Devices with captured pages, summarised from their latest capture, one page at a time.
 
     ``kind=web`` (default) excludes RDP/VNC; ``kind=remote`` returns only those. Hosts are ordered (with
-    screenshots first) before paging, so page 1 always holds the most useful cards.
+    screenshots first) before paging, so page 1 always holds the most useful cards. Hosts of archived
+    networks (and simulated hosts while they are hidden) are left out like everywhere else.
     """
     latest = (
         select(WebPage.device_id, func.max(WebPage.capture_id).label("cid"))
         .join(WebCapture, WebCapture.id == WebPage.capture_id)
-        .where(WebPage.device_id.is_not(None), WebCapture.status.in_(HOST_VIEW_STATES))
+        .join(Device, Device.id == WebPage.device_id)
+        .where(WebPage.device_id.is_not(None), WebCapture.status.in_(HOST_VIEW_STATES),
+               device_visible(db, include_archived=include_archived))
         .group_by(WebPage.device_id)
         .subquery()
     )

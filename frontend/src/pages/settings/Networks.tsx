@@ -14,9 +14,10 @@ const VPN_S2S_TIP = 'Mark networks reached over a site-to-site VPN. Scans use th
 /** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it). */
 export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCount?: (n: number) => void }) {
   const { isAdmin } = useApp();
-  const { data, error, loading, reload } = useApi<Network[]>('/networks');
+  const [showArchived, setShowArchived] = useState(false);
+  const { data, error, loading, reload } = useApi<Network[]>('/networks', { include_archived: showArchived ? 'true' : undefined });
   useEffect(() => {
-    if (data) onCount?.(data.length);
+    if (data) onCount?.(data.filter((n) => !n.archived_at).length);
   }, [data, onCount]);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [initial, setInitial] = useState<Draft | null>(null);
@@ -49,13 +50,28 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
 
   const remove = async (n: Network) => {
     if (pending(`net-${n.id}`)) return;
-    if (!confirm(`Delete network "${n.name}"? Devices are kept; its snapshots are deleted.`)) return;
+    if (!confirm(`Archive network "${n.name}"? It stops being scanned. Its devices, events and history are kept `
+      + 'but hidden from default views (Devices > "Show archived networks" reveals them). You can restore it later.')) return;
     setActionError(null);
     await track(`net-${n.id}`, async () => {
       try {
         await del(`/networks/${n.id}`);
       } catch (e: any) {
-        setActionError(`Could not delete "${n.name}": ${e.message}`);
+        setActionError(`Could not archive "${n.name}": ${e.message}`);
+        return;
+      }
+      reload();
+    });
+  };
+
+  const restore = async (n: Network) => {
+    if (pending(`net-${n.id}`)) return;
+    setActionError(null);
+    await track(`net-${n.id}`, async () => {
+      try {
+        await post(`/networks/${n.id}/restore`);
+      } catch (e: any) {
+        setActionError(`Could not restore "${n.name}": ${e.message}`);
         return;
       }
       reload();
@@ -86,7 +102,10 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
       {!compact && (
         <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
           Reusable scan scopes (up to /16 each). Enabled networks are scanned by the daily schedule. The first complete standard
-          scan of a network is its baseline and never alerts.
+          scan of a network is its baseline and never alerts. Archiving a network keeps its findings but hides them.
+          <label className="check small" style={{ marginTop: 6 }}>
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />Show archived networks
+          </label>
         </div>
       )}
       <ErrorBox error={error || actionError} />
@@ -96,18 +115,26 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
             <thead><tr><th>Name</th><th>CIDR</th><th>Zone</th><th>Devices</th><th>Baseline</th><th>Schedule</th>{isAdmin && <th />}</tr></thead>
             <tbody>
               {data.map((n) => (
-                <tr key={n.id}>
+                <tr key={n.id} className={n.archived_at ? 'dim' : undefined}>
                   <td><strong>{n.name}</strong>{n.vpn_s2s && <> <span className="badge outline" title={VPN_S2S_TIP}>VPN</span></>}{n.description && <div className="muted small">{n.description}</div>}</td>
                   <td className="mono">{n.cidr}</td>
                   <td>{n.zone ?? <span className="muted">—</span>}</td>
                   <td>{n.active_count ?? 0} active / {n.device_count ?? 0}</td>
-                  <td>{n.baseline_at ? fmtTime(n.baseline_at) : <span className="badge medium">pending</span>}</td>
-                  <td>{n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
+                  <td>{n.archived_at ? <span className="muted">—</span> : n.baseline_at ? fmtTime(n.baseline_at) : <span className="badge medium">pending</span>}</td>
+                  <td>{n.archived_at
+                    ? <span className="badge outline" title={`Archived ${fmtTime(n.archived_at)}`}>archived</span>
+                    : n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
                   {isAdmin && (
                     <td className="right nowrap">
-                      <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '', vpn_s2s: n.vpn_s2s })}>Edit</button>
-                      {n.baseline_at && <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => resetBaseline(n)}>Reset baseline</button>}
-                      <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => remove(n)}>Delete</button>
+                      {n.archived_at ? (
+                        <button className="btn sm" disabled={pending(`net-${n.id}`)} onClick={() => restore(n)}>Restore</button>
+                      ) : (
+                        <>
+                          <button className="btn ghost sm" onClick={() => openDraft({ id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '', vpn_s2s: n.vpn_s2s })}>Edit</button>
+                          {n.baseline_at && <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => resetBaseline(n)}>Reset baseline</button>}
+                          <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => remove(n)}>Archive</button>
+                        </>
+                      )}
                     </td>
                   )}
                 </tr>

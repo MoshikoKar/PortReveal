@@ -41,6 +41,11 @@ export function EventDetail({ ev }: { ev: ChangeEvent }) {
       return <span>{ev.old_value} <span className="muted">→</span> {ev.new_value}</span>;
     case 'device_discovered':
       return <span><span className="mono">{ev.ip}</span>{ev.new_value && <span className="muted"> · {ev.new_value}</span>}</span>;
+    case 'watch_match':
+    case 'policy_violation':
+      return <span>{ev.new_value}</span>;
+    case 'monitor_change':
+      return <span>{ev.new_value}{port && <> {port}</>}</span>;
     default:
       return <span className="mono">{ev.ip}</span>;
   }

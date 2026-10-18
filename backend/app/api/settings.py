@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import client_ip, require_admin
@@ -14,7 +15,7 @@ from ..core.notify import format_sample_digest, send_email, smtp_failure_reason
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
 from ..db import get_db
-from ..models import EVENT_TYPES, User
+from ..models import EVENT_TYPES, User, Vulnerability, VulnFeedState
 from ..security import encrypt_secret
 from ..settings_store import (
     DiscoverySettings,
@@ -153,6 +154,27 @@ def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_
         if sync_due(db, cfg) and not sync_running():
             trigger_background_sync(cfg)
     return vuln_out(cfg)
+
+
+@router.get("/vuln/status")
+def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Local CVE cache state: per-feed bookkeeping, cache size and whether a sync is running."""
+    from ..core.vuln.sync import NVD_MIRROR_START_YEAR, sync_running
+
+    feeds = [
+        {"source": f.source, "last_synced_at": f.last_synced_at, "record_count": f.record_count or 0,
+         "last_error": f.last_error,
+         "mirror_complete": f.mirror_complete if f.source == "nvd" else None,
+         "mirror_next_year": (f.mirror_next_year or NVD_MIRROR_START_YEAR)
+         if f.source == "nvd" and not f.mirror_complete else None}
+        for f in db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
+    ]
+    return {
+        "sync_running": sync_running(),
+        "cve_count": db.scalar(select(func.count(Vulnerability.cve_id))) or 0,
+        "mirror_start_year": NVD_MIRROR_START_YEAR,
+        "feeds": feeds,
+    }
 
 
 @router.post("/vuln/sync")

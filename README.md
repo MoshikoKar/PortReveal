@@ -182,8 +182,9 @@ Rule-based **tags** and a **device type** (printer, camera, nas, hypervisor,
 domain-controller, database, …) are recomputed after every scan and web
 capture; admins can add or pin manual tags. Each device gets an **exposure
 score** (0–100) with the factors behind it, weighted by the network **zone**.
-Save a query as a **watch** (alert when a new host matches) or **policy** (every
-new match is a violation); matches appear in the daily digest.
+Save a query as a **watch** (alert when a new host matches), **policy** (every
+new match is a violation), or **monitor** (alert when a matching host changes);
+alerts appear in the daily digest.
 
 API (session cookie, or a read-only token from **Settings → API tokens** sent as
 `Authorization: Bearer nf_…`; tokens allow GET only):
@@ -197,7 +198,7 @@ API (session cookie, or a read-only token from **Settings → API tokens** sent 
 | `GET /api/search/fields` | Field reference |
 | `GET /api/host/{ip}` | One host document (services, TLS, HTTP, screenshots) |
 | `GET /api/reports/exposure` · `rare-services` · `version-skew` · `subnets` · `heatmap` | Reports |
-| `/api/saved-searches` | Watches and policies (CRUD) |
+| `/api/saved-searches` | Watches, policies, and monitors (CRUD) |
 | `/api/webhooks` | Outbound event webhooks (admin) |
 | `GET /api/events/stream` | SSE event feed |
 

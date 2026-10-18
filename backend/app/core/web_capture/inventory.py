@@ -216,8 +216,11 @@ def find_web_endpoints(db: Session, ips: set[str], *, max_endpoints: int,
 
 
 def inventory_remote_ips(db: Session) -> list[str]:
-    """Current-inventory IPs that expose at least one open RDP or VNC TCP port."""
-    devices = db.scalars(select(Device).options(selectinload(Device.ports))).all()
+    """Current-inventory IPs that expose at least one open RDP or VNC TCP port (archived networks excluded)."""
+    from ..mockdata import device_visible
+    devices = db.scalars(
+        select(Device).where(device_visible(db)).options(selectinload(Device.ports))
+    ).all()
     ips: list[str] = []
     for dev in devices:
         ip = (dev.current_ip or "").strip()

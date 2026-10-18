@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from datetime import timedelta
 
 from fastapi import Depends, HTTPException, Request, Response
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -27,6 +29,8 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 API_TOKEN_PREFIX = "nf_"
 TOKEN_METHODS = {"GET", "HEAD"}
 TOKEN_TOUCH_SECONDS = 60
+
+log = logging.getLogger(__name__)
 
 
 def client_ip(request: Request) -> str | None:
@@ -90,9 +94,19 @@ def get_session_record(request: Request, db: Session = Depends(get_db)) -> UserS
     if (now - sess.last_seen_at).total_seconds() > 60:
         sess.last_seen_at = now
         sess.expires_at = now + timedelta(minutes=s.session_idle_minutes)
-        db.commit()
+        _touch_commit(db)
     request.state.session = sess
     return sess
+
+
+def _touch_commit(db: Session) -> None:
+    """Persist a last-seen bump. Best-effort: a held writer lock (long background job on SQLite)
+    must not fail an otherwise valid request; the next request retries the bump."""
+    try:
+        db.commit()
+    except OperationalError:
+        db.rollback()
+        log.warning("session/token last-seen update skipped: database busy")
 
 
 def _api_token_user(request: Request, db: Session) -> User | None:
@@ -111,7 +125,7 @@ def _api_token_user(request: Request, db: Session) -> User | None:
         raise HTTPException(403, "API tokens are read-only")
     if tok.last_used_at is None or (now - tok.last_used_at).total_seconds() > TOKEN_TOUCH_SECONDS:
         tok.last_used_at = now
-        db.commit()
+        _touch_commit(db)
     request.state.api_token = tok
     return tok.user
 

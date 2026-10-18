@@ -33,13 +33,16 @@ export default function Devices() {
     sp.get('network_id') || '',
     sp.get('port') || '',
     sp.get('service') || '',
+    sp.get('archived') || '',
   ].join('|');
+  const showArchived = sp.get('archived') === '1';
   const params = {
     q: sp.get('q') || undefined,
     status: sp.get('status') || undefined,
     network_id: sp.get('network_id') || undefined,
     port: sp.get('port') || undefined,
     service: sp.get('service') || undefined,
+    include_archived: showArchived ? 'true' : undefined,
     sort: sp.get('sort') || 'ip',
     order: sp.get('order') || 'asc',
     page,
@@ -51,11 +54,12 @@ export default function Devices() {
     network_id: params.network_id,
     port: params.port,
     service: params.service,
+    include_archived: params.include_archived,
     sort: params.sort,
     order: params.order,
   };
   const { data, error, loading } = useApi<Paged<DeviceSummary>>('/devices', params, 15000);
-  const networks = useApi<Network[]>('/networks');
+  const networks = useApi<Network[]>('/networks', { include_archived: showArchived ? 'true' : undefined });
 
   const update = (patch: Record<string, string | undefined>, { replace = false }: { replace?: boolean } = {}) => {
     const next = new URLSearchParams(sp);
@@ -159,7 +163,7 @@ export default function Devices() {
           </select>
           <select value={params.network_id ?? ''} onChange={(e) => update({ network_id: e.target.value || undefined })}>
             <option value="">All networks</option>
-            {networks.data?.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+            {networks.data?.map((n) => <option key={n.id} value={n.id}>{n.name}{n.archived_at ? ' (archived)' : ''}</option>)}
           </select>
           {activeFilters.map((k) => (
             <button key={k} className="btn sm toggle on" aria-pressed="true" title="Remove this filter"
@@ -191,6 +195,9 @@ export default function Devices() {
         <div className="row wrap" style={{ gap: 12, padding: '0.5rem 1rem' }}>
           <label className="check small"><input type="checkbox" checked={showOs} onChange={(e) => setShowOs(e.target.checked)} />Show OS column</label>
           <label className="check small"><input type="checkbox" checked={showRtt} onChange={(e) => setShowRtt(e.target.checked)} />Show RTT column</label>
+          <label className="check small" title="Devices of networks removed in Settings > Networks are kept but hidden by default">
+            <input type="checkbox" checked={showArchived} onChange={(e) => update({ archived: e.target.checked ? '1' : undefined, network_id: undefined })} />Show archived networks
+          </label>
         </div>
         {showSelectAllBanner && (
           <div className="alert" style={{ margin: '0.75rem 1rem 0' }}>

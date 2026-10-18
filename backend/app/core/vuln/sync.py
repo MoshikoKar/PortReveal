@@ -44,6 +44,9 @@ NVD_RATE_DELAY_NO_KEY = 6.5  # keep well under 5 requests / 30s
 NVD_RATE_DELAY_WITH_KEY = 0.7  # keep well under 50 requests / 30s
 # API lookback after a successful mirror (or when the mirror is unavailable): covers recent edits.
 FULL_SYNC_LOOKBACK_DAYS = 120
+# Commit every N CVE upserts so a feed ingest never holds the SQLite writer lock long enough to
+# time out concurrent requests (session touch, scan insert) waiting on busy_timeout.
+INGEST_COMMIT_BATCH = 500
 
 Fetcher = Callable[[str, dict | None, dict | None], bytes]
 
@@ -188,6 +191,9 @@ def _ingest_nvd_payload(db: Session, payload: dict) -> tuple[int, datetime | Non
         count += 1
         if data["last_modified"] and (latest is None or data["last_modified"] > latest):
             latest = data["last_modified"]
+        if count % INGEST_COMMIT_BATCH == 0:
+            db.commit()
+    db.commit()
     return count, latest
 
 
@@ -243,7 +249,7 @@ def sync_nvd_mirror(db: Session, *, fetch: Fetcher | None = None,
             # Persist resume cursor after each successful year before the next fetch can fail.
             state.mirror_next_year = year + 1
             state.mirror_complete = False
-            db.flush()
+            db.commit()
             sleep(0.2)
         # Also pull the "modified" feed so very recent edits are not missed.
         mod = fetch(f"{NVD_JSON_FEED_BASE}/nvdcve-2.0-modified.json.gz", None, None)
@@ -253,11 +259,13 @@ def sync_nvd_mirror(db: Session, *, fetch: Fetcher | None = None,
             latest = lm
         state.mirror_complete = True
         state.mirror_next_year = None
-        db.flush()
+        db.commit()
     except Exception as exc:
         error = str(exc)
+        db.rollback()
+        state = _nvd_feed_state(db)
         state.mirror_complete = False
-        db.flush()
+        db.commit()
         log.exception("NVD JSON mirror bootstrap failed")
     return {"count": count, "error": error, "latest": latest, "complete": bool(state.mirror_complete)}
 
@@ -376,6 +384,8 @@ def sync_kev(db: Session, *, fetch: Fetcher | None = None, now: datetime | None 
             row.kev = True
             row.kev_added_at = _parse_date(item.get("dateAdded")) or row.kev_added_at
             count += 1
+            if count % INGEST_COMMIT_BATCH == 0:
+                db.commit()
         # Clear KEV flags removed from the feed so stale "exploited in the wild" badges do not linger.
         if seen:
             stale = db.scalars(select(Vulnerability).where(Vulnerability.kev.is_(True))).all()
@@ -416,6 +426,8 @@ def sync_epss(db: Session, *, fetch: Fetcher | None = None, now: datetime | None
             except (KeyError, ValueError):
                 continue
             count += 1
+            if count % INGEST_COMMIT_BATCH == 0:
+                db.commit()
     except Exception as exc:
         error = str(exc)
         log.exception("EPSS feed sync failed")
@@ -462,10 +474,13 @@ def sync_all(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
     results: dict[str, dict] = {}
     if "nvd" in cfg.sources:
         results["nvd"] = sync_nvd(db, cfg, fetch=fetch, now=now)
+        db.commit()
     if "kev" in cfg.sources:
         results["kev"] = sync_kev(db, fetch=fetch, now=now)
+        db.commit()
     if "epss" in cfg.sources:
         results["epss"] = sync_epss(db, fetch=fetch, now=now)
+        db.commit()
     return results
 
 
@@ -483,6 +498,7 @@ def sync_and_rescore(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = 
     now = now or datetime.now(timezone.utc)
     results = sync_all(db, cfg, fetch=fetch, now=now)
     results["match"] = match_all(db, now=now)
+    db.commit()
     device_ids = list(db.scalars(select(Device.id)))
     apply_risk_scores(db, device_ids, now=now)
     return results

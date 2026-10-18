@@ -115,6 +115,7 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
         "vpn_s2s": bool(n.vpn_s2s),
         "baseline_scan_id": n.baseline_scan_id,
         "baseline_at": n.baseline_at,
+        "archived_at": n.archived_at,
         "created_at": n.created_at,
         "device_count": device_count,
         "active_count": active_count,

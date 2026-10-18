@@ -150,7 +150,8 @@ class _Applier:
         self.db, self.scan, self.outcome, self.cfg, self.now = db, scan, outcome, cfg, now
         self.correlate = correlate
         self.result = ApplyResult()
-        self.networks = [(n, AddressSet.from_specs(n.cidr)) for n in db.scalars(select(Network)).all()]
+        self.networks = [(n, AddressSet.from_specs(n.cidr))
+                         for n in db.scalars(select(Network).where(Network.archived_at.is_(None))).all()]
         self._scope_cache: dict[int, PortScope | None] = {}
         self.scope = PortScope(outcome.port_scope) if outcome.port_scope else None
 

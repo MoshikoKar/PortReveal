@@ -56,8 +56,10 @@ def _device_filter_conds(
     network_id: int | None,
     port: int | None,
     service: str | None,
+    include_archived: bool = False,
 ) -> list:
-    conds: list = [device_visible(db)]
+    # Filtering by one network explicitly is an opt-in to its findings, archived or not.
+    conds: list = [device_visible(db, include_archived=include_archived or network_id is not None)]
     if q and q.strip():
         conds.append(compile_host(prepare(q), make_ctx(db)))
     if status:
@@ -122,11 +124,13 @@ def list_devices(
     service: str | None = Query(None, max_length=100),
     sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status|os)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
+    include_archived: bool = False,
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service)
+    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service,
+                                 include_archived=include_archived)
     total = db.scalar(select(func.count(Device.id)).where(*conds)) or 0
     devices = list(db.scalars(
         select(Device)
@@ -149,11 +153,13 @@ def list_device_uuids(
     service: str | None = Query(None, max_length=100),
     sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status|os)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
     """All device UUIDs matching the same filters as the list endpoint (for bulk select)."""
-    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service)
+    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service,
+                                 include_archived=include_archived)
     # LIMIT cap+1 in SQL: never materializes more than the cap; one extra row detects overflow,
     # and the COUNT only runs then (for the error message).
     uuids = list(db.scalars(
@@ -362,7 +368,7 @@ def device_timeline(uuid: str, limit: int = Query(100, ge=1, le=TIMELINE_MAX_PER
     """Events, scans and web captures of one device, newest first (the UI groups them by day)."""
     d = _get(db, uuid)
     items: list[dict] = []
-    for e in db.scalars(select(Event).where(Event.device_id == d.id, event_visible(db))
+    for e in db.scalars(select(Event).where(Event.device_id == d.id, event_visible(db, include_archived=True))
                         .order_by(Event.id.desc()).limit(limit)).unique():
         items.append({"kind": "event", "at": e.created_at, **event_out(e)})
     for sh, s in db.execute(
@@ -387,7 +393,7 @@ def device_timeline(uuid: str, limit: int = Query(100, ge=1, le=TIMELINE_MAX_PER
 def device_events(uuid: str, paging: Paging = Depends(), db: Session = Depends(get_db),
                   user: User = Depends(current_user)):
     d = _get(db, uuid)
-    conds = (Event.device_id == d.id, event_visible(db))
+    conds = (Event.device_id == d.id, event_visible(db, include_archived=True))
     base = select(Event).where(*conds)
     total = db.scalar(select(func.count(Event.id)).where(*conds)) or 0
     rows = db.scalars(base.order_by(Event.id.desc()).offset(paging.offset).limit(paging.page_size)).unique().all()
