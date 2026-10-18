@@ -471,6 +471,16 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 .chip-x:hover { color: var(--high); }
 .timeline-day { padding: 8px 16px; font-size: 12px; font-weight: 600; color: var(--text-2); background: var(--panel-2); border-bottom: 1px solid var(--border); }
 
+/* ---------- print (vulnerabilities report) ---------- */
+@media print {
+  .sidebar, .topbar, .banner, .nav-backdrop, .no-print, .sysmenu { display: none !important; }
+  .app { display: block; }
+  .main, .content { margin: 0; padding: 0; max-width: none; }
+  .card { break-inside: avoid; box-shadow: none; }
+  a { color: inherit; text-decoration: none; }
+  body { background: #fff; color: #111; }
+}
+
 /* ---------- reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   /* Spinners still signal activity, just slowly; decorative motion stops. */

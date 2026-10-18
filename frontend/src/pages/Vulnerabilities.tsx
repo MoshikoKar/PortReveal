@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { downloadBlob, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
 import { VulnFindingsTable } from '../components/VulnFindingsTable';
 import { VulnHeatmap } from '../components/VulnHeatmap';
@@ -7,7 +9,7 @@ import { VulnRiskTrend, VulnSeverityTrend, VulnTrend } from '../components/VulnT
 import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
 import type { VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
-import { clearVulnFilters, parseVulnFilters, setVulnFilter, toggleVulnFilter, type VulnFilterKey } from '../vulnFilters';
+import { buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, toggleVulnFilter, type VulnFilterKey } from '../vulnFilters';
 
 const SEVERITY_COLOR: Record<string, string> = {
   critical: 'var(--high)', high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)',
@@ -24,6 +26,8 @@ export default function Vulnerabilities() {
   const filters = parseVulnFilters(sp);
   const page = Number(sp.get('page') || 1);
   const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', undefined, 30000);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const toggle = (key: VulnFilterKey, value: string) => setSp(toggleVulnFilter(sp, key, value));
   const set = (key: VulnFilterKey, value: string | undefined) => setSp(setVulnFilter(sp, key, value));
@@ -34,6 +38,21 @@ export default function Vulnerabilities() {
     setSp(next);
   };
   const activeFilters = Object.entries(filters) as [VulnFilterKey, string][];
+
+  const exportCsv = async () => {
+    setExportError(null);
+    setExporting(true);
+    try {
+      await downloadBlob(
+        `/vulns/export${query(buildVulnQuery(filters))}`,
+        `portreveal-vulns-${new Date().toISOString().slice(0, 10)}.csv`,
+      );
+    } catch (e: unknown) {
+      setExportError(e instanceof Error ? e.message : 'Export failed.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0 };
   const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
@@ -46,7 +65,14 @@ export default function Vulnerabilities() {
           <h1>Vulnerabilities</h1>
           <p>Matched CVEs across the network. Severity bands come from CVSS score, not NVD&apos;s own severity label — the two can disagree.</p>
         </div>
+        <div className="row wrap no-print" style={{ gap: 8 }}>
+          <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
+            {exporting ? 'Exporting…' : 'Export CSV'}
+          </button>
+          <button type="button" className="btn" onClick={() => window.print()}>Print report</button>
+        </div>
       </div>
+      {exportError && <div className="alert error no-print">{exportError}</div>}
       <ErrorBox error={error} />
       {!data ? (!error && <Loading />) : (
         <>
