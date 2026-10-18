@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { del, post } from '../api';
-import { ExposureCard, ProfileCard, RiskCard, RttCard, TagEditor, Timeline, VulnPanel } from '../components/DeviceIntel';
+import { ExposureCard, ProfileCard, RiskCard, RttCard, TagEditor, Timeline, TypeEvidenceCard, VulnPanel } from '../components/DeviceIntel';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
@@ -32,7 +32,10 @@ function IdentityBadge({ method, product, version }: { method: string | null; pr
     return <span className="badge ok" title="nmap matched a product signature">fingerprinted</span>;
   }
   if (method === 'probed') {
-    return <span className="badge medium" title="nmap matched only a protocol pattern in the response; no product identified">protocol match</span>;
+    return <span className="badge medium" title="nmap matched only a protocol pattern in the response; no product identified">protocol match only</span>;
+  }
+  if (!method && !product && !version) {
+    return <span className="badge outline" title="No service identification">not identified</span>;
   }
   return <span className="badge outline" title="Guessed from the port number">port guess</span>;
 }
@@ -107,13 +110,19 @@ export default function DeviceDetail() {
         <div>
           <div className="muted small"><Link to="/devices">Devices</Link> /</div>
           <h1 className="row" style={{ gap: 12 }}>
-            {d.hostname ?? d.current_ip}
+            {d.hostname ?? d.discovery_name ?? d.current_ip}
             <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} />
             <span title="Exposure score"><ScoreBadge score={d.score} /></span>
             {d.risk_scored_at && <span title="Risk score"><RiskBadge score={d.risk_score} kind="risk" /></span>}
             {d.risk_scored_at && <span title="Combined score"><RiskBadge score={d.combined_score} kind="combined" /></span>}
             {d.vuln_job && <Link to="/reports#vuln-jobs"><VulnJobBadge status={d.vuln_job.status} /></Link>}
-            {d.type && <Link className="badge accent" to={`/search?q=${encodeURIComponent(`type:${d.type}`)}`}>{d.type}</Link>}
+            {d.type && (
+              <Link className={`badge ${d.type === 'unknown' ? 'outline' : 'accent'}`}
+                to={`/search?q=${encodeURIComponent(`type:${d.type}`)}`}
+                title={d.type_confidence != null ? `${d.type_confidence}% confidence` : undefined}>
+                {d.type}
+              </Link>
+            )}
           </h1>
           <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
         </div>
@@ -185,6 +194,7 @@ export default function DeviceDetail() {
             <dt>OS guess</dt>
             <dd>
               {d.os_name ?? '—'}
+              {d.os_name && d.os_accuracy != null && d.os_accuracy < 85 && <span className="badge outline" style={{ marginLeft: 6 }}>uncertain</span>}
               {d.os_name && d.os_accuracy != null && <span className="muted small"> ({d.os_accuracy}% confidence)</span>}
               {d.os_name && d.os_source && <span className="badge outline" style={{ marginLeft: 6 }}>{d.os_source}</span>}
               {d.os_name && d.os_detected_at && (
@@ -192,7 +202,17 @@ export default function DeviceDetail() {
               )}
             </dd>
             <dt>Network</dt><dd>{d.network_name ?? '—'}{d.zone && <span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
-            <dt>Device type</dt><dd>{d.type ?? '—'}{d.classified_at && <span className="muted small"> (classified {relTime(d.classified_at)})</span>}</dd>
+            <dt>Device type</dt>
+            <dd>
+              {d.type === 'unknown' ? <span className="muted">Unknown (low confidence)</span> : d.type ?? '—'}
+              {d.type && d.type_confidence != null && <span className="muted small"> ({d.type_confidence}% confidence)</span>}
+              {d.classified_at && <span className="muted small"> · classified {relTime(d.classified_at)}</span>}
+            </dd>
+            <dt>Local discovery name</dt>
+            <dd>
+              {d.discovery_name ?? <span className="muted">—</span>}
+              {d.discovery_name && d.discovery_source && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
+            </dd>
             <dt>First seen</dt><dd>{fmtTime(d.first_seen)}</dd>
             <dt>Last seen</dt><dd>{fmtTime(d.last_seen)} <span className="muted">({relTime(d.last_seen)})</span></dd>
             <dt>Last port scan</dt><dd>{fmtTime(d.last_port_scan_at)}</dd>
@@ -211,6 +231,7 @@ export default function DeviceDetail() {
 
       <div className="grid three">
         <RiskCard d={d} />
+        <TypeEvidenceCard d={d} />
         <RttCard d={d} />
       </div>
 

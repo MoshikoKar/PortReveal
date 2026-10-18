@@ -100,6 +100,13 @@ class ScanSettings(BaseModel):
     host_timeout_minutes: int = Field(15, ge=1, le=240)
     full_host_timeout_minutes: int = Field(120, ge=5, le=720)
     os_detection: bool = True
+    # Re-run -O only when the last OS guess is older than this many days (or ports changed).
+    os_refresh_days: int = Field(7, ge=1, le=90)
+    # Below this accuracy the UI labels the OS guess as uncertain (spec 3.5).
+    os_min_accuracy_display: int = Field(85, ge=0, le=100)
+    # Set by migration 0018 when OS detection is flipped on for an existing install; Settings
+    # shows a one-time admin notice until dismissed (cleared by saving scan settings).
+    os_detection_enabled_notice: bool = False
     disappear_after_missed: int = Field(2, ge=1, le=30)
     mass_change_guard_percent: int = Field(50, ge=10, le=100)
     keep_raw_xml: bool = False
@@ -192,6 +199,8 @@ class RetentionSettings(BaseModel):
     # RTT samples (device_rtt_samples) churn far faster than everything else here (one row per
     # scan per device), so they get their own, shorter window instead of riding on `days`.
     rtt_sample_days: int = Field(90, ge=7, le=365)
+    # Hard cap per device (newest kept); graph API also limits to this many points.
+    rtt_samples_per_device: int = Field(200, ge=50, le=2000)
 
 
 class WebCaptureSettings(BaseModel):
@@ -253,12 +262,29 @@ class VulnSettings(BaseModel):
         bad = [s for s in v if s not in allowed]
         if bad:
             raise ValueError(f"unknown vulnerability source(s): {bad}")
-        return sorted(set(v))
+        out = sorted(set(v))
+        if not out:
+            raise ValueError("at least one vulnerability source is required")
+        return out
 
     @field_validator("sync_time")
     @classmethod
     def _sync_time(cls, v: str) -> str:
         return _hhmm(v, "sync_time")
+
+
+class DiscoverySettings(BaseModel):
+    """Local-only mDNS/SSDP/NetBIOS device-naming channel (spec section 9.2). On by default: it is
+    cheap (one shared multicast listen/search per scan, plus one short unicast query per device),
+    stays entirely on the LAN, and never runs an nmap UDP scan (-sU stays banned everywhere else)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    mdns: bool = True
+    ssdp: bool = True
+    netbios: bool = True
+    timeout_seconds: float = Field(2.0, ge=0.5, le=15.0)
 
 
 SECTIONS: dict[str, type[BaseModel]] = {
@@ -270,6 +296,7 @@ SECTIONS: dict[str, type[BaseModel]] = {
     "retention": RetentionSettings,
     "web_capture": WebCaptureSettings,
     "vuln": VulnSettings,
+    "discovery": DiscoverySettings,
 }
 
 T = TypeVar("T", bound=BaseModel)

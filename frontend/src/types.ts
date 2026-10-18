@@ -83,7 +83,8 @@ export interface SystemStatus {
 export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
   | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
-  | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed';
+  | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed'
+  | 'os_changed';
 
 export interface ChangeEvent {
   id: number;
@@ -118,9 +119,12 @@ export interface DeviceSummary {
   ip_assignment: 'static' | 'dynamic' | 'unknown' | null;
   last_rtt_ms: number | null;
   continuous_since: string | null;
+  score?: number | null;
   risk_score: number;
   combined_score: number;
   risk_scored_at: string | null;
+  discovery_name: string | null;
+  discovery_source: 'mdns' | 'ssdp' | 'netbios' | null;
   status: DeviceStatus;
   network_id: number | null;
   network_name: string | null;
@@ -185,6 +189,7 @@ export interface DeviceProfile {
   notes: string | null;
   exposure_factors: ExposureFactor[];
   risk_factors: ExposureFactor[];
+  type_evidence: ExposureFactor[];
   updated_at: string | null;
 }
 
@@ -198,6 +203,7 @@ export interface DeviceDetail extends DeviceSummary {
   rtt_samples: { rtt_ms: number; sampled_at: string }[];
   risk_level: ScoreLevel;
   combined_level: ScoreLevel;
+  type_confidence: number | null;
   vuln_job: VulnJobSummary | null;
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
@@ -529,6 +535,9 @@ export interface ScanSettings {
   host_timeout_minutes: number;
   full_host_timeout_minutes: number;
   os_detection: boolean;
+  os_refresh_days: number;
+  os_min_accuracy_display: number;
+  os_detection_enabled_notice: boolean;
   disappear_after_missed: number;
   mass_change_guard_percent: number;
   keep_raw_xml: boolean;
@@ -574,6 +583,14 @@ export interface VulnSettings {
   include_potential: boolean;
   min_cvss_display: number;
   scripts_enabled: boolean;
+}
+
+export interface DiscoverySettings {
+  enabled: boolean;
+  mdns: boolean;
+  ssdp: boolean;
+  netbios: boolean;
+  timeout_seconds: number;
 }
 
 export type VulnMatchState = 'confirmed' | 'potential' | 'dismissed';

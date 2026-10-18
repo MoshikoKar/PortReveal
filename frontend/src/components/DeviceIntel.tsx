@@ -83,7 +83,8 @@ export function TagEditor({ d, isAdmin, onChange }: { d: DeviceDetail; isAdmin: 
       {isAdmin && (
         <div className="muted small">
           Rule tags recompute each scan. × dismisses a rule tag so it stays off; × on a dismissed tag clears the dismiss.
-          Adding a rule or dismissed tag pins it as manual.
+          Adding a rule or dismissed tag pins it as manual. Pinning a type-bearing tag (e.g. printer, camera)
+          overrides automatic device-type classification.
         </div>
       )}
       <ErrorBox error={error} />
@@ -146,6 +147,39 @@ export function ProfileCard({ d, isAdmin, onChange }: { d: DeviceDetail; isAdmin
           <label className="field">Notes<textarea rows={4} value={draft.notes} maxLength={5000} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></label>
           <ErrorBox error={error} />
         </Modal>
+      )}
+    </Card>
+  );
+}
+
+export function TypeEvidenceCard({ d }: { d: DeviceDetail }) {
+  const evidence = d.profile.type_evidence || [];
+  return (
+    <Card title={<h2 className="row" style={{ gap: 8 }}>
+      Type evidence
+      {d.type_confidence != null && <span className="badge outline">{d.type_confidence}%</span>}
+    </h2>} flush>
+      {!evidence.length ? (
+        <div className="card-body muted small">
+          {d.type === 'unknown'
+            ? 'Signals were too weak to assert a device type (shown as unknown to avoid false positives).'
+            : 'No type evidence recorded yet.'}
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Signal</th><th>Points</th><th>Detail</th></tr></thead>
+            <tbody>
+              {evidence.map((e, i) => (
+                <tr key={`${e.factor}-${i}`}>
+                  <td className="mono small">{e.factor}</td>
+                  <td className="mono small">+{e.points}</td>
+                  <td className="small">{e.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Card>
   );
@@ -251,7 +285,7 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
             <thead><tr><th>CVE</th><th>Port / service</th><th>CVSS</th><th>State</th><th></th></tr></thead>
             <tbody>
               {[...active, ...(showDismissed ? dismissed : [])].map((v) => (
-                <tr key={v.cve_id} className={v.state === 'dismissed' ? 'dim' : ''}>
+                <tr key={`${v.cve_id}-${v.protocol}-${v.port}`} className={v.state === 'dismissed' ? 'dim' : ''}>
                   <td className="mono nowrap">
                     {v.cve_id}
                     {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
@@ -287,21 +321,33 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
 }
 
 const RTT_CHART_W = 280;
-const RTT_CHART_H = 48;
+const RTT_CHART_H = 64;
+const RTT_PAD = 4;
 
-/** Minimal dependency-free RTT-over-time sparkline (no chart library needed for one line). */
+/** Minimal dependency-free RTT-over-time chart with a zero baseline so small changes are not exaggerated. */
 function RttSparkline({ samples }: { samples: { rtt_ms: number; sampled_at: string }[] }) {
   if (samples.length < 2) return null;
   const values = samples.map((s) => s.rtt_ms);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-  const step = RTT_CHART_W / (samples.length - 1);
-  const points = values.map((v, i) => `${(i * step).toFixed(1)},${(RTT_CHART_H - ((v - min) / span) * RTT_CHART_H).toFixed(1)}`).join(' ');
+  const max = Math.max(...values, 1);
+  const step = (RTT_CHART_W - 28) / (samples.length - 1);
+  const y = (v: number) => RTT_PAD + (1 - v / max) * (RTT_CHART_H - 2 * RTT_PAD);
+  const points = values.map((v, i) => `${(28 + i * step).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const last = samples[samples.length - 1];
   return (
-    <svg width={RTT_CHART_W} height={RTT_CHART_H} role="img" aria-label="RTT over time">
-      <polyline points={points} fill="none" stroke="var(--accent, #4a90d9)" strokeWidth={1.5} />
-    </svg>
+    <div>
+      <svg width={RTT_CHART_W} height={RTT_CHART_H} role="img"
+        aria-label={`RTT over time, 0 to ${max.toFixed(1)} ms`}>
+        <line x1={28} y1={y(0)} x2={RTT_CHART_W} y2={y(0)} stroke="var(--border, #ccc)" strokeWidth={1} />
+        <line x1={28} y1={RTT_PAD} x2={28} y2={RTT_CHART_H - RTT_PAD} stroke="var(--border, #ccc)" strokeWidth={1} />
+        <text x={0} y={RTT_PAD + 8} className="muted" style={{ fontSize: 9 }}>{max.toFixed(0)}</text>
+        <text x={0} y={RTT_CHART_H - 2} className="muted" style={{ fontSize: 9 }}>0</text>
+        <polyline points={points} fill="none" stroke="var(--accent, #4a90d9)" strokeWidth={1.5} />
+        <circle cx={28 + (samples.length - 1) * step} cy={y(last.rtt_ms)} r={2.5} fill="var(--accent, #4a90d9)">
+          <title>{`${last.rtt_ms.toFixed(1)} ms @ ${fmtTime(last.sampled_at)}`}</title>
+        </circle>
+      </svg>
+      <div className="muted small">Hover the end point for the latest sample. Scale starts at 0 ms.</div>
+    </div>
   );
 }
 
@@ -310,7 +356,10 @@ export function RttCard({ d }: { d: DeviceDetail }) {
     <Card title="Latency &amp; uptime">
       <dl className="dl">
         <dt>Last RTT</dt>
-        <dd>{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">—</span>}</dd>
+        <dd>
+          {d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">—</span>}
+          <div className="muted small">Unprivileged TCP-connect scans report less accurate RTT than privileged SYN scans.</div>
+        </dd>
         <dt>Availability ({d.availability_window_days}d)</dt>
         <dd>{d.availability_pct != null ? `${d.availability_pct}%` : <span className="muted">not enough history</span>}</dd>
         <dt>Continuous since</dt>

@@ -157,6 +157,12 @@ VULN_JOB_TRIGGER_AFTER_SCAN = "after_scan"
 VULN_JOB_TRIGGER_MANUAL = "manual"
 VULN_JOB_TRIGGERS = (VULN_JOB_TRIGGER_AFTER_SCAN, VULN_JOB_TRIGGER_MANUAL)
 
+# Weighted device-type classification (spec section 9): a real, open-ended set driven by
+# core/tagging.py's RULES, so not a CHECK-constrained CLOSED_VALUES column. "unknown" is a
+# sentinel distinct from None/NULL: None means no rule matched at all; "unknown" means some
+# evidence pointed at a type but the combined score stayed below TYPE_CONFIDENCE_THRESHOLD.
+DEVICE_TYPE_UNKNOWN = "unknown"
+
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
 # migration that rewrites the matching constraint.
@@ -283,6 +289,9 @@ class Device(Base):
     absence_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Inventory intelligence (recomputed after every scan / web capture that touches the device)
     device_type: Mapped[str | None] = mapped_column(String(40), index=True)
+    # Weighted multi-signal confidence for device_type, 0-100 (spec section 9). device_type is
+    # "unknown" (not a guess) when the winning type's score falls below TYPE_CONFIDENCE_THRESHOLD.
+    type_confidence: Mapped[int | None] = mapped_column(Integer)
     exposure_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Vulnerability-based risk (spec section 5): separate from exposure_score above.
@@ -292,6 +301,10 @@ class Device(Base):
     ssh_hostkey_sha256: Mapped[str | None] = mapped_column(String(64))
     # Static vs dynamic IP (spec 7): derived from device_ips history in core/ip_assignment.py.
     ip_assignment: Mapped[str | None] = mapped_column(String(10))
+    # Local-only discovery name (spec section 9.2): mDNS/SSDP/NetBIOS, never nmap/-sU. A weighted
+    # type-classification signal, and a fallback display name when no DNS/nmap hostname is known.
+    discovery_name: Mapped[str | None] = mapped_column(String(255))
+    discovery_source: Mapped[str | None] = mapped_column(String(10))  # mdns | ssdp | netbios
     # Latency / uptime (spec 6)
     last_rtt_ms: Mapped[float | None] = mapped_column(Float)
     # Since when the device has been continuously seen (reset on a not_detected -> seen transition).
@@ -588,6 +601,7 @@ class DeviceProfile(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     exposure_factors: Mapped[list | None] = mapped_column(JSON)
     risk_factors: Mapped[list | None] = mapped_column(JSON)
+    type_evidence: Mapped[list | None] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     device: Mapped[Device] = relationship(back_populates="profile")
 

@@ -191,16 +191,27 @@ def _profile_out(p: DeviceProfile | None) -> dict:
         "criticality": p.criticality if p else None, "notes": p.notes if p else None,
         "exposure_factors": (p.exposure_factors or []) if p else [],
         "risk_factors": (p.risk_factors or []) if p else [],
+        "type_evidence": (p.type_evidence or []) if p else [],
         "updated_at": p.updated_at if p else None,
     }
 
 
-_RECENT_VULN_JOBS = 20  # one job is active at a time by design; this is a bounded, cheap app-side scan
-
-
 def _latest_vuln_job_for_device(db: Session, device_id: int) -> VulnJob | None:
-    recent = db.scalars(select(VulnJob).order_by(VulnJob.id.desc()).limit(_RECENT_VULN_JOBS)).all()
-    return next((j for j in recent if j.device_ids and device_id in j.device_ids), None)
+    """Newest job that targeted this device. JSON device_ids is scanned in Python (portable across
+    SQLite/Postgres); bound the walk so a busy install cannot load the whole history."""
+    # Walk newest-first in chunks until a hit (covers jobs older than a tiny recent window).
+    offset, chunk = 0, 100
+    while offset < 2000:
+        batch = db.scalars(
+            select(VulnJob).order_by(VulnJob.id.desc()).offset(offset).limit(chunk)
+        ).all()
+        if not batch:
+            return None
+        for j in batch:
+            if j.device_ids and device_id in j.device_ids:
+                return j
+        offset += chunk
+    return None
 
 
 def _vuln_job_summary(j: VulnJob | None) -> dict | None:
@@ -236,6 +247,7 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "ips": [{"ip": i.ip, "first_seen": i.first_seen, "last_seen": i.last_seen} for i in d.ips],
         "previous_ips": [i.ip for i in d.ips if i.ip != d.current_ip],
         "type": d.device_type,
+        "type_confidence": d.type_confidence,
         "score": score,
         "score_level": exposure_level(score),
         "risk_level": exposure_level(d.risk_score or 0),
@@ -421,14 +433,23 @@ def _vuln_out(dpv: DevicePortVuln, port: DevicePort, vuln: Vulnerability) -> dic
 @router.get("/{uuid}/vulns")
 def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Every CVE matched to this device's ports (confirmed, potential and dismissed)."""
+    from ..settings_store import VulnSettings, get_section
+
     d = _get(db, uuid)
+    cfg = get_section(db, VulnSettings)
     rows = db.execute(
         select(DevicePortVuln, DevicePort, Vulnerability)
         .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
         .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
         .where(DevicePort.device_id == d.id)
     ).all()
-    items = [_vuln_out(dpv, port, vuln) for dpv, port, vuln in rows]
+    items = []
+    for dpv, port, vuln in rows:
+        if not cfg.include_potential and dpv.state == VULN_STATE_POTENTIAL:
+            continue
+        if (vuln.cvss_base or 0) < cfg.min_cvss_display and dpv.state != VULN_STATE_DISMISSED:
+            continue
+        items.append(_vuln_out(dpv, port, vuln))
     items.sort(key=lambda it: (it["state"] == VULN_STATE_DISMISSED, it["kev"] is not True,
                                -(it["cvss_base"] or 0)))
     return {"items": items}
@@ -438,6 +459,8 @@ def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(
 def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                  user: User = Depends(require_admin)):
     """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
+    from ..core.vuln.score import apply_risk_scores
+
     d = _get(db, uuid)
     rows = db.scalars(
         select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
@@ -447,6 +470,7 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
         raise HTTPException(404, "No matching vulnerability on this device")
     for row in rows:
         row.state = VULN_STATE_DISMISSED
+    apply_risk_scores(db, [d.id], now=utcnow())
     audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
     db.commit()
@@ -456,6 +480,8 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
 @router.delete("/{uuid}/vulns/{cve_id}/dismiss", status_code=204)
 def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
+    from ..core.vuln.score import apply_risk_scores
+
     d = _get(db, uuid)
     rows = db.scalars(
         select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
@@ -466,6 +492,7 @@ def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depen
         raise HTTPException(404, "No dismissed match for this device/CVE")
     for row in rows:
         row.state = VULN_STATE_POTENTIAL  # corrected to `confirmed` (if warranted) on the next match run
+    apply_risk_scores(db, [d.id], now=utcnow())
     audit(db, user.username, "device.vuln_undismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
     db.commit()

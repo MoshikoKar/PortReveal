@@ -95,6 +95,34 @@ def _enrich_open_services(db: Session, device_ids: list[int], *, scan_id: int | 
         if n >= ENRICH_WARN_THRESHOLD:
             log.warning("scan %s: %s enrichment failed for %d of %d devices (enable DEBUG for details)",
                         scan_id, probe.upper(), n, len(devices))
+    if live:
+        try:
+            _enrich_local_names(db, devices)
+        except Exception:
+            log.debug("scan %s: local discovery (mDNS/SSDP/NetBIOS) failed", scan_id, exc_info=True)
+
+
+def _enrich_local_names(db: Session, devices: dict[int, Device]) -> None:
+    """Local-only mDNS/SSDP/NetBIOS device names (spec 9.2): a weighted type-classification signal,
+    and a fallback display name. Never touches nmap; skipped entirely when disabled or in mock mode
+    (the caller already checks `live`, i.e. a real scanner is configured)."""
+    from ..settings_store import DiscoverySettings
+    from .discovery import collect_local_names
+
+    cfg = get_section(db, DiscoverySettings)
+    if not cfg.enabled or not devices:
+        return
+    found = collect_local_names(
+        [d.current_ip for d in devices.values()], mdns=cfg.mdns, ssdp=cfg.ssdp, netbios=cfg.netbios,
+        timeout=cfg.timeout_seconds,
+    )
+    for dev in devices.values():
+        hit = found.get(dev.current_ip)
+        if hit:
+            dev.discovery_name, dev.discovery_source = hit
+        else:
+            # Clear stale names when this pass heard nothing for the current IP (spec 9.2).
+            dev.discovery_name, dev.discovery_source = None, None
 
 
 def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading } from '../../components/ui';
-import type { EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, WebCaptureSettings } from '../../types';
+import type { DiscoverySettings, EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, WebCaptureSettings } from '../../types';
 import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
 
 function useForm<T>(path: string) {
@@ -172,7 +172,20 @@ export function ScanProfileForm({ onDirtyChange }: { onDirtyChange?: (dirty: boo
           <Num label="Missed scans before 'not detected'" value={s.disappear_after_missed} min={1} max={30} onChange={(v) => set({ disappear_after_missed: v })} hint="Consecutive complete scans; avoids false 'disappeared' alerts" />
           <Num label="Mass-change guard (%)" value={s.mass_change_guard_percent} min={10} max={100} onChange={(v) => set({ mass_change_guard_percent: v })} hint="Skip removals when more than this share would vanish at once" />
           <Num label="Keep raw XML (days)" value={s.raw_retention_days} min={1} max={90} onChange={(v) => set({ raw_retention_days: v })} />
+          <Num label="OS refresh interval (days)" value={s.os_refresh_days} min={1} max={90} onChange={(v) => set({ os_refresh_days: v })} hint="Re-run -O only when the last guess is older than this" />
+          <Num label="OS min accuracy to display as certain" value={s.os_min_accuracy_display} min={0} max={100} onChange={(v) => set({ os_min_accuracy_display: v })} hint="Below this the UI labels the guess uncertain (default 85)" />
         </div>
+        {s.os_detection_enabled_notice && (
+          <div className="alert ok">
+            OS detection was turned on for this install (one-time migration). Full fingerprinting needs
+            privileged nmap (raw sockets / NET_RAW / Npcap). You can turn it off below.
+            <div style={{ marginTop: 8 }}>
+              <button type="button" className="btn sm" onClick={() => f.save({ ...s, os_detection_enabled_notice: false })}>
+                Dismiss notice
+              </button>
+            </div>
+          </div>
+        )}
         <div className="row wrap">
           <label className="check" title="Requires a privileged nmap (raw sockets) and sends one UDP probe to a closed port as part of the fingerprint; without privileges this is skipped automatically and the OS is guessed from service/banner data instead.">
             <input type="checkbox" checked={s.os_detection} onChange={(e) => set({ os_detection: e.target.checked })} />
@@ -476,7 +489,7 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           <Num label="Min CVSS to display" value={s.min_cvss_display} min={0} max={10} onChange={(v) => set({ min_cvss_display: v })} />
         </div>
         <div className="row wrap">
-          <label className="check"><input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />Offline mode (no feed downloads; import snapshots via the CLI instead)</label>
+          <label className="check"><input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />Offline mode (no feed downloads; import with <code>npm run cli -- vuln-import PATH</code>)</label>
           <label className="check"><input type="checkbox" checked={s.include_potential} onChange={(e) => set({ include_potential: e.target.checked })} />Show "potential" matches (imprecise version), not just confirmed</label>
           <label className="check" title="Safe/discovery nmap scripts only (SCRIPT_ALLOWLIST) — never vulners, never intrusive categories">
             <input type="checkbox" checked={s.scripts_enabled} onChange={(e) => set({ scripts_enabled: e.target.checked })} />
@@ -491,6 +504,39 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
             {syncing ? 'Starting…' : 'Sync feeds now'}
           </button>
         </div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- local discovery (mDNS/SSDP/NetBIOS)
+export function DiscoveryForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const f = useForm<DiscoverySettings>('/settings/discovery');
+  useReportDirty(f.dirty, onDirtyChange);
+  if (!f.form) return <Card title="Local device-name discovery"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<DiscoverySettings>) => f.setForm({ ...s, ...patch });
+  return (
+    <Card title="Local device-name discovery">
+      <div className="stack">
+        <div className="muted small">
+          A local-only, LAN-bound channel that strengthens device-type classification with names
+          devices already announce: mDNS/Bonjour (passive listen), SSDP/UPnP (one multicast search),
+          and NetBIOS (one short query per already-known device). Nothing ever leaves the LAN, and
+          this never runs an nmap UDP scan (<code>-sU</code> stays banned everywhere else). On by
+          default because each source is capped to a short, shared time window regardless of how
+          many devices are being scanned.
+        </div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable local discovery</label>
+        <div className="row wrap">
+          <label className="check small"><input type="checkbox" checked={s.mdns} disabled={!s.enabled} onChange={(e) => set({ mdns: e.target.checked })} />mDNS / Bonjour</label>
+          <label className="check small"><input type="checkbox" checked={s.ssdp} disabled={!s.enabled} onChange={(e) => set({ ssdp: e.target.checked })} />SSDP / UPnP</label>
+          <label className="check small"><input type="checkbox" checked={s.netbios} disabled={!s.enabled} onChange={(e) => set({ netbios: e.target.checked })} />NetBIOS</label>
+        </div>
+        <Num label="Timeout per source (seconds)" value={s.timeout_seconds} min={0.5} max={15}
+          onChange={(v) => set({ timeout_seconds: v })} hint="mDNS/SSDP listen window; NetBIOS uses a shorter fixed window" />
+        <Msg msg={f.msg} />
+        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save(s)}>Save</button></div>
       </div>
     </Card>
   );

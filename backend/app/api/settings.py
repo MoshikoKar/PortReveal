@@ -17,6 +17,7 @@ from ..db import get_db
 from ..models import EVENT_TYPES, User
 from ..security import encrypt_secret
 from ..settings_store import (
+    DiscoverySettings,
     LdapSettings,
     NotificationSettings,
     PresenceSettings,
@@ -169,6 +170,21 @@ def sync_vuln_now(request: Request, db: Session = Depends(get_db), user: User = 
     audit(db, user.username, "settings.vuln_sync", None, {"started": started}, _ip(request))
     db.commit()
     return {"ok": True, "message": "Sync started in the background" if started else "A sync is already running"}
+
+
+# --- local discovery channel (mDNS/SSDP/NetBIOS device names, spec section 9.2) -----------------
+@router.get("/discovery")
+def get_discovery_settings(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return get_section(db, DiscoverySettings).model_dump()
+
+
+@router.put("/discovery")
+def put_discovery_settings(body: DiscoverySettings, request: Request, db: Session = Depends(get_db),
+                           user: User = Depends(require_admin)):
+    put_section(db, body)
+    audit(db, user.username, "settings.discovery", None, body.model_dump(), _ip(request))
+    db.commit()
+    return body.model_dump()
 
 
 # --- notifications --------------------------------------------------------------
