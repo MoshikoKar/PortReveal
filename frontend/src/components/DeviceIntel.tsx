@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { del, post, put } from '../api';
 import type { DeviceDetail, DeviceProfile, DeviceVuln, TimelineItem } from '../types';
 import { CRITICALITY_LEVELS, EVENT_LABELS, SCAN_TYPE_LABELS, fmtTime, useApi } from '../util';
-import { Card, Empty, ErrorBox, Loading, Modal, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
+import { Card, Empty, ErrorBox, Loading, Modal, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, SortTh, confirmDiscard } from './ui';
 
 const TIMELINE_LIMIT = 100;
 const TIMELINE_PREVIEW = 10;
@@ -247,6 +247,8 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
   const [showDismissed, setShowDismissed] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [page, setPage] = useState(1);
+  // CVSS high→low by default; click the column header to toggle.
+  const [cvssDesc, setCvssDesc] = useState(true);
 
   const dismiss = async (cve_id: string) => {
     if (busy) return;
@@ -271,7 +273,14 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
     }
   };
 
-  const rows = [...active, ...(showDismissed ? dismissed : [])];
+  const rows = [...active, ...(showDismissed ? dismissed : [])].sort((a, b) => {
+    const aDismissed = a.state === 'dismissed' ? 1 : 0;
+    const bDismissed = b.state === 'dismissed' ? 1 : 0;
+    if (aDismissed !== bDismissed) return aDismissed - bDismissed;
+    const av = a.cvss_base ?? 0;
+    const bv = b.cvss_base ?? 0;
+    return cvssDesc ? bv - av : av - bv;
+  });
   const shown = expanded
     ? rows
     : rows.slice((page - 1) * VULN_PAGE, page * VULN_PAGE);
@@ -294,14 +303,30 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
         <>
           <div className="table-wrap">
             <table className="compact">
-              <thead><tr><th>CVE</th><th>Port / service</th><th>CVSS</th><th>State</th><th></th></tr></thead>
+              <thead>
+                <tr>
+                  <th>CVE</th>
+                  <th>Port / service</th>
+                  <SortTh active desc={cvssDesc} onSort={() => { setCvssDesc((v) => !v); setPage(1); }}>CVSS</SortTh>
+                  <th>State</th>
+                  <th></th>
+                </tr>
+              </thead>
               <tbody>
                 {shown.map((v) => (
                   <tr key={`${v.cve_id}-${v.protocol}-${v.port}`} className={v.state === 'dismissed' ? 'dim' : ''}>
                     <td className="mono nowrap">
                       {v.cve_id}
                       {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
-                      {v.epss != null && <span className="muted small" style={{ marginLeft: 6 }}>EPSS {(v.epss * 100).toFixed(0)}%</span>}
+                      {v.epss != null && (
+                        <span
+                          className="muted small"
+                          style={{ marginLeft: 6 }}
+                          title="EPSS (Exploit Prediction Scoring System): estimated chance this CVE will be exploited in the wild in the next 30 days. Separate from CVSS severity."
+                        >
+                          EPSS {(v.epss * 100).toFixed(0)}%
+                        </span>
+                      )}
                     </td>
                     <td className="small">
                       {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
