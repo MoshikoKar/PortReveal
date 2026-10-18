@@ -159,20 +159,30 @@ def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_
 
 @router.get("/vuln/status")
 def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    """Local CVE cache state: per-feed bookkeeping, cache size and whether a sync is running."""
+    """Local CVE cache state: per-feed bookkeeping, cache size and whether a sync is running.
+
+    ``cve_count`` prefers ``vuln_feed_state.record_count`` for NVD so the endpoint stays cheap
+    while a large import/sync holds a write lock on ``vulnerabilities`` (COUNT(*) would stall).
+    """
     from ..core.vuln.sync import NVD_MIRROR_START_YEAR, sync_running
 
+    feed_rows = db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
     feeds = [
         {"source": f.source, "last_synced_at": f.last_synced_at, "record_count": f.record_count or 0,
          "last_error": f.last_error,
          "mirror_complete": f.mirror_complete if f.source == "nvd" else None,
          "mirror_next_year": (f.mirror_next_year or NVD_MIRROR_START_YEAR)
          if f.source == "nvd" and not f.mirror_complete else None}
-        for f in db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
+        for f in feed_rows
     ]
+    nvd = next((f for f in feed_rows if f.source == "nvd"), None)
+    if nvd is not None:
+        cve_count = nvd.record_count or 0
+    else:
+        cve_count = db.scalar(select(func.count(Vulnerability.cve_id))) or 0
     return {
         "sync_running": sync_running(),
-        "cve_count": db.scalar(select(func.count(Vulnerability.cve_id))) or 0,
+        "cve_count": cve_count,
         "mirror_start_year": NVD_MIRROR_START_YEAR,
         "feeds": feeds,
     }
