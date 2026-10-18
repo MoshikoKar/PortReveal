@@ -192,6 +192,46 @@ def test_device_vulns_list_dismiss_and_undismiss(admin, db):
     assert admin.post(f"/api/devices/{uuid}/vulns/CVE-NOPE/dismiss", headers=csrf(admin)).status_code == 404
 
 
+
+
+def test_undismiss_restores_risk_score(admin, db):
+    """Undo must re-score the device the same way dismiss does (autoflush is off)."""
+    from datetime import datetime, timezone
+    from app.core.vuln.score import apply_risk_scores
+    from app.models import DevicePortVuln, Vulnerability
+
+    T = datetime(2026, 1, 20, tzinfo=timezone.utc)
+    d = device_by_ip(db, "10.0.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add_all([
+        Vulnerability(cve_id="CVE-HIGH", cvss_base=9.8, kev=True),
+        Vulnerability(cve_id="CVE-LOW", cvss_base=2.0, kev=False),
+    ])
+    db.flush()
+    db.add_all([
+        DevicePortVuln(device_port_id=p.id, cve_id="CVE-HIGH", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=p.id, cve_id="CVE-LOW", state=VULN_STATE_CONFIRMED, matched_at=T),
+    ])
+    db.commit()
+    apply_risk_scores(db, [d.id], now=T)
+    db.commit()
+    d = device_by_ip(db, "10.0.0.1")
+    before_risk, before_combined = d.risk_score, d.combined_score
+    assert before_risk > 0
+
+    uuid = _uuid(admin, "10.0.0.1")
+    assert admin.post(f"/api/devices/{uuid}/vulns/CVE-HIGH/dismiss", headers=csrf(admin)).status_code == 200
+    db.expire_all()
+    d = device_by_ip(db, "10.0.0.1")
+    assert d.risk_score < before_risk
+
+    assert admin.delete(f"/api/devices/{uuid}/vulns/CVE-HIGH/dismiss", headers=csrf(admin)).status_code == 204
+    db.expire_all()
+    d = device_by_ip(db, "10.0.0.1")
+    assert d.risk_score == before_risk
+    assert d.combined_score == before_combined
+
+
 def test_undismiss_restores_potential_when_that_was_prior_state(admin, db):
     uuid = _uuid(admin, "10.0.0.1")
     d = device_by_ip(db, "10.0.0.1")

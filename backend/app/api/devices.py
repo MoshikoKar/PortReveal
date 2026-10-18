@@ -458,12 +458,17 @@ def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(
 
 
 def _after_vuln_state_change(db: Session, device_id: int) -> None:
-    """Re-score the device and drop the summary cache so dismiss/undo both refresh immediately."""
+    """Re-score the device and drop the summary cache so dismiss/undo both refresh immediately.
+
+    Session autoflush is off: flush pending dismiss/undo state before risk scoring reads
+    ``device_port_vulns``, otherwise undo keeps the post-dismiss score until the next scan.
+    """
     from ..core.vuln.lifecycle import sync_finding_lifecycle
     from ..core.vuln.score import apply_risk_scores
     from ..core.vuln.summary import invalidate_vuln_summary_cache
 
     now = utcnow()
+    db.flush()
     apply_risk_scores(db, [device_id], now=now)
     sync_finding_lifecycle(db, now=now)
     invalidate_vuln_summary_cache()
