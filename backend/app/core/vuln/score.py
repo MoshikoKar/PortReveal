@@ -32,6 +32,10 @@ TOP_N = 5
 SECONDARY_WEIGHT = 0.2
 COMBINED_EXPOSURE_DIVISOR = 200
 RISK_CHUNK = 500
+# Dashboard "high-risk devices" card (spec section 5.7): same cut points as exposure.py's
+# HIGH_THRESHOLD/MEDIUM_THRESHOLD, since combined_score shares that 0-100 scale.
+RISK_HIGH_THRESHOLD = 60
+RISK_MEDIUM_THRESHOLD = 30
 
 
 @dataclass(frozen=True)
