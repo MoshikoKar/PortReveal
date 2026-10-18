@@ -1,6 +1,6 @@
 import { Card } from './ui';
 import type { AgeBucket, FacetBucket, VulnSummary } from '../types';
-import { barWidthPct, maxOf } from '../vulnChartMath';
+import { barFillStyle, maxOf } from '../vulnChartMath';
 import {
   type VulnFilterKey, type VulnFilters, vendorProductFacetActive,
 } from '../vulnFilters';
@@ -35,7 +35,7 @@ function FacetBars({ title, buckets, filterKey, filters, onToggle, clickable = t
             const row = (
               <>
                 <span style={active ? { fontWeight: 600, color: 'var(--accent)' } : undefined}>{b.label ?? value}</span>
-                <span className="bar-track"><span className="bar-fill" style={{ width: `${barWidthPct(b.count, max)}%` }} /></span>
+                <span className="bar-track"><span className="bar-fill" style={barFillStyle(b.count, max)} /></span>
                 <span className="right">{b.count}</span>
               </>
             );
@@ -76,7 +76,7 @@ function VendorProductFacet({ buckets, filters, onToggleKey }: {
                 style={{ color: 'var(--text-2)', background: 'none', border: 0, padding: 0, width: '100%', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
                 onClick={() => onToggleKey(value)}>
                 <span style={active ? { fontWeight: 600, color: 'var(--accent)' } : undefined}>{b.label ?? value}</span>
-                <span className="bar-track"><span className="bar-fill" style={{ width: `${barWidthPct(b.count, max)}%` }} /></span>
+                <span className="bar-track"><span className="bar-fill" style={barFillStyle(b.count, max)} /></span>
                 <span className="right">{b.count}</span>
               </button>
             );
