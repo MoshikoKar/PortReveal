@@ -118,6 +118,9 @@ export interface DeviceSummary {
   ip_assignment: 'static' | 'dynamic' | 'unknown' | null;
   last_rtt_ms: number | null;
   continuous_since: string | null;
+  risk_score: number;
+  combined_score: number;
+  risk_scored_at: string | null;
   status: DeviceStatus;
   network_id: number | null;
   network_name: string | null;
@@ -181,6 +184,7 @@ export interface DeviceProfile {
   criticality: Criticality | null;
   notes: string | null;
   exposure_factors: ExposureFactor[];
+  risk_factors: ExposureFactor[];
   updated_at: string | null;
 }
 
@@ -192,6 +196,8 @@ export interface DeviceDetail extends DeviceSummary {
   availability_pct: number | null;
   availability_window_days: number;
   rtt_samples: { rtt_ms: number; sampled_at: string }[];
+  risk_level: ScoreLevel;
+  combined_level: ScoreLevel;
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
   previous_ips: string[];
@@ -554,6 +560,41 @@ export interface LdapSettings {
   admin_group_dn: string;
   viewer_group_dn: string;
   timeout_seconds: number;
+}
+
+export interface VulnSettings {
+  enabled: boolean;
+  sources: ('nvd' | 'kev' | 'epss')[];
+  sync_interval_hours: number;
+  sync_time: string;
+  offline_mode: boolean;
+  nvd_api_key_set: boolean;
+  nvd_api_key?: string | null;
+  include_potential: boolean;
+  min_cvss_display: number;
+  scripts_enabled: boolean;
+}
+
+export type VulnMatchState = 'confirmed' | 'potential' | 'dismissed';
+
+export interface DeviceVuln {
+  cve_id: string;
+  port: number;
+  protocol: string;
+  service: string | null;
+  product: string | null;
+  version: string | null;
+  matched_cpe: string | null;
+  state: VulnMatchState;
+  source: 'cache' | 'nmap_script';
+  cvss_base: number | null;
+  cvss_vector: string | null;
+  severity: string | null;
+  kev: boolean;
+  epss: number | null;
+  epss_percentile: number | null;
+  summary: string | null;
+  matched_at: string;
 }
 
 export interface AuditEntry {

@@ -148,6 +148,10 @@ def upsert_cve(db: Session, data: dict, matches: list[dict]) -> None:
     db.execute(delete(VulnCpeMatch).where(VulnCpeMatch.cve_id == data["cve_id"]))
     for m in matches:
         db.add(VulnCpeMatch(cve_id=data["cve_id"], **m))
+    # This session has autoflush off (app.db.SessionLocal): a plain `select(VulnCpeMatch)` run by a
+    # caller right after upsert_cve (e.g. match.py, in the same sync-and-rescore pass) would
+    # otherwise miss these pending rows entirely.
+    db.flush()
 
 
 def _update_feed_state(db: Session, source: str, now: datetime, cursor: datetime | None,

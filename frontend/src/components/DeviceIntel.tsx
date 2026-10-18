@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { del, post, put } from '../api';
-import type { DeviceDetail, DeviceProfile, TimelineItem } from '../types';
+import type { DeviceDetail, DeviceProfile, DeviceVuln, TimelineItem } from '../types';
 import { CRITICALITY_LEVELS, EVENT_LABELS, SCAN_TYPE_LABELS, fmtTime, useApi } from '../util';
-import { Card, Empty, ErrorBox, Loading, Modal, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
+import { Card, Empty, ErrorBox, Loading, Modal, RiskBadge, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
 
 const TIMELINE_LIMIT = 100;
 const TIMELINE_PREVIEW = 10;
@@ -170,6 +170,117 @@ export function ExposureCard({ d }: { d: DeviceDetail }) {
             ))}
           </tbody>
         </table>
+      )}
+    </Card>
+  );
+}
+
+export function RiskCard({ d }: { d: DeviceDetail }) {
+  const factors = d.profile.risk_factors;
+  return (
+    <Card title={<h2 className="row" style={{ gap: 8 }}>Risk score <RiskBadge score={d.risk_score} kind="risk" /></h2>} flush>
+      {!d.risk_scored_at ? (
+        <div className="card-body muted small">Not scored yet: no vulnerability feed sync has run, or no CVE matched this device's services.</div>
+      ) : !factors.length ? (
+        <div className="card-body muted small">No known vulnerabilities matched to this device's identified services.</div>
+      ) : (
+        <table>
+          <tbody>
+            {factors.map((f, i) => (
+              <tr key={`${f.factor}-${i}`}>
+                <td>{f.detail}</td>
+                <td className="right mono nowrap">+{f.points}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="card-body muted small" style={{ borderTop: '1px solid var(--border)' }}>
+        Combined score (risk boosted by exposure): <RiskBadge score={d.combined_score} kind="combined" />
+      </div>
+    </Card>
+  );
+}
+
+/** Matched CVEs for this device's open services (spec section 5): confirmed/potential, KEV, EPSS. */
+export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: boolean; onReload: () => void }) {
+  const { data, error, reload } = useApi<{ items: DeviceVuln[] }>(`/devices/${d.uuid}/vulns`, undefined, 30000);
+  const [busy, setBusy] = useState<string | null>(null);
+  const items = data?.items ?? [];
+  const active = items.filter((v) => v.state !== 'dismissed');
+  const dismissed = items.filter((v) => v.state === 'dismissed');
+  const [showDismissed, setShowDismissed] = useState(false);
+
+  const dismiss = async (cve_id: string) => {
+    if (busy) return;
+    setBusy(cve_id);
+    try {
+      await post(`/devices/${d.uuid}/vulns/${encodeURIComponent(cve_id)}/dismiss`);
+      await reload();
+      onReload();
+    } finally {
+      setBusy(null);
+    }
+  };
+  const undismiss = async (cve_id: string) => {
+    if (busy) return;
+    setBusy(cve_id);
+    try {
+      await del(`/devices/${d.uuid}/vulns/${encodeURIComponent(cve_id)}/dismiss`);
+      await reload();
+      onReload();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card title="Vulnerabilities" flush
+      actions={dismissed.length > 0 && (
+        <label className="check small">
+          <input type="checkbox" checked={showDismissed} onChange={(e) => setShowDismissed(e.target.checked)} />
+          show {dismissed.length} dismissed
+        </label>
+      )}>
+      <ErrorBox error={error} />
+      {!data ? (!error && <Loading />) : !active.length && !showDismissed ? (
+        <Empty>No matched CVEs for this device's identified services.</Empty>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>CVE</th><th>Port / service</th><th>CVSS</th><th>State</th><th></th></tr></thead>
+            <tbody>
+              {[...active, ...(showDismissed ? dismissed : [])].map((v) => (
+                <tr key={v.cve_id} className={v.state === 'dismissed' ? 'dim' : ''}>
+                  <td className="mono nowrap">
+                    {v.cve_id}
+                    {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
+                    {v.epss != null && <span className="muted small" style={{ marginLeft: 6 }}>EPSS {(v.epss * 100).toFixed(0)}%</span>}
+                  </td>
+                  <td className="small">
+                    {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
+                  </td>
+                  <td className="mono small">{v.cvss_base != null ? v.cvss_base.toFixed(1) : '—'}</td>
+                  <td>
+                    <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}>
+                      {v.state}
+                    </span>
+                    {v.source === 'nmap_script' && <span className="badge outline" style={{ marginLeft: 6 }}>script</span>}
+                  </td>
+                  <td className="right">
+                    {isAdmin && (
+                      v.state === 'dismissed' ? (
+                        <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => undismiss(v.cve_id)}>Undo</button>
+                      ) : (
+                        <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => dismiss(v.cve_id)}>Dismiss</button>
+                      )
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Card>
   );

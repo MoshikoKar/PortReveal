@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Card, Empty, ErrorBox, Kpi, Loading, ScoreBadge } from '../components/ui';
+import { Card, Empty, ErrorBox, Kpi, Loading, RiskBadge, ScoreBadge } from '../components/ui';
 import type { ReportHost } from '../types';
 import { quoteValue, useApi } from '../util';
 
@@ -16,6 +16,10 @@ interface RareService {
 }
 interface Skew { product: string; hosts: number; versions: { version: string; hosts: number }[] }
 interface Subnet { subnet: string; hosts: number; active: number; max_score: number; avg_score: number; query: string }
+interface VulnReport {
+  top_devices: (ReportHost & { risk: number; combined: number })[];
+  top_cves: { cve_id: string; cvss_base: number | null; kev: boolean; epss: number | null; device_count: number }[];
+}
 
 const PREVIEW_ROWS = 5;
 const searchLink = (q: string) => `/search?q=${encodeURIComponent(q)}`;
@@ -70,14 +74,19 @@ export default function Reports() {
   const rare = useApi<{ min_hosts: number; items: RareService[] }>('/reports/rare-services');
   const skew = useApi<{ items: Skew[] }>('/reports/version-skew');
   const subnets = useApi<{ items: Subnet[] }>('/reports/subnets');
+  const vuln = useApi<VulnReport>('/reports/vulnerabilities');
   const [rareOpen, setRareOpen] = useState(false);
   const [skewOpen, setSkewOpen] = useState(false);
   const [subnetsOpen, setSubnetsOpen] = useState(false);
+  const [riskOpen, setRiskOpen] = useState(false);
+  const [cveOpen, setCveOpen] = useState(false);
   const e = exposure.data;
   const maxBucket = Math.max(1, ...(e?.distribution.map((b) => b.count) ?? []));
   const rareItems = rare.data?.items ?? [];
   const skewItems = skew.data?.items ?? [];
   const subnetItems = subnets.data?.items ?? [];
+  const topDevices = vuln.data?.top_devices ?? [];
+  const topCves = vuln.data?.top_cves ?? [];
 
   return (
     <>
@@ -163,6 +172,62 @@ export default function Reports() {
                           </Link>
                         ))}
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div className="grid halves">
+        <Card title="At-risk devices" flush actions={
+          <SeeAll total={topDevices.length} open={riskOpen} onToggle={() => setRiskOpen((v) => !v)} />
+        }>
+          <ReportBlurb>
+            Devices ranked by combined score (risk from matched CVEs, boosted by exposure). Requires the
+            vulnerability feed to be enabled in Settings.
+          </ReportBlurb>
+          <ErrorBox error={vuln.error} />
+          {!vuln.data ? (!vuln.error && <Loading />) : !topDevices.length ? (
+            <Empty>No device has a non-zero risk score yet.</Empty>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Host</th><th>Network</th><th className="right">Risk</th><th className="right">Combined</th></tr></thead>
+                <tbody>
+                  {preview(topDevices, riskOpen).map((h) => (
+                    <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
+                      <td><span className="mono">{h.ip}</span>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
+                      <td>{h.network ?? '—'}</td>
+                      <td className="right"><RiskBadge score={h.risk} kind="risk" /></td>
+                      <td className="right"><RiskBadge score={h.combined} kind="combined" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+        <Card title="Top vulnerabilities" flush actions={
+          <SeeAll total={topCves.length} open={cveOpen} onToggle={() => setCveOpen((v) => !v)} />
+        }>
+          <ReportBlurb>CVEs matched on the most devices in this inventory (confirmed or potential, not dismissed).</ReportBlurb>
+          <ErrorBox error={vuln.error} />
+          {!vuln.data ? (!vuln.error && <Loading />) : !topCves.length ? (
+            <Empty>No vulnerability matched yet.</Empty>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>CVE</th><th className="right">CVSS</th><th>KEV</th><th className="right">Devices</th></tr></thead>
+                <tbody>
+                  {preview(topCves, cveOpen).map((c) => (
+                    <tr key={c.cve_id} className="clickable" onClick={() => nav(searchLink(`cve:${c.cve_id}`))}>
+                      <td className="mono">{c.cve_id}</td>
+                      <td className="right mono">{c.cvss_base != null ? c.cvss_base.toFixed(1) : '—'}</td>
+                      <td>{c.kev && <span className="badge high">KEV</span>}</td>
+                      <td className="right">{c.device_count}</td>
                     </tr>
                   ))}
                 </tbody>

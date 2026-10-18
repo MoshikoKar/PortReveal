@@ -155,7 +155,9 @@ def test_sync_port_matches_removes_stale_non_dismissed(db):
     db.commit()
     assert db.query(DevicePortVuln).filter_by(device_port_id=p.id).count() == 1
 
-    p.version = "9.0"  # now outside the pinned version: no longer applies
+    # Rescanned with a newer version: nmap's own CPE string is the version evidence (not the
+    # separate free-text DevicePort.version field), so it is what needs to change here.
+    p.cpe = "cpe:/a:openbsd:openssh:9.0"
     db.commit()
     match.sync_port_matches(db, [p], now=T)
     db.commit()

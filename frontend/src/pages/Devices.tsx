@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Pager, PortChips, SkeletonRows, SortTh } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Pager, PortChips, RiskBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -194,7 +194,7 @@ export default function Devices() {
             </button>
           </div>
         )}
-        {loading && !data ? <SkeletonRows cols={isAdmin ? 10 : 9} /> : !items.length ? <Empty>No devices match.</Empty> : (
+        {loading && !data ? <SkeletonRows cols={isAdmin ? 12 : 11} /> : !items.length ? <Empty>No devices match.</Empty> : (
           <div className="table-wrap">
             <table>
               <thead>
@@ -211,6 +211,8 @@ export default function Devices() {
                   {sortTh('open_ports', 'Open ports')}
                   {sortTh('os', 'OS')}
                   <th>Network</th>
+                  <th title="Vulnerability-based risk score">Risk</th>
+                  <th title="Risk boosted by exposure">Combined</th>
                   {sortTh('last_seen', 'Last seen')}
                   {sortTh('first_seen', 'First seen')}
                 </tr>
@@ -228,6 +230,8 @@ export default function Devices() {
                       {d.os_name ?? <span className="muted">—</span>}
                     </td>
                     <td className="small">{d.network_name ?? <span className="muted">—</span>}</td>
+                    <td>{d.risk_score ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">—</span>}</td>
+                    <td>{d.combined_score ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">—</span>}</td>
                     <td className="nowrap" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>
                     <td className="nowrap muted small">{fmtTime(d.first_seen)}</td>
                   </tr>

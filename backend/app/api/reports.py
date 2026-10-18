@@ -13,7 +13,16 @@ from ..core.exposure import HIGH_THRESHOLD, MEDIUM_THRESHOLD, RARE_MIN_HOSTS
 from ..core.mockdata import device_visible
 from ..core.query.sqlfn import ipv4_int_expr
 from ..db import get_db
-from ..models import DEVICE_ACTIVE, Device, DevicePort, Network, User
+from ..models import (
+    DEVICE_ACTIVE,
+    VULN_STATE_DISMISSED,
+    Device,
+    DevicePort,
+    DevicePortVuln,
+    Network,
+    User,
+    Vulnerability,
+)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -55,6 +64,38 @@ def exposure_report(db: Session = Depends(get_db), user: User = Depends(current_
         "distribution": [{"from": i * SCORE_BUCKET, "to": 100 if i == MAX_BUCKET else (i + 1) * SCORE_BUCKET - 1,
                           "count": int(hist.get(i, 0))} for i in range(MAX_BUCKET + 1)],
         "top": [_host(d, names) for d in top],
+    }
+
+
+@router.get("/vulnerabilities")
+def vuln_report(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """At-risk devices (risk/combined score) and the CVEs matched on the most devices (spec 5.7)."""
+    ok = device_visible(db)
+    names = _networks(db)
+    ip_key = ipv4_int_expr(db.get_bind().dialect.name, Device.current_ip)
+    top_devices = db.scalars(
+        select(Device).where(ok, Device.risk_score > 0)
+        .order_by(Device.combined_score.desc(), Device.risk_score.desc(), ip_key).limit(TOP_HOSTS)
+    ).all()
+    n_dev = func.count(func.distinct(Device.id))
+    cve_rows = db.execute(
+        select(Vulnerability.cve_id, Vulnerability.cvss_base, Vulnerability.kev, Vulnerability.epss, n_dev)
+        .join(DevicePortVuln, DevicePortVuln.cve_id == Vulnerability.cve_id)
+        .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .join(Device, Device.id == DevicePort.device_id)
+        .where(ok, DevicePortVuln.state != VULN_STATE_DISMISSED)
+        .group_by(Vulnerability.cve_id, Vulnerability.cvss_base, Vulnerability.kev, Vulnerability.epss)
+        .order_by(Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), n_dev.desc())
+        .limit(TOP_HOSTS)
+    ).all()
+    return {
+        "top_devices": [
+            {**_host(d, names), "risk": d.risk_score or 0, "combined": d.combined_score or 0} for d in top_devices
+        ],
+        "top_cves": [
+            {"cve_id": c, "cvss_base": cvss, "kev": bool(kev), "epss": epss, "device_count": int(n)}
+            for c, cvss, kev, epss, n in cve_rows
+        ],
     }
 
 

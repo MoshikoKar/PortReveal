@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading } from '../../components/ui';
-import type { EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, WebCaptureSettings } from '../../types';
+import type { EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, WebCaptureSettings } from '../../types';
 import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
 
 function useForm<T>(path: string) {
@@ -403,6 +403,94 @@ export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onD
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <Msg msg={f.msg} />
         <div><button className="btn primary" disabled={f.saving} onClick={async () => { if (await f.save(body())) { setPassword(null); onSaved?.(); } }}>Save LDAP settings</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- vulnerability feed (risk scoring)
+const VULN_SOURCES: { id: 'nvd' | 'kev' | 'epss'; label: string; hint: string }[] = [
+  { id: 'nvd', label: 'NVD', hint: 'CVE records, CVSS and CPE matches (core source)' },
+  { id: 'kev', label: 'CISA KEV', hint: 'Flags CVEs known to be exploited in the wild' },
+  { id: 'epss', label: 'FIRST EPSS', hint: 'Exploitation-probability score, used to weight risk' },
+];
+
+export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const f = useForm<VulnSettings>('/settings/vuln');
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  useReportDirty(f.dirty || apiKey !== null, onDirtyChange);
+  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  if (!f.form) return <Card title="Vulnerability scoring"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<VulnSettings>) => f.setForm({ ...s, ...patch });
+  const body = () => {
+    const { nvd_api_key_set: _ignored, ...rest } = s;
+    void _ignored;
+    return { ...rest, ...(apiKey !== null ? { nvd_api_key: apiKey } : {}) };
+  };
+  const save = async () => {
+    if (await f.save(body())) setApiKey(null);
+  };
+  const syncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await post<{ ok: boolean; message: string }>('/settings/vuln/sync');
+      setSyncMsg({ ok: r.ok, text: r.message });
+    } catch (e: any) {
+      setSyncMsg({ ok: false, text: e.message });
+    } finally {
+      setSyncing(false);
+    }
+  };
+  return (
+    <Card title="Vulnerability scoring">
+      <div className="stack">
+        <div className="muted small">
+          Risk scoring matches each device's identified product/version (CPE) against a local cache of known
+          vulnerabilities. Off by default. No information about this network is ever sent out — only a plain
+          HTTP download of public NVD / CISA KEV / FIRST EPSS data files, on a weekly schedule. Works fully
+          without an NVD API key; adding one only raises the request rate limit.
+        </div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable vulnerability risk scoring</label>
+        <div className="field"><span>Sources</span>
+          <div className="row wrap" style={{ gap: 14 }}>
+            {VULN_SOURCES.map((src) => (
+              <label key={src.id} className="check small" title={src.hint}>
+                <input type="checkbox" checked={s.sources.includes(src.id)} disabled={!s.enabled}
+                  onChange={(e) => set({ sources: e.target.checked ? [...s.sources, src.id] : s.sources.filter((x) => x !== src.id) })} />
+                {src.label}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="form-grid">
+          <Num label="Sync interval (hours)" value={s.sync_interval_hours} min={24} max={720} onChange={(v) => set({ sync_interval_hours: v })} hint="Default 168 = weekly" />
+          <label className="field">Sync time (HH:MM)<input type="time" value={s.sync_time} onChange={(e) => set({ sync_time: e.target.value })} /></label>
+          <label className="field">NVD API key (optional)
+            <input type="password" value={apiKey ?? ''} placeholder={s.nvd_api_key_set ? '•••••• (unchanged)' : 'not set — public rate limit applies'}
+              onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" />
+          </label>
+          <Num label="Min CVSS to display" value={s.min_cvss_display} min={0} max={10} onChange={(v) => set({ min_cvss_display: v })} />
+        </div>
+        <div className="row wrap">
+          <label className="check"><input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />Offline mode (no feed downloads; import snapshots via the CLI instead)</label>
+          <label className="check"><input type="checkbox" checked={s.include_potential} onChange={(e) => set({ include_potential: e.target.checked })} />Show "potential" matches (imprecise version), not just confirmed</label>
+          <label className="check" title="Safe/discovery nmap scripts only (SCRIPT_ALLOWLIST) — never vulners, never intrusive categories">
+            <input type="checkbox" checked={s.scripts_enabled} onChange={(e) => set({ scripts_enabled: e.target.checked })} />
+            Run allow-listed nmap scripts as a secondary signal
+          </label>
+        </div>
+        <Msg msg={f.msg} />
+        {syncMsg && <div className={`alert ${syncMsg.ok ? 'ok' : 'error'}`}>{syncMsg.text}</div>}
+        <div className="row">
+          <button className="btn primary" disabled={f.saving} onClick={save}>Save</button>
+          <button className="btn" onClick={syncNow} disabled={!s.enabled || s.offline_mode || syncing}>
+            {syncing ? 'Starting…' : 'Sync feeds now'}
+          </button>
+        </div>
       </div>
     </Card>
   );

@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { del } from '../api';
-import { ExposureCard, ProfileCard, RttCard, TagEditor, Timeline } from '../components/DeviceIntel';
+import { ExposureCard, ProfileCard, RiskCard, RttCard, TagEditor, Timeline, VulnPanel } from '../components/DeviceIntel';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MockBadge, Pager, ScanStatusBadge, ScoreBadge } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MockBadge, Pager, RiskBadge, ScanStatusBadge, ScoreBadge } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
 import { SCAN_TYPE_LABELS, fmtTime, relTime, useApi } from '../util';
@@ -93,7 +93,9 @@ export default function DeviceDetail() {
           <h1 className="row" style={{ gap: 12 }}>
             {d.hostname ?? d.current_ip}
             <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} />
-            <ScoreBadge score={d.score} />
+            <span title="Exposure score"><ScoreBadge score={d.score} /></span>
+            {d.risk_scored_at && <span title="Risk score"><RiskBadge score={d.risk_score} kind="risk" /></span>}
+            {d.risk_scored_at && <span title="Combined score"><RiskBadge score={d.combined_score} kind="combined" /></span>}
             {d.type && <Link className="badge accent" to={`/search?q=${encodeURIComponent(`type:${d.type}`)}`}>{d.type}</Link>}
           </h1>
           <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
@@ -187,8 +189,11 @@ export default function DeviceDetail() {
       </div>
 
       <div className="grid three">
+        <RiskCard d={d} />
         <RttCard d={d} />
       </div>
+
+      <VulnPanel d={d} isAdmin={isAdmin} onReload={reload} />
 
       <Card title="Web interfaces" flush
         actions={webIf.data?.pages.length ? <Link className="btn sm" to={`/devices/${d.uuid}/web`}>Open web preview →</Link> : undefined}>

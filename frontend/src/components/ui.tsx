@@ -72,6 +72,13 @@ export function ScoreBadge({ score }: { score: number | null | undefined }) {
   return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`Exposure score ${s} / 100`}>{s}</span>;
 }
 
+/** Risk (CVE-based) or combined score 0-100 — same 60/30 scale as exposure. */
+export function RiskBadge({ score, kind = 'risk' }: { score: number | null | undefined; kind?: 'risk' | 'combined' }) {
+  const s = score ?? 0;
+  const label = kind === 'risk' ? 'Risk score' : 'Combined score';
+  return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`${label} ${s} / 100`}>{s}</span>;
+}
+
 const IP_ASSIGNMENT: Record<string, [string, string, string]> = {
   static: ['ok', 'Static', 'This IP has stayed on this device for a while'],
   dynamic: ['medium', 'Dynamic', 'This device has recently used more than one IP (DHCP-style)'],
