@@ -583,6 +583,7 @@ export interface VulnSettings {
   nvd_api_key?: string | null;
   include_potential: boolean;
   min_cvss_display: number;
+  epss_high_threshold: number;
   scripts_enabled: boolean;
 }
 
@@ -630,6 +631,139 @@ export interface DeviceVuln {
   epss_percentile: number | null;
   summary: string | null;
   matched_at: string;
+}
+
+export type AgeBucket = 'under_30d' | '30_90d' | '90_365d' | 'over_365d' | 'unknown';
+
+export interface FacetBucket {
+  key: string | number;
+  count: number;
+  /** Display label, when it differs from `key` (e.g. the network facet is keyed by id). */
+  label?: string;
+}
+
+export interface VulnWeeklyPoint {
+  week_start: string;
+  new: number;
+  resolved: number;
+  dismissed: number;
+}
+
+export interface VulnSnapshotPoint {
+  date: string;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  avg_risk_score: number | null;
+  avg_combined_score: number | null;
+}
+
+export interface VulnTopDevice {
+  uuid: string;
+  ip: string;
+  hostname: string | null;
+  device_type: string | null;
+  network_name: string | null;
+  exposure_score: number;
+  risk_score: number;
+  combined_score: number;
+}
+
+export interface VulnTopCve {
+  cve_id: string;
+  cvss_base: number | null;
+  kev: boolean;
+  epss: number | null;
+  device_count: number;
+}
+
+export interface VulnNewFinding {
+  cve_id: string;
+  device_uuid: string;
+  device_ip: string;
+  cvss_base: number | null;
+  kev: boolean;
+  first_seen_at: string | null;
+}
+
+export interface VulnSummary {
+  generated_at: string;
+  epss_threshold: number;
+  severity_counts: { critical: number; high: number; medium: number; low: number; unknown: number };
+  kev_count: number;
+  epss_high_count: number;
+  confirmed_count: number;
+  potential_count: number;
+  risk_device_levels: { high: number; medium: number; low: number };
+  feed: {
+    oldest_synced_at: string | null;
+    newest_synced_at: string | null;
+    stale: boolean;
+    stale_threshold_hours: number;
+  };
+  facets: {
+    os: FacetBucket[];
+    service: FacetBucket[];
+    port: FacetBucket[];
+    network: FacetBucket[];
+    device_type: FacetBucket[];
+    vendor_product: FacetBucket[];
+    cve_age: Record<AgeBucket, number>;
+    exposure_duration: Record<AgeBucket, number>;
+  };
+  severity_by_network: {
+    network_id: number | null; network: string; critical: number; high: number; medium: number; low: number;
+  }[];
+  weekly: VulnWeeklyPoint[];
+  snapshot_trend: VulnSnapshotPoint[];
+  top_devices: VulnTopDevice[];
+  top_cves: VulnTopCve[];
+  new_since_last_scan: VulnNewFinding[];
+  new_since_last_db_update: VulnNewFinding[];
+}
+
+/** One (device, port, cve) finding row from the CVE-centric list (GET /api/vulns); an
+ * intersection over DeviceVuln, which already carries the per-match fields. */
+export interface VulnFindingListItem extends DeviceVuln {
+  device_uuid: string;
+  device_ip: string;
+  device_hostname: string | null;
+  network: string | null;
+  os_name: string | null;
+  device_type: string | null;
+  first_seen_at: string | null;
+}
+
+export interface CveAffectedDevice {
+  device_uuid: string;
+  device_ip: string;
+  device_hostname: string | null;
+  network: string | null;
+  port: number;
+  protocol: string;
+  service: string | null;
+  product: string | null;
+  version: string | null;
+  state: VulnMatchState;
+  matched_at: string;
+  first_seen_at: string | null;
+}
+
+export interface CveDetail {
+  cve_id: string;
+  cvss_base: number | null;
+  cvss_vector: string | null;
+  severity: string | null;
+  published_at: string | null;
+  last_modified: string | null;
+  kev: boolean;
+  kev_added_at: string | null;
+  epss: number | null;
+  epss_percentile: number | null;
+  summary: string | null;
+  first_seen_at: string | null;
+  affected_devices: CveAffectedDevice[];
 }
 
 export type VulnJobStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';

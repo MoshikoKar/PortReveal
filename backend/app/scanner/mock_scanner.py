@@ -50,6 +50,37 @@ STEP_NOTES = [
 
 Svc = tuple[str, str | None, str | None]  # service, product, version
 
+# product substring (lower) -> (cpe vendor, cpe product). Mock-only: real nmap fills CPE itself.
+# Longer needles first so "apache tomcat" wins over a bare "apache" match.
+_MOCK_PRODUCT_CPE: tuple[tuple[str, tuple[str, str]], ...] = (
+    ("openssh", ("openbsd", "openssh")),
+    ("nginx", ("f5", "nginx")),
+    ("apache tomcat", ("apache", "tomcat")),
+    ("apache httpd", ("apache", "http_server")),
+    ("postgresql", ("postgresql", "postgresql")),
+    ("dnsmasq", ("thekelleys", "dnsmasq")),
+    ("samba", ("samba", "samba")),
+)
+
+
+def mock_cpe_for(product: str | None, version: str | None) -> str | None:
+    """nmap-style CPE 2.2 for a Mock Lab product/version, or None when unknown.
+
+    Version is the first token only (e.g. ``8.9p1 Ubuntu …`` → ``8.9p1``), matching how
+    nmap typically pins the CPE version field. Used only by MockScanner — never by nmap.
+    """
+    if not product:
+        return None
+    key = product.strip().lower()
+    vendor_product = next((vp for needle, vp in _MOCK_PRODUCT_CPE if needle in key), None)
+    if vendor_product is None:
+        return None
+    vendor, cpe_product = vendor_product
+    ver = (version or "").strip().split()[0] if version and version.strip() else ""
+    if ver:
+        return f"cpe:/a:{vendor}:{cpe_product}:{ver}"
+    return f"cpe:/a:{vendor}:{cpe_product}"
+
 
 @dataclass
 class MockHost:
@@ -202,13 +233,15 @@ class MockScanner:
                 obs.extra_tcp_ports = TRUENAS_APPS_TCP_PORTS
                 truenas_set = set(TRUENAS_APPS_TCP_PORTS)
                 obs.ports = [
-                    PortObservation(port=p, service=s, product=prod, version=ver, method="probed", confidence=10)
+                    PortObservation(port=p, service=s, product=prod, version=ver, method="probed",
+                                    confidence=10, cpe=mock_cpe_for(prod, ver))
                     for p, (s, prod, ver) in sorted(all_ports.items())
                     if p in scope or p in truenas_set
                 ]
             else:
                 obs.ports = [
-                    PortObservation(port=p, service=s, product=prod, version=ver, method="probed", confidence=10)
+                    PortObservation(port=p, service=s, product=prod, version=ver, method="probed",
+                                    confidence=10, cpe=mock_cpe_for(prod, ver))
                     for p, (s, prod, ver) in sorted(all_ports.items())
                     if p in scope
                 ]

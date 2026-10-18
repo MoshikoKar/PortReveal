@@ -1,6 +1,7 @@
 """Copy each captured port's landing-page metadata into `port_http`, where search can query it."""
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 
 from sqlalchemy import select
@@ -12,9 +13,20 @@ from ..cpe import sync_http_cpes
 from ..http_hashes import header_set_hash, html_hash
 from .classify import default_page_reason, looks_like_web_vnc
 
+log = logging.getLogger(__name__)
+
 HTTP_SCHEMES = ("http", "https")
 DEFAULT_PAGE_SKIP_PREFIX = "default server page"
 _KIND_RANK = {WEB_PAGE_HOME: 0, WEB_PAGE_LOGIN: 1}
+# PortHttp title/server that would fire the hypervisor tagging rule.
+_HYPERVISOR_HTTP = ("vmware esxi", "proxmox")
+# nmap product/service/cpe substrings that prove the page is not a hypervisor UI. Used only to
+# drop *contradictory* stale captures — never to reject a real ESXi with an empty product field.
+_CONFLICTING_PRODUCTS = (
+    "fortigate", "fortissh", "fortinet", "cisco", "synology", "samba",
+    "nginx", "apache", "httpd", "ollama", "lm studio", "hikvision",
+    "jellyfin", "immich", "tomcat", "lighttpd", "hp embedded",
+)
 
 
 def _best_page(pages: list[WebPage]) -> WebPage:
@@ -23,6 +35,50 @@ def _best_page(pages: list[WebPage]) -> WebPage:
 
 def _is_default_page(p: WebPage) -> bool:
     return bool(default_page_reason(p.title)) or (p.capture_error or "").startswith(DEFAULT_PAGE_SKIP_PREFIX)
+
+
+def _http_claims_hypervisor(title: str | None, server: str | None) -> bool:
+    blob = f"{title or ''} {server or ''}".lower()
+    return any(m in blob for m in _HYPERVISOR_HTTP)
+
+
+def _product_conflicts_hypervisor(product: str | None, service: str | None, cpe: str | None) -> bool:
+    blob = f"{product or ''} {service or ''} {cpe or ''}".lower()
+    if any(m in blob for m in _HYPERVISOR_HTTP) or "esxi" in blob:
+        return False
+    return any(m in blob for m in _CONFLICTING_PRODUCTS)
+
+
+def clear_stale_hypervisor_http(db: Session, device_ids: list[int]) -> set[int]:
+    """Delete PortHttp rows that claim ESXi/Proxmox while the port's nmap product says otherwise.
+
+    Stale captures (from an older mock default or a wrong page) otherwise keep pinning
+    ``device_type=hypervisor`` under ``auto_only_new_or_changed``, because unchanged hosts
+    are never re-captured. Real ESXi with an empty product field is left alone.
+    Returns device ids whose HTTP rows were removed (caller should reclassify).
+    """
+    if not device_ids:
+        return set()
+    rows = db.execute(
+        select(PortHttp, DevicePort)
+        .join(DevicePort, DevicePort.id == PortHttp.device_port_id)
+        .where(PortHttp.device_id.in_(device_ids))
+    ).all()
+    touched: set[int] = set()
+    for http, port in rows:
+        if not _http_claims_hypervisor(http.title, http.server):
+            continue
+        if not _product_conflicts_hypervisor(port.product, port.service, port.cpe):
+            continue
+        log.info(
+            "dropping stale hypervisor PortHttp on %s (%s) — product %r conflicts with title/server",
+            port.port, http.device_id, port.product,
+        )
+        db.delete(http)
+        touched.add(http.device_id)
+    if touched:
+        db.flush()
+    return touched
 
 
 def sync_port_http(db: Session, capture_id: int) -> set[int]:

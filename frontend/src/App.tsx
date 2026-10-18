@@ -23,6 +23,8 @@ const Watches = lazy(() => import('./pages/Watches'));
 const RemoteHosts = lazy(() => import('./pages/RemoteHosts'));
 const WebHosts = lazy(() => import('./pages/WebHosts'));
 const WebPreview = lazy(() => import('./pages/WebPreview'));
+const Vulnerabilities = lazy(() => import('./pages/Vulnerabilities'));
+const CveDetail = lazy(() => import('./pages/CveDetail'));
 
 /** Paths that render real pages after login (must stay aligned with <Routes> below). */
 const APP_ROUTE_PATTERNS = [
@@ -38,6 +40,8 @@ const APP_ROUTE_PATTERNS = [
   '/changes',
   '/ports',
   '/ports/:proto/:port',
+  '/vulnerabilities',
+  '/vulnerabilities/:cve_id',
   '/scans',
   '/settings',
   '/settings/:tab',
@@ -188,6 +192,8 @@ export default function App() {
             <Route path="/changes" element={<Changes />} />
             <Route path="/ports" element={<Ports />} />
             <Route path="/ports/:proto/:port" element={<PortDetail />} />
+            <Route path="/vulnerabilities" element={<Vulnerabilities />} />
+            <Route path="/vulnerabilities/:cve_id" element={<CveDetail />} />
             <Route path="/scans" element={<Scans />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/:tab" element={<Settings />} />

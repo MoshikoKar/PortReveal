@@ -92,9 +92,13 @@ def get_session_record(request: Request, db: Session = Depends(get_db)) -> UserS
         if not sent or not hmac.compare_digest(sent, sess.csrf_token):
             raise HTTPException(403, "CSRF token missing or invalid")
     if (now - sess.last_seen_at).total_seconds() > 60:
-        sess.last_seen_at = now
-        sess.expires_at = now + timedelta(minutes=s.session_idle_minutes)
-        _touch_commit(db)
+        # Skip the writer bump while a CVE feed sync holds SQLite: a page refresh must not
+        # queue dozens of last-seen UPDATEs behind the ingest commit (looks like the sync died).
+        from ..core.vuln.sync import sync_in_progress
+        if not sync_in_progress(db):
+            sess.last_seen_at = now
+            sess.expires_at = now + timedelta(minutes=s.session_idle_minutes)
+            _touch_commit(db)
     request.state.session = sess
     return sess
 

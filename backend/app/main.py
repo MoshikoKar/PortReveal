@@ -33,6 +33,7 @@ from .api import (
     tokens,
     users,
     vuln_jobs,
+    vulns,
     watches,
     web_captures,
     webhooks,
@@ -123,7 +124,7 @@ app = FastAPI(
 )
 
 for r in (auth, setup, system, dashboard, devices, events, scans, networks, exclusions, settings, users, misc,
-          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks, vuln_jobs):
+          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks, vuln_jobs, vulns):
     app.include_router(r.router)
 
 

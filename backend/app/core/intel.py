@@ -21,6 +21,7 @@ from .tagging import apply_tags, load_facts
 from .vuln.manager import enqueue_vuln_job
 from .vuln.score import apply_risk_scores
 from .watches import evaluate_all
+from .web_capture.inventory_sync import clear_stale_hypervisor_http
 
 log = logging.getLogger(__name__)
 
@@ -46,7 +47,11 @@ def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | No
     unique = unique_services(db, nets)
     events = 0
     for i in range(0, len(ids), REFRESH_CHUNK):
-        facts = load_facts(db, ids[i:i + REFRESH_CHUNK])
+        chunk = ids[i:i + REFRESH_CHUNK]
+        # Drop PortHttp that still claims ESXi/Proxmox after the port's product says otherwise
+        # (stale capture), so classification is not stuck on hypervisor until a re-capture.
+        clear_stale_hypervisor_http(db, chunk)
+        facts = load_facts(db, chunk)
         events += len(apply_tags(db, facts, now=now, scan_id=scan_id, report_ids=report_ids))
         apply_scores(db, facts, unique, now=now)
         apply_ip_assignment(db, facts, now=now)

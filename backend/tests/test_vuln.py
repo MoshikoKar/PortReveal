@@ -8,14 +8,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.core.vuln import match, score, sync
+from app.core.vuln import summary as vuln_summary
 from app.models import (
     VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
     DevicePortVuln,
     VulnCpeMatch,
+    VulnDailySnapshot,
     Vulnerability,
     VulnFeedState,
+    VulnFindingLifecycle,
 )
 from app.settings_store import VulnSettings
 
@@ -165,32 +168,36 @@ def test_sync_port_matches_removes_stale_non_dismissed(db):
 # --- score.py ---------------------------------------------------------------------------------------
 def test_vuln_score_cvss_default_and_epss_multiplier():
     plain = score.VulnRow("CVE-1", cvss_base=5.0, epss_percentile=None, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(plain) == 50  # 10 * 5.0, no EPSS data -> no multiplier applied
+    assert round(score.vuln_score(plain)) == 24  # soft-compress(10 * 5.0)
     low_epss = score.VulnRow("CVE-1", cvss_base=5.0, epss_percentile=0.0, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(low_epss) == 30  # 50 * 0.6
+    assert round(score.vuln_score(low_epss)) == 15  # soft-compress(50 * 0.6)
     high_epss = score.VulnRow("CVE-1", cvss_base=5.0, epss_percentile=1.0, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(high_epss) == 50  # 50 * 1.0
+    assert round(score.vuln_score(high_epss)) == 24  # soft-compress(50 * 1.0)
     missing_cvss = score.VulnRow("CVE-1", cvss_base=None, epss_percentile=None, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(missing_cvss) == 50  # default CVSS 5.0
+    assert round(score.vuln_score(missing_cvss)) == 24  # default CVSS 5.0
 
 
 def test_vuln_score_kev_floor_and_potential_discount():
     kev = score.VulnRow("CVE-1", cvss_base=3.0, epss_percentile=None, kev=True, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(kev) == 80  # 30 * 1.5 = 45, floored to 80
+    # Weak KEV: raw floored to KEV_FLOOR (medium threshold), then soft-compressed.
+    assert round(score.vuln_score(kev)) == round(score._compress(max(30 * 1.5, float(score.KEV_FLOOR))))
     strong_kev = score.VulnRow("CVE-1", cvss_base=9.0, epss_percentile=None, kev=True, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(strong_kev) == 100  # 90 * 1.5 = 135, capped at 100
+    pts = score.vuln_score(strong_kev)
+    assert 40 < pts < 70  # soft-compress(135); one KEV is not near 100
     potential = score.VulnRow("CVE-1", cvss_base=10.0, epss_percentile=None, kev=False, state=VULN_STATE_POTENTIAL)
-    assert score.vuln_score(potential) == 50  # 100 * 0.5
+    assert round(score.vuln_score(potential)) == 24  # soft-compress(50)
 
 
-def test_compute_risk_worst_dominates_with_capped_secondary():
+def test_compute_risk_worst_dominates_with_residual_saturation():
     vulns = [
-        score.VulnRow("CVE-1", 9.0, None, False, VULN_STATE_CONFIRMED),  # s=90
-        score.VulnRow("CVE-2", 5.0, None, False, VULN_STATE_CONFIRMED),  # s=50
-        score.VulnRow("CVE-3", 5.0, None, False, VULN_STATE_CONFIRMED),  # s=50
+        score.VulnRow("CVE-1", 9.8, None, True, VULN_STATE_CONFIRMED),
+        score.VulnRow("CVE-2", 9.0, None, True, VULN_STATE_CONFIRMED),
+        score.VulnRow("CVE-3", 5.0, None, False, VULN_STATE_CONFIRMED),
     ]
     risk, factors = score.compute_risk(vulns)
-    assert risk == 100  # 90 + 0.2 * (50 + 50) = 110, capped at MAX_SCORE
+    # Two KEVs clear high; residual saturation still keeps the total well below 100.
+    assert score.risk_band_for_score(score.combine(risk, 0)) == "high"
+    assert risk < 90
     assert factors[0]["factor"] == "CVE-1"
 
 
@@ -199,16 +206,28 @@ def test_compute_risk_empty_is_zero():
 
 
 def test_compute_risk_caps_at_five_vulnerabilities():
-    many = [score.VulnRow(f"CVE-{i}", 2.0, None, False, VULN_STATE_CONFIRMED) for i in range(10)]  # s=20 each
+    many = [score.VulnRow(f"CVE-{i}", 2.0, None, False, VULN_STATE_CONFIRMED) for i in range(10)]
     risk, factors = score.compute_risk(many)
     assert len(factors) == 5
-    assert risk == 20 + round(0.2 * (20 * 4))  # worst (20) + 0.2 * four seconds (20 each) = 36
+    assert 0 < risk < 40  # five mild findings stay well below the high band
 
 
-def test_combine_adds_up_to_half_for_max_exposure():
+def test_combine_uses_exposure_headroom_not_multiply_to_ceiling():
     assert score.combine(60, 0) == 60
-    assert score.combine(60, 100) == round(60 * 1.5)
-    assert score.combine(80, 100) == 100  # capped
+    assert score.combine(60, 100) == 65
+    assert score.combine(80, 100) == 82
+    # Mid-risk + max exposure must not jump to 100 / high.
+    assert score.combine(50, 100) < 70
+    assert score.risk_band_for_score(score.combine(50, 100)) == "medium"
+
+
+def test_single_kev_lands_in_medium_band():
+    """A lone KEV should not clear the high band — that needs more findings."""
+    risk, _ = score.compute_risk([
+        score.VulnRow("CVE-KEV", 9.8, None, True, VULN_STATE_CONFIRMED),
+    ])
+    assert score.risk_band_for_score(score.combine(risk, 0)) == "medium"
+    assert score.risk_band_for_score(score.combine(risk, 100)) == "medium"
 
 
 def test_apply_risk_scores_end_to_end(db):
@@ -224,10 +243,114 @@ def test_apply_risk_scores_end_to_end(db):
     score.apply_risk_scores(db, [d.id], now=T)
     db.commit()
     d = device_by_ip(db, "10.0.0.1")
-    assert d.risk_score == 100  # 90 * 1.5 KEV multiplier, capped
+    assert 30 <= d.risk_score < 60  # single KEV → medium band after residual weight
     assert d.combined_score == score.combine(d.risk_score, d.exposure_score)
     assert d.risk_scored_at is not None
     assert d.profile.risk_factors[0]["factor"] == "CVE-2024-0009"
+
+
+def test_apply_risk_scores_spread_devices_across_combined_bands(db):
+    """Two KEVs → high; one KEV → medium; one mild → low."""
+    net = make_network(db)
+    scan(ScriptedScanner([
+        host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01"),
+        host("10.0.0.2", [port(80, "http", "nginx", "1.24.0")], mac="00:11:22:33:44:02"),
+        host("10.0.0.3", [port(443, "https", "Apache httpd", "2.4.57")], mac="00:11:22:33:44:03"),
+    ]), network_id=net.id)
+    d_high, d_med, d_low = (device_by_ip(db, ip) for ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3"))
+    p_high = next(p for p in d_high.ports if p.port == 22)
+    p_med = next(p for p in d_med.ports if p.port == 80)
+    p_low = next(p for p in d_low.ports if p.port == 443)
+    db.add_all([
+        Vulnerability(cve_id="CVE-HIGH-A", cvss_base=9.8, kev=True),
+        Vulnerability(cve_id="CVE-HIGH-B", cvss_base=9.0, kev=True),
+        Vulnerability(cve_id="CVE-MED", cvss_base=9.8, kev=True),
+        Vulnerability(cve_id="CVE-LOW", cvss_base=2.0, kev=False),
+    ])
+    db.add_all([
+        DevicePortVuln(device_port_id=p_high.id, cve_id="CVE-HIGH-A", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=p_high.id, cve_id="CVE-HIGH-B", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=p_med.id, cve_id="CVE-MED", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=p_low.id, cve_id="CVE-LOW", state=VULN_STATE_CONFIRMED, matched_at=T),
+    ])
+    db.commit()
+    score.apply_risk_scores(db, [d_high.id, d_med.id, d_low.id], now=T)
+    db.commit()
+    bands = {
+        score.risk_band_for_score(device_by_ip(db, "10.0.0.1").combined_score),
+        score.risk_band_for_score(device_by_ip(db, "10.0.0.2").combined_score),
+        score.risk_band_for_score(device_by_ip(db, "10.0.0.3").combined_score),
+    }
+    assert bands == {"high", "medium", "low"}
+    d_high = device_by_ip(db, "10.0.0.1")
+    assert d_high.risk_score > 0 and d_high.combined_score == score.combine(d_high.risk_score, d_high.exposure_score)
+
+
+def test_mock_lab_devices_spread_across_risk_bands(db):
+    """Real Mock Lab inventory + match_all path should yield high 2 / medium 7 / low 0.
+
+    A fresh ``npm run dev`` standard scan uses scenario step 0 (Tomcat appears only after the
+    step advances). Real NVD-style version pinning gives most OpenSSH hosts a single KEV
+    (medium); only srv-web01 (nginx KEV) and srv-intranet (httpd KEV) clear high. An overly
+    dense universal-SSH-KEV fixture wrongly produced high 5 / medium 2 / low 2.
+    """
+    from collections import Counter
+
+    from sqlalchemy import select
+
+    from app.core.vuln.match import match_all
+    from app.models import Device, DevicePort, DevicePortVuln, VulnCpeMatch
+    from app.scanner.mock_scanner import MockScanner
+
+    net = make_network(db, cidr="10.99.0.0/24", name="Mock Lab")
+    scan(MockScanner([(net.id, "10.99.0.0/24", 0)]), network_id=net.id)
+
+    def _vuln(cve_id, cvss, kev, vendor_product, ver_end):
+        vendor, product = vendor_product.split(":", 1)
+        db.add(Vulnerability(cve_id=cve_id, cvss_base=cvss, kev=kev))
+        db.flush()
+        db.add(VulnCpeMatch(
+            cve_id=cve_id,
+            cpe23=f"cpe:2.3:a:{vendor}:{product}:*:*:*:*:*:*:*:*",
+            vendor_product=vendor_product,
+            version_end=ver_end, version_end_excl=True,
+        ))
+
+    # Version-ranged rows (confirmed matches) shaped like a real cache: one shared OpenSSH KEV,
+    # plus product KEVs that only apply to web01's nginx 1.24.0 and intranet's httpd 2.4.57.
+    _vuln("CVE-SSH-KEV", 9.8, True, "openbsd:openssh", "10.0")
+    _vuln("CVE-NGINX-KEV", 9.8, True, "f5:nginx", "1.25.0")
+    _vuln("CVE-NGINX-MID", 7.5, False, "f5:nginx", "1.25.0")
+    _vuln("CVE-HTTPD-KEV", 9.1, True, "apache:http_server", "2.4.58")
+    _vuln("CVE-PG-MID", 5.5, False, "postgresql:postgresql", "16.0")
+    _vuln("CVE-DNSMASQ-KEV", 9.0, True, "thekelleys:dnsmasq", "2.90")
+    _vuln("CVE-SAMBA-MID", 6.5, False, "samba:samba", "4.20")
+    db.commit()
+
+    match_all(db, now=T)
+    score.apply_risk_scores(db, list(db.scalars(select(Device.id))), now=T)
+    db.commit()
+
+    finding_devices = list(db.scalars(
+        select(Device).where(Device.id.in_(
+            select(DevicePort.device_id).join(DevicePortVuln).where(
+                DevicePortVuln.state != VULN_STATE_DISMISSED,
+            ).distinct()
+        ))
+    ).all())
+    scores = {
+        d.current_ip: (d.hostname, d.risk_score, d.combined_score, d.exposure_score)
+        for d in finding_devices
+    }
+    assert len(finding_devices) == 9, scores
+    bands = Counter(score.risk_band_for_score(d.combined_score) for d in finding_devices)
+    assert dict(bands) == {"high": 2, "medium": 7}, scores
+    high_ips = {
+        d.current_ip for d in finding_devices
+        if score.risk_band_for_score(d.combined_score) == "high"
+    }
+    assert high_ips == {"10.99.0.10", "10.99.0.12"}, scores
+    assert score.risk_band_for_score(device_by_ip(db, "10.99.0.1").combined_score) == "medium"
 
 
 # --- sync.py ---------------------------------------------------------------------------------------
@@ -447,6 +570,12 @@ def test_sync_and_rescore_matches_and_scores_after_sync(db):
         VULN_STATE_CONFIRMED
     assert d.risk_score > 0 and d.risk_scored_at is not None
 
+    # Sync completion also maintains the finding lifecycle and the dashboard summary/snapshot.
+    assert db.query(VulnFindingLifecycle).filter_by(cve_id="CVE-2024-1111").count() == 1
+    assert db.query(VulnDailySnapshot).filter_by(network_id=None, snapshot_date=T.date()).count() == 1
+    summary = vuln_summary.get_vuln_summary(db, now=T)
+    assert summary["confirmed_count"] == 1
+
 
 def _mirror_year_payload(year: int, cve_id: str) -> bytes:
     item = {
@@ -573,3 +702,42 @@ def test_sync_due_when_mirror_incomplete(db):
     db.commit()
     cfg = VulnSettings(enabled=True)
     assert sync.sync_due(db, cfg, now=T + timedelta(hours=1)) is True
+
+
+def test_parent_clears_summary_cache_when_sync_child_exits(db):
+    """Child-process refresh only clears the child's cache; the parent must invalidate on reap.
+
+    Repro shape: warm /api/vulns/summary, child sync updates VulnFeedState, status shows the new
+    last_synced_at, but summary kept the old oldest_synced_at until TTL. sync_running() reaping
+    the finished child (same path as the watcher after matching finishes) clears the parent cache.
+    """
+    from app.settings_store import put_section
+
+    put_section(db, VulnSettings(enabled=True, sources=["nvd", "kev", "epss"]))
+    old = T - timedelta(days=3)
+    new = T - timedelta(hours=1)
+    for source in ("nvd", "kev", "epss"):
+        db.add(VulnFeedState(source=source, last_synced_at=old, record_count=0, mirror_complete=True))
+    db.commit()
+    vuln_summary.invalidate_vuln_summary_cache()
+    warm = vuln_summary.get_vuln_summary(db, now=T)
+    assert warm["feed"]["oldest_synced_at"] == old
+
+    for source in ("nvd", "kev", "epss"):
+        db.get(VulnFeedState, source).last_synced_at = new
+    db.commit()
+    # Still cached in this (parent) process — the bug before parent-side reap.
+    assert vuln_summary.get_vuln_summary(db, now=T)["feed"]["oldest_synced_at"] == old
+
+    class _DeadChild:
+        def is_alive(self) -> bool:
+            return False
+
+        def join(self, timeout=None) -> None:
+            return None
+
+    sync._sync_process = _DeadChild()
+    assert sync.sync_running() is False
+    assert sync._sync_process is None
+    fresh = vuln_summary.get_vuln_summary(db, now=T)
+    assert fresh["feed"]["oldest_synced_at"] == new

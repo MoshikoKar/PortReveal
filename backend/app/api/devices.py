@@ -22,6 +22,7 @@ from ..models import (
     TAG_SOURCE_MANUAL,
     TAG_SOURCE_RULE,
     TAG_SOURCE_SUPPRESSED,
+    VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
     Device,
@@ -439,6 +440,7 @@ def _vuln_out(dpv: DevicePortVuln, port: DevicePort, vuln: Vulnerability) -> dic
 @router.get("/{uuid}/vulns")
 def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Every CVE matched to this device's ports (confirmed, potential and dismissed)."""
+    from ..core.vuln.display import should_display
     from ..settings_store import VulnSettings, get_section
 
     d = _get(db, uuid)
@@ -449,30 +451,36 @@ def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(
         .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
         .where(DevicePort.device_id == d.id)
     ).all()
-    items = []
-    from ..core.vuln.score import DEFAULT_CVSS
-
-    for dpv, port, vuln in rows:
-        if not cfg.include_potential and dpv.state == VULN_STATE_POTENTIAL:
-            continue
-        # Consistent with scoring: missing CVSS uses DEFAULT_CVSS (not 0). KEV is never hidden by
-        # the display floor — exploited-in-the-wild entries must remain visible.
-        if dpv.state != VULN_STATE_DISMISSED and not vuln.kev:
-            effective_cvss = vuln.cvss_base if vuln.cvss_base is not None else DEFAULT_CVSS
-            if effective_cvss < cfg.min_cvss_display:
-                continue
-        items.append(_vuln_out(dpv, port, vuln))
+    items = [_vuln_out(dpv, port, vuln) for dpv, port, vuln in rows if should_display(dpv, vuln, cfg)]
     items.sort(key=lambda it: (it["state"] == VULN_STATE_DISMISSED, it["kev"] is not True,
                                -(it["cvss_base"] or 0)))
     return {"items": items}
+
+
+def _after_vuln_state_change(db: Session, device_id: int) -> None:
+    """Re-score the device and drop the summary cache so dismiss/undo both refresh immediately.
+
+    Session autoflush is off: flush pending dismiss/undo state before risk scoring reads
+    ``device_port_vulns``, otherwise undo keeps the post-dismiss score until the next scan.
+    """
+    from ..core.vuln.lifecycle import sync_finding_lifecycle
+    from ..core.vuln.score import apply_risk_scores
+    from ..core.vuln.summary import invalidate_vuln_summary_cache
+
+    now = utcnow()
+    db.flush()
+    apply_risk_scores(db, [device_id], now=now)
+    sync_finding_lifecycle(db, now=now)
+    invalidate_vuln_summary_cache()
 
 
 @router.post("/{uuid}/vulns/{cve_id}/dismiss")
 def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                  user: User = Depends(require_admin)):
     """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
-    from ..core.vuln.score import apply_risk_scores
+    from ..core.vuln.display import normalize_cve_id
 
+    cve_id = normalize_cve_id(cve_id)
     d = _get(db, uuid)
     rows = db.scalars(
         select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
@@ -481,8 +489,13 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
     if not rows:
         raise HTTPException(404, "No matching vulnerability on this device")
     for row in rows:
-        row.state = VULN_STATE_DISMISSED
-    apply_risk_scores(db, [d.id], now=utcnow())
+        if row.state != VULN_STATE_DISMISSED:
+            # Remember confirmed vs potential so Undo can restore the exact prior state.
+            row.state_before_dismiss = (
+                row.state if row.state in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
+            )
+            row.state = VULN_STATE_DISMISSED
+    _after_vuln_state_change(db, d.id)
     audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
     db.commit()
@@ -492,8 +505,9 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
 @router.delete("/{uuid}/vulns/{cve_id}/dismiss", status_code=204)
 def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
-    from ..core.vuln.score import apply_risk_scores
+    from ..core.vuln.display import normalize_cve_id
 
+    cve_id = normalize_cve_id(cve_id)
     d = _get(db, uuid)
     rows = db.scalars(
         select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
@@ -503,8 +517,10 @@ def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depen
     if not rows:
         raise HTTPException(404, "No dismissed match for this device/CVE")
     for row in rows:
-        row.state = VULN_STATE_POTENTIAL  # corrected to `confirmed` (if warranted) on the next match run
-    apply_risk_scores(db, [d.id], now=utcnow())
+        prior = row.state_before_dismiss
+        row.state = prior if prior in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
+        row.state_before_dismiss = None
+    _after_vuln_state_change(db, d.id)
     audit(db, user.username, "device.vuln_undismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
     db.commit()

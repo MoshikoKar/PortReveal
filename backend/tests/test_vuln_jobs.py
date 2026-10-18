@@ -20,7 +20,9 @@ from app.models import (
     Device,
     DevicePortVuln,
     VulnCpeMatch,
+    VulnDailySnapshot,
     Vulnerability,
+    VulnFindingLifecycle,
     VulnJob,
 )
 from app.scanner.nmap_parser import ParsedRun
@@ -140,6 +142,23 @@ def test_run_vuln_job_matches_and_scores(db):
     d = device_by_ip(db, "10.0.0.1")
     assert d.risk_score > 0 and d.risk_scored_at is not None
     assert db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-0001").one().state == VULN_STATE_CONFIRMED
+
+
+def test_run_vuln_job_completion_refreshes_summary_and_snapshot(db):
+    from app.core.vuln.summary import get_vuln_summary, invalidate_vuln_summary_cache
+
+    d = _device_with_matched_cve(db)
+    invalidate_vuln_summary_cache()
+    job = enqueue_vuln_job(db, trigger=VULN_JOB_TRIGGER_MANUAL, device_ids=[d.id])
+    db.commit()
+    status = run_vuln_job(job.id, ScanContext(job.id))
+    assert status == VULN_JOB_COMPLETED
+    db.expire_all()
+
+    assert db.query(VulnFindingLifecycle).filter_by(cve_id="CVE-2024-0001").count() == 1
+    assert db.query(VulnDailySnapshot).filter_by(network_id=None).count() == 1
+    summary = get_vuln_summary(db, now=datetime.now(timezone.utc))
+    assert sum(summary["severity_counts"].values()) == 1
 
 
 def test_run_vuln_job_no_devices_completes_trivially(db):

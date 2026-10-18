@@ -115,28 +115,46 @@ def mock_probe_endpoint(scheme: str, host: str, port: int, ip: str) -> EndpointP
         ep.pages = [home]
         return ep
 
-    # Scenario A (default): HTTPS homepage + login
+    # Scenario A: ESXi hypervisor UI — only last octet 91 (unused by Mock Lab).
+    # Broader patterns (% 10 == 1) hit gw-core (.1), nas01 (.21), ws-lmstudio (.81).
+    if last == 91:
+        home = ProbeResult(
+            url=f"{base}/",
+            final_url=f"{base}/",
+            http_status=200,
+            title="VMware ESXi",
+            content_type="text/html",
+            server_header="VMware ESXi",
+            html='<html><title>VMware ESXi</title><a href="/login">Log in</a></html>',
+            tls_verified=False if scheme == "https" else None,
+            kind=WEB_PAGE_HOME,
+        )
+        login = ProbeResult(
+            url=f"{base}/login",
+            final_url=f"{base}/login",
+            http_status=200,
+            title="ESXi Login",
+            content_type="text/html",
+            server_header="VMware ESXi",
+            html='<html><title>ESXi Login</title><input type="password" /></html>',
+            tls_verified=False if scheme == "https" else None,
+            kind=WEB_PAGE_LOGIN,
+        )
+        ep.pages = [home, login]
+        return ep
+
+    # Default: generic nginx app page (not the stock "Welcome to nginx" default-page
+    # fingerprint — that skips screenshots and left capture dirs empty in tests/dev).
     home = ProbeResult(
         url=f"{base}/",
         final_url=f"{base}/",
         http_status=200,
-        title="VMware ESXi",
+        title="Internal Web App",
         content_type="text/html",
-        server_header="VMware ESXi",
-        html='<html><title>VMware ESXi</title><a href="/login">Log in</a></html>',
+        server_header="nginx",
+        html='<html><title>Internal Web App</title><body><h1>App home</h1><a href="/login">Log in</a></body></html>',
         tls_verified=False if scheme == "https" else None,
         kind=WEB_PAGE_HOME,
     )
-    login = ProbeResult(
-        url=f"{base}/login",
-        final_url=f"{base}/login",
-        http_status=200,
-        title="ESXi Login",
-        content_type="text/html",
-        server_header="VMware ESXi",
-        html='<html><title>ESXi Login</title><input type="password" /></html>',
-        tls_verified=False if scheme == "https" else None,
-        kind=WEB_PAGE_LOGIN,
-    )
-    ep.pages = [home, login]
+    ep.pages = [home]
     return ep

@@ -15,7 +15,9 @@ from ...models import (
     SCAN_STANDARD,
     SCREENSHOT_CAPTURED,
     WEB_CAPTURE_QUEUED,
+    DevicePort,
     Event,
+    PortHttp,
     Scan,
     ScanHost,
     WebCapture,
@@ -26,6 +28,7 @@ from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
 from ..web_storage import resolve_screenshot
 from .inventory import COMMON_RTSP_PORTS, COMMON_WEB_PORTS, find_web_endpoints, is_rtsp_service, is_web_service
+from .inventory_sync import _http_claims_hypervisor, _product_conflicts_hypervisor
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +104,23 @@ def _candidate_ips(db: Session, scan: Scan, cfg: WebCaptureSettings, *, baseline
             and resolve_screenshot(page.screenshot_relpath) is None
         ):
             interesting.add(e.ip)
+
+    # Stale hypervisor PortHttp: title/server still say ESXi/Proxmox while nmap product
+    # clearly identifies another service — re-capture so type and tiles can recover.
+    port_ids = [e.device_port_id for e in endpoints]
+    ip_by_port = {e.device_port_id: e.ip for e in endpoints}
+    if port_ids:
+        for http, port in db.execute(
+            select(PortHttp, DevicePort)
+            .join(DevicePort, DevicePort.id == PortHttp.device_port_id)
+            .where(PortHttp.device_port_id.in_(port_ids))
+        ).all():
+            if _http_claims_hypervisor(http.title, http.server) and _product_conflicts_hypervisor(
+                port.product, port.service, port.cpe,
+            ):
+                ip = ip_by_port.get(port.id)
+                if ip:
+                    interesting.add(ip)
 
     if baseline_created:
         interesting |= web_ips

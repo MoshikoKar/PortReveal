@@ -223,6 +223,17 @@ def test_invalid_targets_rejected(bad):
         AddressSet.from_specs(bad)
 
 
+@pytest.mark.parametrize("bad", [
+    "10.0.0.1; reboot",  # semicolon split + single-label must not resolve via search domain
+    "reboot",
+    "localhostx",  # single-label, not localhost
+])
+def test_single_label_hostnames_rejected_even_with_allow_hostname(bad):
+    """Ad-hoc scan targets allow hostnames, but not single-label names (except localhost)."""
+    with pytest.raises(TargetError):
+        AddressSet.from_specs(bad, allow_hostname=True)
+
+
 def test_network_size_limit():
     assert validate_network_cidr("10.20.5.0/16") == "10.20.0.0/16"
     with pytest.raises(TargetError):
@@ -233,3 +244,27 @@ def test_port_scope():
     scope = PortScope("1,3-4,22,80-90")
     assert 3 in scope and 85 in scope and 91 not in scope and 2 not in scope
     assert PortScope.from_ports([1, 2, 3, 5, 7, 8]) == "1-3,5,7-8"
+
+
+def test_mock_cpe_for_derives_nmap_style_cpes():
+    from app.scanner.mock_scanner import mock_cpe_for
+
+    assert mock_cpe_for("OpenSSH", "8.9p1 Ubuntu 3ubuntu0.10") == "cpe:/a:openbsd:openssh:8.9p1"
+    assert mock_cpe_for("nginx", "1.24.0") == "cpe:/a:f5:nginx:1.24.0"
+    assert mock_cpe_for("Apache httpd", "2.4.57") == "cpe:/a:apache:http_server:2.4.57"
+    assert mock_cpe_for("Apache Tomcat", "9.0.80") == "cpe:/a:apache:tomcat:9.0.80"
+    assert mock_cpe_for("PostgreSQL DB", "15.4") == "cpe:/a:postgresql:postgresql:15.4"
+    assert mock_cpe_for("nginx", None) == "cpe:/a:f5:nginx"
+    assert mock_cpe_for("Microsoft Terminal Services", "1.0") is None
+    assert mock_cpe_for(None, "1.0") is None
+
+
+def test_mock_scanner_attaches_cpe_on_known_products():
+    from app.scanner.mock_scanner import MockScanner
+    from app.scanner.types import PortProfile, ScanContext
+
+    scanner = MockScanner([(1, "10.99.0.0/24", 0)])
+    result = scanner.scan_ports(["10.99.0.10"], PortProfile(full=False), ScanContext(scan_id=1))
+    by_port = {p.port: p for p in result.hosts[0].ports}
+    assert by_port[22].cpe == "cpe:/a:openbsd:openssh:8.9p1"
+    assert by_port[443].cpe == "cpe:/a:f5:nginx:1.24.0"

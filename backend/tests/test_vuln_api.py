@@ -12,6 +12,7 @@ from app.models import (
     VULN_JOB_QUEUED,
     VULN_JOB_TRIGGER_AFTER_SCAN,
     VULN_STATE_CONFIRMED,
+    VULN_STATE_POTENTIAL,
     DevicePort,
     VulnCpeMatch,
     Vulnerability,
@@ -54,29 +55,57 @@ def test_vuln_settings_default_off_and_roundtrip(admin):
     assert body["enabled"] is False
     assert set(body["sources"]) == {"nvd", "kev", "epss"}
     assert body["nvd_api_key_set"] is False
+    assert body["epss_high_threshold"] == 0.10
 
     r = admin.put("/api/settings/vuln", json={
         "enabled": True, "sources": ["nvd"], "sync_interval_hours": 48, "sync_time": "05:30",
         "offline_mode": True, "nvd_api_key": "secret-key", "include_potential": False,
-        "min_cvss_display": 4.0, "scripts_enabled": False,
+        "min_cvss_display": 4.0, "epss_high_threshold": 0.25, "scripts_enabled": False,
     }, headers=csrf(admin))
     assert r.status_code == 200
     body = r.json()
     assert body["enabled"] is True and body["sources"] == ["nvd"] and body["offline_mode"] is True
     assert body["nvd_api_key_set"] is True and "nvd_api_key" not in body
+    assert body["epss_high_threshold"] == 0.25
 
     # The key stays set when omitted on a later save.
     r = admin.put("/api/settings/vuln", json={
         "enabled": True, "sources": ["nvd"], "sync_interval_hours": 48, "sync_time": "05:30",
-        "offline_mode": True, "include_potential": False, "min_cvss_display": 4.0, "scripts_enabled": False,
+        "offline_mode": True, "include_potential": False, "min_cvss_display": 4.0,
+        "epss_high_threshold": 0.25, "scripts_enabled": False,
     }, headers=csrf(admin))
     assert r.json()["nvd_api_key_set"] is True
+
+
+def test_vuln_settings_epss_threshold_out_of_range_rejected(admin):
+    r = admin.put("/api/settings/vuln", json={
+        "enabled": False, "sources": ["nvd"], "sync_interval_hours": 168, "sync_time": "04:00",
+        "offline_mode": False, "include_potential": True, "min_cvss_display": 0.0,
+        "epss_high_threshold": 1.5, "scripts_enabled": True,
+    }, headers=csrf(admin))
+    assert r.status_code == 422
+
+
+def test_vuln_settings_old_format_row_still_loads(db):
+    """A row saved before epss_high_threshold existed must still load, with the new default."""
+    from app.models import AppSetting
+    from app.settings_store import get_section
+
+    db.merge(AppSetting(key="vuln", value={
+        "enabled": True, "sources": ["nvd"], "sync_interval_hours": 168, "sync_time": "04:00",
+        "offline_mode": False, "nvd_api_key_enc": "", "include_potential": True,
+        "min_cvss_display": 0.0, "scripts_enabled": True,
+    }))
+    db.commit()
+    cfg = get_section(db, VulnSettings)
+    assert cfg.epss_high_threshold == 0.10
 
 
 def test_vuln_settings_rejects_unknown_source(admin):
     r = admin.put("/api/settings/vuln", json={
         "enabled": False, "sources": ["vulners"], "sync_interval_hours": 168, "sync_time": "04:00",
-        "offline_mode": False, "include_potential": True, "min_cvss_display": 0.0, "scripts_enabled": True,
+        "offline_mode": False, "include_potential": True, "min_cvss_display": 0.0,
+        "epss_high_threshold": 0.10, "scripts_enabled": True,
     }, headers=csrf(admin))
     assert r.status_code == 422
 
@@ -157,9 +186,69 @@ def test_device_vulns_list_dismiss_and_undismiss(admin, db):
     r = admin.delete(f"/api/devices/{uuid}/vulns/CVE-2024-0001/dismiss", headers=csrf(admin))
     assert r.status_code == 204
     items = admin.get(f"/api/devices/{uuid}/vulns").json()["items"]
-    assert items[0]["state"] != "dismissed"
+    # Undo must restore confirmed (not fall back to potential).
+    assert items[0]["state"] == VULN_STATE_CONFIRMED
 
     assert admin.post(f"/api/devices/{uuid}/vulns/CVE-NOPE/dismiss", headers=csrf(admin)).status_code == 404
+
+
+
+
+def test_undismiss_restores_risk_score(admin, db):
+    """Undo must re-score the device the same way dismiss does (autoflush is off)."""
+    from datetime import datetime, timezone
+
+    from app.core.vuln.score import apply_risk_scores
+    from app.models import DevicePortVuln, Vulnerability
+
+    T = datetime(2026, 1, 20, tzinfo=timezone.utc)
+    d = device_by_ip(db, "10.0.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add_all([
+        Vulnerability(cve_id="CVE-HIGH", cvss_base=9.8, kev=True),
+        Vulnerability(cve_id="CVE-LOW", cvss_base=2.0, kev=False),
+    ])
+    db.flush()
+    db.add_all([
+        DevicePortVuln(device_port_id=p.id, cve_id="CVE-HIGH", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=p.id, cve_id="CVE-LOW", state=VULN_STATE_CONFIRMED, matched_at=T),
+    ])
+    db.commit()
+    apply_risk_scores(db, [d.id], now=T)
+    db.commit()
+    d = device_by_ip(db, "10.0.0.1")
+    before_risk, before_combined = d.risk_score, d.combined_score
+    assert before_risk > 0
+
+    uuid = _uuid(admin, "10.0.0.1")
+    assert admin.post(f"/api/devices/{uuid}/vulns/CVE-HIGH/dismiss", headers=csrf(admin)).status_code == 200
+    db.expire_all()
+    d = device_by_ip(db, "10.0.0.1")
+    assert d.risk_score < before_risk
+
+    assert admin.delete(f"/api/devices/{uuid}/vulns/CVE-HIGH/dismiss", headers=csrf(admin)).status_code == 204
+    db.expire_all()
+    d = device_by_ip(db, "10.0.0.1")
+    assert d.risk_score == before_risk
+    assert d.combined_score == before_combined
+
+
+def test_undismiss_restores_potential_when_that_was_prior_state(admin, db):
+    uuid = _uuid(admin, "10.0.0.1")
+    d = device_by_ip(db, "10.0.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-POT", cvss_base=5.0))
+    db.flush()
+    from app.db import utcnow
+    from app.models import VULN_SOURCE_CACHE, DevicePortVuln
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-POT", state=VULN_STATE_POTENTIAL,
+                          source=VULN_SOURCE_CACHE, matched_at=utcnow()))
+    db.commit()
+
+    assert admin.post(f"/api/devices/{uuid}/vulns/CVE-2024-POT/dismiss", headers=csrf(admin)).status_code == 200
+    assert admin.delete(f"/api/devices/{uuid}/vulns/CVE-2024-POT/dismiss", headers=csrf(admin)).status_code == 204
+    items = admin.get(f"/api/devices/{uuid}/vulns").json()["items"]
+    assert items[0]["cve_id"] == "CVE-2024-POT" and items[0]["state"] == VULN_STATE_POTENTIAL
 
 
 def test_device_vulns_min_cvss_uses_default_for_missing_and_never_hides_kev(admin, db):

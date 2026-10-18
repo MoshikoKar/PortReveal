@@ -40,6 +40,20 @@ def is_hostname(value: str) -> bool:
     return bool(_HOSTNAME_RE.match(value)) and not re.fullmatch(r"[\d.]+", value)
 
 
+def _hostname_resolvable(spec: str) -> bool:
+    """True when ``spec`` is a hostname we will resolve for ad-hoc scan targets.
+
+    Single-label names (no dot) are rejected except ``localhost``: they often match
+    DNS search-list suffixes on developer machines (e.g. ``reboot`` → an office
+    host), which would turn shell-like fragments after ``;`` into a successful
+    scan. Require a multi-label name (``host.example``) or localhost.
+    """
+    if not is_hostname(spec):
+        return False
+    host = spec.rstrip(".").lower()
+    return host == "localhost" or "." in host
+
+
 def _ip_int(value: str) -> int:
     try:
         addr = ipaddress.ip_address(value)
@@ -79,7 +93,7 @@ def parse_spec(spec: str, allow_hostname: bool = False) -> tuple[int, int]:
     if re.fullmatch(r"[\d.]+", spec):
         v = _ip_int(spec)
         return v, v
-    if allow_hostname and is_hostname(spec):
+    if allow_hostname and _hostname_resolvable(spec):
         try:
             infos = socket.getaddrinfo(spec, None, socket.AF_INET, socket.SOCK_STREAM)
         except socket.gaierror as exc:

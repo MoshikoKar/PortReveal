@@ -131,6 +131,7 @@ class VulnIn(BaseModel):
     nvd_api_key: str | None = Field(None, max_length=200, description="omit to keep the stored key")
     include_potential: bool = True
     min_cvss_display: float = Field(0.0, ge=0.0, le=10.0)
+    epss_high_threshold: float = Field(0.10, ge=0.0, le=1.0)
     scripts_enabled: bool = True
 
 
@@ -158,20 +159,38 @@ def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_
 
 @router.get("/vuln/status")
 def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    """Local CVE cache state: per-feed bookkeeping, cache size and whether a sync is running."""
-    from ..core.vuln.sync import NVD_MIRROR_START_YEAR, sync_running
+    """Local CVE cache state: per-feed bookkeeping, cache size and whether a sync is running.
 
+    ``cve_count`` prefers ``vuln_feed_state.record_count`` for NVD so the endpoint stays cheap
+    while a large import/sync holds a write lock on ``vulnerabilities`` (COUNT(*) would stall).
+    """
+    from ..core.vuln.sync import NVD_MIRROR_START_YEAR, sync_in_progress
+
+    feed_rows = db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
     feeds = [
         {"source": f.source, "last_synced_at": f.last_synced_at, "record_count": f.record_count or 0,
          "last_error": f.last_error,
          "mirror_complete": f.mirror_complete if f.source == "nvd" else None,
          "mirror_next_year": (f.mirror_next_year or NVD_MIRROR_START_YEAR)
          if f.source == "nvd" and not f.mirror_complete else None}
-        for f in db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
+        for f in feed_rows
     ]
+    # Heartbeat-aware: a browser refresh must not flip the badge to "idle" while ingest is active.
+    running = sync_in_progress(db)
+    nvd = next((f for f in feed_rows if f.source == "nvd"), None)
+    if running:
+        # During import/sync avoid COUNT(*) (SQLite write-lock stalls). Prefer the unique
+        # tally persisted on the NVD feed row at sync/import time.
+        cve_count = (nvd.record_count if nvd is not None else 0) or 0
+    else:
+        # Idle: unique CVE rows (corrects older installs that stored an ingest tally).
+        cve_count = db.scalar(select(func.count(Vulnerability.cve_id))) or 0
+        if nvd is not None and (nvd.record_count or 0) != cve_count:
+            nvd.record_count = cve_count
+            db.commit()
     return {
-        "sync_running": sync_running(),
-        "cve_count": db.scalar(select(func.count(Vulnerability.cve_id))) or 0,
+        "sync_running": running,
+        "cve_count": cve_count,
         "mirror_start_year": NVD_MIRROR_START_YEAR,
         "feeds": feeds,
     }

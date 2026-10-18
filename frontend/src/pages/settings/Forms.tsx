@@ -478,7 +478,13 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
   const [syncing, setSyncing] = useState(false);
   const [statusPoll, setStatusPoll] = useState(VULN_STATUS_POLL_IDLE_MS);
   const status = useApi<VulnStatus>('/settings/vuln/status', undefined, statusPoll);
-  const running = !!status.data?.sync_running;
+  // Keep last good status while a poll is in flight so a refresh does not flash "idle".
+  const [stickyStatus, setStickyStatus] = useState<VulnStatus | null>(null);
+  useEffect(() => {
+    if (status.data) setStickyStatus(status.data);
+  }, [status.data]);
+  const viewStatus = status.data ?? stickyStatus;
+  const running = !!viewStatus?.sync_running;
   useEffect(() => {
     setStatusPoll(running ? VULN_STATUS_POLL_RUNNING_MS : VULN_STATUS_POLL_IDLE_MS);
   }, [running]);
@@ -536,6 +542,8 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
               onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" />
           </label>
           <Num label="Min CVSS to display" value={s.min_cvss_display} min={0} max={10} onChange={(v) => set({ min_cvss_display: v })} />
+          <Num label="EPSS high-probability threshold" value={s.epss_high_threshold} min={0} max={1} onChange={(v) => set({ epss_high_threshold: v })}
+            hint="EPSS score (0-1) above which a finding counts as high exploitation probability" />
         </div>
         <div className="row wrap">
           <label className="check"><input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />Offline mode (no feed downloads; import with <code>npm run cli -- vuln-import PATH</code>)</label>
@@ -546,7 +554,14 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           </label>
         </div>
         <Msg msg={f.msg} />
-        <VulnFeedStatusPanel status={status.data} />
+        <VulnFeedStatusPanel status={viewStatus} />
+        {running && (
+          <div className="muted small">
+            First-time NVD import downloads several years of public CVE feeds in the background.
+            Refreshing the page is safe — it does not cancel the sync. Leave this tab open or come back later;
+            progress updates every few seconds.
+          </div>
+        )}
         {syncMsg && <div className={`alert ${syncMsg.ok ? 'ok' : 'error'}`}>{syncMsg.text}</div>}
         <div className="row">
           <button className="btn primary" disabled={f.saving} onClick={save}>Save</button>

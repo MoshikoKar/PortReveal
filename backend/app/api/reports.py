@@ -12,17 +12,9 @@ from ..auth.deps import current_user
 from ..core.exposure import HIGH_THRESHOLD, MEDIUM_THRESHOLD, RARE_MIN_HOSTS
 from ..core.mockdata import device_visible
 from ..core.query.sqlfn import ipv4_int_expr
-from ..db import get_db
-from ..models import (
-    DEVICE_ACTIVE,
-    VULN_STATE_DISMISSED,
-    Device,
-    DevicePort,
-    DevicePortVuln,
-    Network,
-    User,
-    Vulnerability,
-)
+from ..core.vuln.summary import get_vuln_summary
+from ..db import get_db, utcnow
+from ..models import DEVICE_ACTIVE, Device, DevicePort, Network, User
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -69,33 +61,20 @@ def exposure_report(db: Session = Depends(get_db), user: User = Depends(current_
 
 @router.get("/vulnerabilities")
 def vuln_report(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    """At-risk devices (risk/combined score) and the CVEs matched on the most devices (spec 5.7)."""
-    ok = device_visible(db)
-    names = _networks(db)
-    ip_key = ipv4_int_expr(db.get_bind().dialect.name, Device.current_ip)
-    top_devices = db.scalars(
-        select(Device).where(ok, Device.risk_score > 0)
-        .order_by(Device.combined_score.desc(), Device.risk_score.desc(), ip_key).limit(TOP_HOSTS)
-    ).all()
-    n_dev = func.count(func.distinct(Device.id))
-    cve_rows = db.execute(
-        select(Vulnerability.cve_id, Vulnerability.cvss_base, Vulnerability.kev, Vulnerability.epss, n_dev)
-        .join(DevicePortVuln, DevicePortVuln.cve_id == Vulnerability.cve_id)
-        .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
-        .join(Device, Device.id == DevicePort.device_id)
-        .where(ok, DevicePortVuln.state != VULN_STATE_DISMISSED)
-        .group_by(Vulnerability.cve_id, Vulnerability.cvss_base, Vulnerability.kev, Vulnerability.epss)
-        .order_by(Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), n_dev.desc())
-        .limit(TOP_HOSTS)
-    ).all()
+    """At-risk devices (risk/combined score) and the CVEs matched on the most devices (spec 5.7).
+
+    A short summary, linking to the full `/vulnerabilities` dashboard page -- sourced from the same
+    computation as `/api/vulns/summary` (decision 5) so the two pages' numbers never diverge.
+    """
+    summary = get_vuln_summary(db, now=utcnow())
     return {
         "top_devices": [
-            {**_host(d, names), "risk": d.risk_score or 0, "combined": d.combined_score or 0} for d in top_devices
+            {"uuid": d["uuid"], "ip": d["ip"], "hostname": d["hostname"], "type": d["device_type"],
+             "score": d["exposure_score"], "network": d["network_name"],
+             "risk": d["risk_score"], "combined": d["combined_score"]}
+            for d in summary["top_devices"]
         ],
-        "top_cves": [
-            {"cve_id": c, "cvss_base": cvss, "kev": bool(kev), "epss": epss, "device_count": int(n)}
-            for c, cvss, kev, epss, n in cve_rows
-        ],
+        "top_cves": summary["top_cves"],
     }
 
 
