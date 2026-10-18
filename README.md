@@ -37,7 +37,7 @@ in development (required for real scans).
 
 ```bash
 git clone https://github.com/MoshikoKar/PortReveal.git
-cd network_finder
+cd PortReveal
 npm install
 npm run setup
 npm run dev
@@ -341,7 +341,7 @@ usual package indexes. Inbound TCP `APP_PORT` (default `8081`).
 
 ```bash
 git clone https://github.com/MoshikoKar/PortReveal.git
-cd network_finder
+cd PortReveal
 cp .env.production.example .env
 # Set POSTGRES_PASSWORD, APP_SECRET_KEY (openssl rand -hex 32), TZ, APP_PORT
 docker compose up -d --build
@@ -412,7 +412,7 @@ Schedule the script on the production host and copy each set **off-box**:
 # Linux Docker Compose (cron example: 02:15 daily)
 chmod +x scripts/backup.sh
 ./scripts/backup.sh
-# 15 2 * * * cd /opt/network_finder && ./scripts/backup.sh >> data/logs/backup.log 2>&1
+# 15 2 * * * cd /opt/PortReveal && ./scripts/backup.sh >> data/logs/backup.log 2>&1
 ```
 
 ```powershell
