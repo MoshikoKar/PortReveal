@@ -336,6 +336,25 @@ def test_web_capture_fills_port_http_and_retags(db):
     assert "http_login" in {f["factor"] for f in prof.exposure_factors}
 
 
+def test_mock_lab_web_host_is_not_misclassified_as_hypervisor(db):
+    """srv-web01-style last octet (.10) gets nginx mock HTML, not the ESXi scenario."""
+    net = make_network(db, cidr="10.99.0.0/24", name="Mock Lab")
+    scan(ScriptedScanner([
+        host("10.99.0.10", [port(22, "ssh", "OpenSSH", "8.9p1"), port(443, "https", "nginx", "1.24.0")],
+             mac="02:4E:01:00:02:10", hostname="srv-web01.net1.lab.local"),
+    ]), network_id=net.id)
+    d = device_by_ip(db, "10.99.0.10")
+    cap = WebCapture(targets="10.99.0.10")
+    db.add(cap)
+    db.commit()
+    run_web_capture(cap.id, CaptureContext(cap.id))
+    db.expire_all()
+    h = db.scalar(select(PortHttp).where(PortHttp.device_id == d.id))
+    assert h is not None and h.title == "Welcome to nginx" and h.server == "nginx"
+    d = device_by_ip(db, "10.99.0.10")
+    assert d.device_type != "hypervisor"
+
+
 # --- watches --------------------------------------------------------------------------------------------
 def test_evaluate_all_loads_saved_searches_once(db):
     db.add_all([
