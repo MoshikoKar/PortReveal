@@ -13,7 +13,7 @@ const TYPE_COLORS: Record<EventType, string> = {
   device_disappeared: 'var(--medium)', port_closed: 'var(--medium)', ip_changed: 'var(--low)',
   version_changed: 'var(--low)', device_reappeared: 'var(--low)', service_detected: 'var(--info)',
   tag_added: 'var(--info)', tag_removed: 'var(--info)', watch_match: 'var(--medium)', policy_violation: 'var(--high)',
-  banner_changed: 'var(--info)',
+  banner_changed: 'var(--info)', os_changed: 'var(--medium)',
 };
 
 const LEVEL_COLORS = { high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)' } as const;

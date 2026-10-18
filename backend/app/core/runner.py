@@ -271,30 +271,65 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                 batch_size=min(cfg.port_batch_size, 16) if full else cfg.port_batch_size,
             )
             ips = sorted(live, key=ip_sort_key)
-            batches = [ips[i:i + profile.batch_size] for i in range(0, len(ips), profile.batch_size)]
+            # Spec 3.2: only re-run -O on hosts whose OS guess is older than os_refresh_days.
+            need_os, skip_os = ips, []
+            if profile.os_detection:
+                from datetime import timedelta
+
+                with session_scope() as db:
+                    refresh_days = get_section(db, ScanSettings).os_refresh_days
+                    cutoff = utcnow() - timedelta(days=refresh_days)
+                    known = {
+                        d.current_ip: d for d in db.scalars(
+                            select(Device).where(Device.current_ip.in_(ips))
+                        ).all()
+                    }
+                need_os, skip_os = [], []
+                for ip in ips:
+                    d = known.get(ip)
+                    if d is None or d.os_detected_at is None or d.os_detected_at < cutoff:
+                        need_os.append(ip)
+                    else:
+                        skip_os.append(ip)
             port_stage = "full port scan" if full else "service scan"
             _update(scan_id, stage=f"{port_stage} (0/{len(ips)})", progress=disc_weight,
                     hosts_discovered=len(live))
+            done_hosts_box = [0]
+
             def port_done(run: _StageRun) -> None:
-                done_hosts = sum(len(r.hosts) for r in run.results) + sum(len(i) for i in run.failed_items)
+                done_hosts_box[0] += sum(len(r.hosts) for r in run.results) + sum(len(i) for i in run.failed_items)
                 _update(
                     scan_id,
-                    stage=f"{port_stage} ({done_hosts}/{len(ips)})",
-                    hosts_scanned=done_hosts,
-                    progress=disc_weight + (1 - disc_weight) * done_hosts / max(len(ips), 1),
+                    stage=f"{port_stage} ({done_hosts_box[0]}/{len(ips)})",
+                    hosts_scanned=done_hosts_box[0],
+                    progress=disc_weight + (1 - disc_weight) * done_hosts_box[0] / max(len(ips), 1),
                 )
 
-            ports = _run_parallel(batches, lambda b: scanner.scan_ports(b, profile, ctx), cfg.parallelism, ctx, port_done)
-            for r in ports.results:
-                port_scope = port_scope or r.port_scope
-                for h in r.hosts:
-                    if h.ip in live:
-                        live[h.ip].merge(h)
-            for item in ports.failed_items:
-                for ip in item:
-                    live[ip].merge(HostObservation(ip=ip, port_scan_failed=True))
-            port_stage_complete = not ports.failures
-            failures += ports.failures
+            def _scan_batches(batch_ips: list[str], with_os: bool) -> None:
+                nonlocal port_scope, port_stage_complete, failures
+                if not batch_ips:
+                    return
+                p = PortProfile(
+                    full=profile.full, top_ports=profile.top_ports, timing=profile.timing,
+                    host_timeout_minutes=profile.host_timeout_minutes, os_detection=with_os,
+                    batch_size=profile.batch_size, max_rate=profile.max_rate,
+                )
+                batches = [batch_ips[i:i + p.batch_size] for i in range(0, len(batch_ips), p.batch_size)]
+                result = _run_parallel(batches, lambda b: scanner.scan_ports(b, p, ctx),
+                                       cfg.parallelism, ctx, port_done)
+                for r in result.results:
+                    port_scope = port_scope or r.port_scope
+                    for h in r.hosts:
+                        if h.ip in live:
+                            live[h.ip].merge(h)
+                for item in result.failed_items:
+                    for ip in item:
+                        live[ip].merge(HostObservation(ip=ip, port_scan_failed=True))
+                port_stage_complete = port_stage_complete and not result.failures
+                failures += result.failures
+
+            _scan_batches(need_os, with_os=True)
+            _scan_batches(skip_os, with_os=False)
             if port_scope is None:
                 # no port data at all: treat hosts as not port-scanned
                 for h in live.values():

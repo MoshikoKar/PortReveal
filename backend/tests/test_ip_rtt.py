@@ -40,12 +40,12 @@ def test_ip_assignment_multiple_recent_ips_is_dynamic():
 
 def test_ip_assignment_old_single_ip_outside_dynamic_window_stays_static():
     # Two addresses total, but the older one fell out of the dynamic-detection window:
-    # the device has held its current address alone for a long time now.
+    # the device has held its current address alone for a long time now → static.
     rows = [
         ("10.0.0.4", T - timedelta(days=200), T - timedelta(days=100)),
         ("10.0.0.5", T - timedelta(days=60), T),
     ]
-    assert compute_ip_assignment(_dev(), rows, T) == "unknown"  # len(ip_rows) >= 2: generic-hostname tiebreak only
+    assert compute_ip_assignment(_dev(), rows, T) == "static"
     generic = _dev(hostname="10-0-0-5.dhcp.corp")
     assert compute_ip_assignment(generic, rows, T) == "dynamic"
 
@@ -117,6 +117,16 @@ def test_availability_pct_from_scan_hosts(db):
     scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh")], mac="00:11:22:33:44:01")]), network_id=net.id)
     d = device_by_ip(db, "10.0.0.1")
     assert availability_pct(db, d.id, now=d.last_seen) == 100.0
+
+
+def test_availability_pct_counts_missed_network_scans(db):
+    net = make_network(db)
+    scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh")], mac="00:11:22:33:44:01")]), network_id=net.id)
+    # Second network scan does not see the device → missed scan must lower availability.
+    scan(ScriptedScanner([host("10.0.0.2", [port(22, "ssh")], mac="00:11:22:33:44:02")]), network_id=net.id)
+    d = device_by_ip(db, "10.0.0.1")
+    pct = availability_pct(db, d.id, now=d.last_seen + timedelta(minutes=1))
+    assert pct == 50.0
 
 
 def test_availability_pct_none_without_history(db):

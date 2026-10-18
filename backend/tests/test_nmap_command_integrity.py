@@ -52,6 +52,8 @@ SHELL_CHARS = set(";&|$`<>\n\r'\"")
 # when every name after it is in SCRIPT_ALLOWLIST. "-sC" (shorthand for --script=default, a whole
 # category) stays denied, and so does "--script-args" (never a free-form value reaches nmap).
 DENIED_OPTIONS = ("-A", "-iR", "-sU", "-sC", "-PU", "-sY", "-PY")
+# Compact nmap forms attach the value to the flag (`-PU53`); still denied.
+_DENIED_PREFIXES = ("-PU", "-sU", "-sY", "-PY", "-sC")
 CRAFTED_TARGETS = ["10.0.0.1; reboot", "$(id)", "`id`", "10.0.0.2\n-iR 0", "10.0.0.3 && rm -rf /", "--script=evil"]
 
 
@@ -90,6 +92,7 @@ def assert_safe_argv(call: dict) -> None:
     assert cmd.count("-iL") == 1 and cmd[-2:] == ["-oX", "-"]
     for i, arg in enumerate(cmd):
         assert not any(arg == d or arg.startswith(d + "=") for d in DENIED_OPTIONS), arg
+        assert not any(arg.startswith(p) and len(arg) > len(p) for p in _DENIED_PREFIXES), arg
         assert not arg.startswith("--script-args"), arg
         assert not SHELL_CHARS & set(arg), arg
         if arg == "--script":
@@ -281,15 +284,18 @@ def _stored_scan_settings() -> dict:
 
 
 def test_os_detection_defaults_on_for_a_fresh_install(client):
-    """A fresh install (no stored `scan` settings row) picks up the new default; see 0013_os_detection."""
-    assert _stored_scan_settings() == {}
+    """Fresh installs and migrated installs both expose os_detection=True (spec 3.2 / 0018)."""
+    stored = _stored_scan_settings()
+    # 0018 may have written a scan row that enables OS detection; either way the API must report on.
+    if stored:
+        assert stored.get("os_detection") is True
     assert client.get("/api/settings/scan").json()["os_detection"] is True
     assert ScanSettings().os_detection is True
 
 
-def test_os_detection_stays_off_for_an_install_that_stored_it_explicitly(client):
-    """0013_os_detection does not rewrite existing rows: an explicit stored `false` is preserved."""
-    before = client.get("/api/settings/scan").json() | {"os_detection": False}
+def test_os_detection_can_be_turned_off_after_migration_enable(client):
+    """Spec 3.2 enables OS detection for existing installs once; an admin may still turn it off."""
+    before = client.get("/api/settings/scan").json() | {"os_detection": False, "os_detection_enabled_notice": False}
     assert client.put("/api/settings/scan", json=before).status_code == 200
     assert _stored_scan_settings()["os_detection"] is False
     assert client.get("/api/settings/scan").json()["os_detection"] is False

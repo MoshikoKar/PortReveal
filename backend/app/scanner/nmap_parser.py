@@ -81,6 +81,20 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
         if best_name is not None:
             obs.os_name = best_name
             obs.os_accuracy = best_accuracy
+            obs.os_from_osmatch = True
+            obs.os_source = "nmap_os"
+        else:
+            # Service ostype is a weak fallback only (never overrides a prior -O match on merge).
+            for p in host.findall("ports/port"):
+                svc = p.find("service")
+                if svc is None:
+                    continue
+                ostype = (svc.get("ostype") or "").strip()
+                if ostype:
+                    obs.os_name = ostype
+                    obs.os_source = "service"
+                    obs.os_from_osmatch = False
+                    break
 
         times = host.find("times")
         if times is not None:

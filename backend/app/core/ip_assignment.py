@@ -41,13 +41,20 @@ def compute(device: Device, ip_rows: list[tuple[str, datetime, datetime]], now: 
         return IP_ASSIGNMENT_DYNAMIC
     if age < timedelta(days=MIN_HISTORY_DAYS):
         return IP_ASSIGNMENT_UNKNOWN
-    if len(ip_rows) == 1 and age >= timedelta(days=STABLE_MIN_DAYS):
-        return IP_ASSIGNMENT_STATIC
     # A hostname that is itself derived from the IP (e.g. "10-0-0-5.dhcp") is a DHCP-style
     # naming convention; a *missing* hostname says nothing either way, so it is not a signal here.
     has_generic_name = bool(device.hostname) and is_generic_hostname(device.hostname, device.current_ip)
     if len(ip_rows) >= 2 and has_generic_name:
         return IP_ASSIGNMENT_DYNAMIC
+    # One address overall, or only one address still active in the dynamic window and held long
+    # enough: treat as static even when ancient historical IPs remain in the table.
+    current_rows = [row for row in ip_rows if row[0] in recent_ips] or ip_rows
+    if len(recent_ips) <= 1:
+        held_since = min(first for _ip, first, _last in current_rows)
+        if now - held_since >= timedelta(days=STABLE_MIN_DAYS):
+            return IP_ASSIGNMENT_STATIC
+    if len(ip_rows) == 1 and age >= timedelta(days=STABLE_MIN_DAYS):
+        return IP_ASSIGNMENT_STATIC
     return IP_ASSIGNMENT_UNKNOWN
 
 

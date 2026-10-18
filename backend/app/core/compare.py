@@ -63,12 +63,22 @@ from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.known_ports import merge_port_scope
 from ..scanner.types import VERIFIED_METHOD, HostObservation, PortObservation
 from ..scanner.verify_services import WEAK_SERVICE_LABELS
-from ..settings_store import PresenceSettings, ScanSettings, get_section
+from ..settings_store import PresenceSettings, RetentionSettings, ScanSettings, get_section
 from .identity import identity_hostname, match_hosts, normalize_hostname, normalize_mac
 
 log = logging.getLogger(__name__)
 
 MASS_GUARD_MIN = 10  # never trip the guard below this many removals
+# Higher wins. A service/banner guess must never replace a precise -O / NSE OS result.
+_OS_SOURCE_RANK = {
+    "service": 10,
+    "ssh": 20,
+    "http": 20,
+    "snmp": 20,
+    "ntlm": 40,
+    "nmap_os": 50,
+}
+RTT_SAMPLES_PER_DEVICE_DEFAULT = 200
 
 
 @dataclass
@@ -185,6 +195,27 @@ class _Applier:
             return self.scope
         text = merge_port_scope(self.outcome.port_scope, host.extra_tcp_ports)
         return PortScope(text) if text else self.scope
+
+    def _trim_rtt_samples(self, device_id: int) -> None:
+        """Keep only the newest N samples per device (retention also ages them out by days)."""
+        try:
+            cap = get_section(self.db, RetentionSettings).rtt_samples_per_device
+        except Exception:
+            cap = RTT_SAMPLES_PER_DEVICE_DEFAULT
+        keep_ids = list(self.db.scalars(
+            select(DeviceRttSample.id).where(DeviceRttSample.device_id == device_id)
+            .order_by(DeviceRttSample.sampled_at.desc()).limit(cap)
+        ).all())
+        if not keep_ids:
+            return
+        stale = self.db.scalars(
+            select(DeviceRttSample).where(
+                DeviceRttSample.device_id == device_id,
+                DeviceRttSample.id.not_in(keep_ids),
+            )
+        ).all()
+        for row in stale:
+            self.db.delete(row)
 
     def emit(self, device: Device, etype: str, mode: str, message: str, *, ip: str | None = None,
              protocol: str | None = None, port: int | None = None, old: str | None = None,
@@ -362,6 +393,7 @@ class _Applier:
             if h.rtt_ms is not None:
                 dev.last_rtt_ms = h.rtt_ms
                 self.db.add(DeviceRttSample(device_id=dev.id, rtt_ms=h.rtt_ms, sampled_at=now))
+                self._trim_rtt_samples(dev.id)
 
         self._maybe_baseline()
         return self.result
@@ -418,21 +450,36 @@ class _Applier:
         """Commit an OS guess with a flap guard: a name that differs from the current one only
         replaces it once it has been seen twice in a row, or arrives with accuracy at least ten
         points above the current guess (spec 3.5) — otherwise it is parked as `os_pending`.
+
+        Sources are ranked: a precise ``nmap_os`` (or script/ntlm) result is never overwritten by a
+        weaker service/banner guess.
         """
         name = h.os_name
         if not name:
             return
         accuracy = h.os_accuracy
-        source = "nmap_os" if accuracy is not None else "service"
+        # Parser always sets os_name from <osmatch> for -O; accuracy may be missing. Treat any
+        # osmatch-sourced name (accuracy present OR source hint) as nmap_os; ostype-only falls
+        # through as service. Callers that set os_source on the observation win explicitly.
+        source = getattr(h, "os_source", None) or ("nmap_os" if accuracy is not None else "service")
+        if getattr(h, "os_from_osmatch", False):
+            source = "nmap_os"
+        new_rank = _OS_SOURCE_RANK.get(source, 0)
+        cur_rank = _OS_SOURCE_RANK.get(dev.os_source or "", 0)
         if dev.os_name is None:
             dev.os_name, dev.os_accuracy, dev.os_source = name, accuracy, source
             dev.os_detected_at, dev.os_pending = self.now, None
             return
         if _norm(name) == _norm(dev.os_name):
-            dev.os_accuracy = accuracy if accuracy is not None else dev.os_accuracy
-            dev.os_source = source
+            # Same name: refresh timestamps; never downgrade source rank.
+            if accuracy is not None:
+                dev.os_accuracy = accuracy
+            if new_rank >= cur_rank:
+                dev.os_source = source
             dev.os_detected_at, dev.os_pending = self.now, None
             return
+        if new_rank < cur_rank:
+            return  # weaker source cannot replace a stronger OS guess
         pending = dev.os_pending or {}
         seen_before = _norm(pending.get("name") or "") == _norm(name)
         confident_jump = accuracy is not None and accuracy >= (dev.os_accuracy or 0) + 10
@@ -443,7 +490,7 @@ class _Applier:
             self.emit(dev, EV_OS_CHANGED, mode, f"OS of {label} changed: {old_name} -> {name}",
                       old=old_name, new=name)
         else:
-            dev.os_pending = {"name": name, "accuracy": accuracy}
+            dev.os_pending = {"name": name, "accuracy": accuracy, "source": source}
 
     @staticmethod
     def _set_service(row: DevicePort, po: PortObservation, force: bool = False) -> None:

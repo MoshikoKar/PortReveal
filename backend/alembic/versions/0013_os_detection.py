@@ -44,6 +44,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Remove os_changed rows first — otherwise recreating the CHECK without that value fails.
+    op.execute(sa.text("DELETE FROM events WHERE event_type = 'os_changed'"))
     old = (
         "device_discovered", "device_disappeared", "device_reappeared", "ip_changed", "port_opened",
         "port_closed", "service_detected", "service_changed", "version_changed", "tag_added",

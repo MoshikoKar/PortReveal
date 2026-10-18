@@ -289,8 +289,11 @@ def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     base.vendor = base.vendor or extra.vendor
     base.hostname = base.hostname or extra.hostname
     if extra.os_name:
-        base.os_name = extra.os_name
-        base.os_accuracy = extra.os_accuracy
+        # Keep HostObservation.merge ranking: do not let a follow-up service guess replace -O.
+        base.merge(HostObservation(
+            ip=base.ip, os_name=extra.os_name, os_accuracy=extra.os_accuracy,
+            os_source=extra.os_source, os_from_osmatch=extra.os_from_osmatch,
+        ))
     if extra.rtt_ms is not None:
         base.rtt_ms = extra.rtt_ms
 

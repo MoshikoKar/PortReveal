@@ -44,6 +44,8 @@ class HostObservation:
     hostname: str | None = None
     os_name: str | None = None
     os_accuracy: int | None = None  # set only when os_name came from nmap -O (osmatch), not a fallback guess
+    os_source: str | None = None  # nmap_os | service | ssh | http | snmp | ntlm
+    os_from_osmatch: bool = False  # True when os_name came from <osmatch>, even if accuracy missing
     rtt_ms: float | None = None  # nmap <times srtt=...> (smoothed round-trip time), in milliseconds
     # nmap <status reason="..."> from host discovery (e.g. arp-response, reset)
     reason: str | None = None
@@ -62,8 +64,15 @@ class HostObservation:
         self.vendor = self.vendor or other.vendor
         self.hostname = self.hostname or other.hostname
         if other.os_name:
-            self.os_name = other.os_name
-            self.os_accuracy = other.os_accuracy
+            # Prefer stronger OS sources (nmap_os > service) when merging scan stages.
+            rank = {"service": 10, "ssh": 20, "http": 20, "snmp": 20, "ntlm": 40, "nmap_os": 50}
+            other_src = other.os_source or ("nmap_os" if other.os_from_osmatch or other.os_accuracy is not None else "service")
+            self_src = self.os_source or ("nmap_os" if self.os_from_osmatch or self.os_accuracy is not None else "service")
+            if rank.get(other_src, 0) >= rank.get(self_src, 0) or not self.os_name:
+                self.os_name = other.os_name
+                self.os_accuracy = other.os_accuracy
+                self.os_source = other_src
+                self.os_from_osmatch = other.os_from_osmatch
         if other.rtt_ms is not None:
             self.rtt_ms = other.rtt_ms
         self.reason = self.reason or other.reason

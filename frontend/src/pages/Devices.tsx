@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { get } from '../api';
+import { get, post } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Pager, PortChips, RiskBadge, SkeletonRows, SortTh } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -21,6 +21,11 @@ export default function Devices() {
   const [selectAllError, setSelectAllError] = useState<string | null>(null);
   const [scanPreset, setScanPreset] = useState<'standard' | 'full' | null>(null);
   const [webCaptureOpen, setWebCaptureOpen] = useState(false);
+  const [showOs, setShowOs] = useState(false);
+  const [showRtt, setShowRtt] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [vulnBusy, setVulnBusy] = useState(false);
+  const [vulnMsg, setVulnMsg] = useState<string | null>(null);
   const page = Number(sp.get('page') || 1);
   const filterKey = [
     sp.get('q') || '',
@@ -169,9 +174,24 @@ export default function Devices() {
           <button className="btn sm" onClick={() => setScanPreset('standard')}>Standard scan</button>
           <button className="btn warn sm" onClick={() => setScanPreset('full')}>Full port scan</button>
           <button className="btn sm" onClick={() => setWebCaptureOpen(true)}>Web capture</button>
+          <button className="btn sm" disabled={vulnBusy} onClick={async () => {
+            setVulnBusy(true); setVulnMsg(null);
+            try {
+              await post('/vuln-jobs', { device_uuids: [...selected] });
+              setVulnMsg(`Vulnerability check queued for ${selected.size} device(s).`);
+            } catch (e: any) {
+              setVulnMsg(e.message);
+            } finally {
+              setVulnBusy(false);
+            }
+          }}>{vulnBusy ? 'Queuing…' : 'Check vulnerabilities'}</button>
         </>
       )}>
-        <ErrorBox error={error || selectAllError} />
+        <ErrorBox error={error || selectAllError || vulnMsg} />
+        <div className="row wrap" style={{ gap: 12, padding: '0.5rem 1rem' }}>
+          <label className="check small"><input type="checkbox" checked={showOs} onChange={(e) => setShowOs(e.target.checked)} />Show OS column</label>
+          <label className="check small"><input type="checkbox" checked={showRtt} onChange={(e) => setShowRtt(e.target.checked)} />Show RTT column</label>
+        </div>
         {showSelectAllBanner && (
           <div className="alert" style={{ margin: '0.75rem 1rem 0' }}>
             <span className="small">
@@ -209,8 +229,10 @@ export default function Devices() {
                   {sortTh('hostname', 'Hostname')}
                   <th>MAC / vendor</th>
                   {sortTh('open_ports', 'Open ports')}
-                  {sortTh('os', 'OS')}
+                  {showOs && sortTh('os', 'OS')}
+                  {showRtt && <th title="Last measured round-trip time">RTT</th>}
                   <th>Network</th>
+                  <th title="Exposure score">Exposure</th>
                   <th title="Vulnerability-based risk score">Risk</th>
                   <th title="Risk boosted by exposure">Combined</th>
                   {sortTh('last_seen', 'Last seen')}
@@ -219,22 +241,57 @@ export default function Devices() {
               </thead>
               <tbody>
                 {items.map((d) => (
-                  <tr key={d.uuid} className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
+                  <Fragment key={d.uuid}>
+                  <tr className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
                     <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} /></td>
                     <td className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></td>
-                    <td>{d.hostname ?? <span className="muted">—</span>}</td>
+                    <td>
+                      {d.hostname ?? d.discovery_name ?? <span className="muted">—</span>}
+                      {!d.hostname && d.discovery_name && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
+                      {d.open_ports.length > 0 && (
+                        <button type="button" className="btn sm ghost" style={{ marginLeft: 6 }}
+                          onClick={(e) => { e.stopPropagation(); setExpanded((prev) => { const n = new Set(prev); if (n.has(d.uuid)) n.delete(d.uuid); else n.add(d.uuid); return n; }); }}
+                          aria-expanded={expanded.has(d.uuid)}>
+                          {expanded.has(d.uuid) ? 'Hide services' : 'Services'}
+                        </button>
+                      )}
+                    </td>
                     <td><span className="mono">{d.mac ?? '—'}</span>{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
                     <td><PortChips ports={d.open_ports} /></td>
-                    <td className="small" title={d.os_accuracy != null ? `${d.os_accuracy}% confidence` : undefined}>
-                      {d.os_name ?? <span className="muted">—</span>}
-                    </td>
+                    {showOs && (
+                      <td className="small" title={d.os_accuracy != null ? `${d.os_accuracy}% confidence` : undefined}>
+                        {d.os_name ?? <span className="muted">—</span>}
+                        {d.os_name && d.os_accuracy != null && d.os_accuracy < 85 && <span className="badge outline" style={{ marginLeft: 4 }}>uncertain</span>}
+                      </td>
+                    )}
+                    {showRtt && (
+                      <td className="mono small">{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">—</span>}</td>
+                    )}
                     <td className="small">{d.network_name ?? <span className="muted">—</span>}</td>
-                    <td>{d.risk_score ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">—</span>}</td>
-                    <td>{d.combined_score ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">—</span>}</td>
+                    <td>{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">—</span>}</td>
+                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">—</span>}</td>
+                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">—</span>}</td>
                     <td className="nowrap" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>
                     <td className="nowrap muted small">{fmtTime(d.first_seen)}</td>
                   </tr>
+                  {expanded.has(d.uuid) && (
+                    <tr className="dim">
+                      <td colSpan={99} style={{ paddingLeft: isAdmin ? 48 : 16 }}>
+                        <div className="stack" style={{ gap: 4 }}>
+                          {d.open_ports.map((p) => (
+                            <div key={`${p.protocol}-${p.port}`} className="small">
+                              <span className="mono">{p.protocol.toUpperCase()}/{p.port}</span>
+                              {' '}{p.service ?? 'not identified'}
+                              {(p.product || p.version) && <span className="muted"> — {[p.product, p.version].filter(Boolean).join(' ')}</span>}
+                              {!p.product && !p.version && p.service && <span className="badge outline" style={{ marginLeft: 6 }}>protocol match only</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
