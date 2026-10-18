@@ -12,11 +12,10 @@ from app.models import (
     VULN_JOB_QUEUED,
     VULN_JOB_TRIGGER_AFTER_SCAN,
     VULN_STATE_CONFIRMED,
-    Device,
     DevicePort,
-    VulnJob,
-    Vulnerability,
     VulnCpeMatch,
+    Vulnerability,
+    VulnJob,
 )
 from app.settings_store import VulnSettings, put_section
 
@@ -143,7 +142,7 @@ def test_device_vulns_min_cvss_uses_default_for_missing_and_never_hides_kev(admi
     """min_cvss_display must match scoring (None CVSS → DEFAULT_CVSS) and must never hide KEV."""
     from app.core.vuln.score import DEFAULT_CVSS
     from app.db import utcnow
-    from app.models import DevicePortVuln, VULN_SOURCE_CACHE
+    from app.models import VULN_SOURCE_CACHE, DevicePortVuln
 
     uuid = _uuid(admin, "10.0.0.1")
     d = device_by_ip(db, "10.0.0.1")

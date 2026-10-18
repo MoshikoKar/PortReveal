@@ -100,7 +100,7 @@ def _query_one_live(ip: str, timeout: float) -> bytes | None:
         sock.sendto(build_nbstat_query(0x5A5A), (ip, NETBIOS_PORT))
         data, _addr = sock.recvfrom(2048)
         return data
-    except socket.timeout:
+    except TimeoutError:
         return None
     finally:
         sock.close()
@@ -132,7 +132,7 @@ def _query_batch_live(ips: list[str], timeout: float) -> Iterable[tuple[bytes, t
         while time.monotonic() < deadline:
             try:
                 data, addr = sock.recvfrom(2048)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             yield data, addr
     finally:

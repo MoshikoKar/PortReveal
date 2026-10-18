@@ -23,7 +23,14 @@ from ...models import (
 )
 from ..mockdata import device_visible
 from .compile import (
-    Ctx, compile_host, compile_row, has_port_terms, join_flags, needs_http, service_from, validate,
+    Ctx,
+    compile_host,
+    compile_row,
+    has_port_terms,
+    join_flags,
+    needs_http,
+    service_from,
+    validate,
 )
 from .parser import And, Node, QueryError, parse, quote_value, terms
 from .sqlfn import ipv4_int_expr
@@ -37,7 +44,8 @@ HOST_SORTS = ("score", "ip", "last_seen", "first_seen", "hostname")
 
 def extract_before(node: Node | None) -> tuple[Node | None, object | None]:
     """Pull `before:` out of the AST. Returns (remaining node, date|None for historical search)."""
-    from datetime import date as date_cls, timedelta
+    from datetime import date as date_cls
+    from datetime import timedelta
 
     if node is None:
         return None, None

@@ -35,8 +35,8 @@ from ..models import (
     Scan,
     ScanHost,
     User,
-    VulnJob,
     Vulnerability,
+    VulnJob,
     WebCapture,
     WebPage,
 )

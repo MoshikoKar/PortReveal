@@ -427,6 +427,9 @@ class PortTls(Base):
     """TLS certificate observed on an open port (HTTPS, LDAPS, RDP, etc.)."""
 
     __tablename__ = "port_tls"
+    # Name must match migration 0009 (`ix_port_tls_fingerprint`); auto `index=True` would drift to
+    # `ix_port_tls_fingerprint_sha256` and fail `alembic check` on existing installs.
+    __table_args__ = (Index("ix_port_tls_fingerprint", "fingerprint_sha256"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), unique=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
@@ -435,7 +438,7 @@ class PortTls(Base):
     issuer: Mapped[str | None] = mapped_column(String(500))
     not_before: Mapped[datetime | None] = mapped_column(UTCDateTime)
     not_after: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    fingerprint_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    fingerprint_sha256: Mapped[str | None] = mapped_column(String(64))
     self_signed: Mapped[bool] = mapped_column(Boolean, default=False)
     expired: Mapped[bool] = mapped_column(Boolean, default=False)
     expires_soon: Mapped[bool] = mapped_column(Boolean, default=False)  # < 30 days

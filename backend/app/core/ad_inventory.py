@@ -27,7 +27,7 @@ def list_ad_computers(cfg: LdapSettings) -> list[dict]:
     if not cfg.enabled or not cfg.server_uri or not cfg.user_base_dn:
         return []
     try:
-        from ldap3 import ALL_ATTRIBUTES, SUBTREE, Connection
+        from ldap3 import SUBTREE
     except ImportError:
         return []
     try:

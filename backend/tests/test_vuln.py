@@ -12,11 +12,9 @@ from app.models import (
     VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
-    Device,
-    DevicePort,
     DevicePortVuln,
-    Vulnerability,
     VulnCpeMatch,
+    Vulnerability,
     VulnFeedState,
 )
 from app.settings_store import VulnSettings

@@ -14,18 +14,17 @@ from app.models import (
     VULN_JOB_RUNNING,
     VULN_JOB_TRIGGER_AFTER_SCAN,
     VULN_JOB_TRIGGER_MANUAL,
+    VULN_SOURCE_NMAP_SCRIPT,
     VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
-    VULN_SOURCE_NMAP_SCRIPT,
     Device,
-    DevicePort,
     DevicePortVuln,
-    VulnJob,
-    Vulnerability,
     VulnCpeMatch,
+    Vulnerability,
+    VulnJob,
 )
 from app.scanner.nmap_parser import ParsedRun
-from app.scanner.types import HostObservation, PortObservation, ScanCancelled, ScanContext
+from app.scanner.types import HostObservation, PortObservation, ScanContext
 from app.settings_store import VulnSettings, put_section
 
 from .helpers import ScriptedScanner, device_by_ip, host, make_network, port, scan

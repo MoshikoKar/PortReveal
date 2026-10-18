@@ -23,7 +23,7 @@ import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from ...models import Vulnerability, VulnCpeMatch, VulnFeedState
+from ...models import VulnCpeMatch, Vulnerability, VulnFeedState
 from ...security import decrypt_secret
 from ...settings_store import VulnSettings
 from .match import cpe_vendor_product, normalize_cpe

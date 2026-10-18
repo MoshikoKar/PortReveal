@@ -20,10 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...models import (
+    VULN_SOURCE_CACHE,
     VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
-    VULN_SOURCE_CACHE,
     DevicePort,
     DevicePortVuln,
     VulnCpeMatch,
@@ -40,7 +40,7 @@ def _version_key(v: str) -> tuple:
 def compare_versions(a: str, b: str) -> int:
     """-1 / 0 / 1, comparing dotted/alnum version strings token by token (numeric tokens as ints)."""
     ka, kb = _version_key(a), _version_key(b)
-    for x, y in zip(ka, kb):
+    for x, y in zip(ka, kb, strict=False):
         if type(x) is not type(y):
             x, y = str(x), str(y)
         if x < y:

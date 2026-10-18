@@ -30,9 +30,9 @@ from ...models import (
     DevicePort,
     DevicePortVuln,
     Scan,
+    Vulnerability,
     VulnFeedState,
     VulnJob,
-    Vulnerability,
 )
 from ...scanner import scanner_status
 from ...scanner.nmap_scanner import NmapScanner, nmap_is_privileged

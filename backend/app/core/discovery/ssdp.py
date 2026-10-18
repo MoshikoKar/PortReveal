@@ -48,7 +48,7 @@ def _search_live(timeout: float) -> Iterable[tuple[bytes, tuple]]:
         while time.monotonic() < deadline:
             try:
                 data, addr = sock.recvfrom(4096)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             yield data, addr
     finally:

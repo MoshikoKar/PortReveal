@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from typing import Iterable
+from collections.abc import Iterable
 
 
 def _mmh3_x86_32(data: bytes, seed: int = 0) -> int:
