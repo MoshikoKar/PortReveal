@@ -29,9 +29,10 @@ def upgrade() -> None:
 
     # Healthy prior syncs: assume the yearly mirror finished. Rows with a recorded error (or never
     # synced) stay incomplete so the next sync resumes / re-runs the mirror.
+    # Use SQL true (not 1): PostgreSQL rejects integer literals for boolean columns; SQLite accepts true.
     op.execute(
         sa.text(
-            "UPDATE vuln_feed_state SET mirror_complete = 1 "
+            "UPDATE vuln_feed_state SET mirror_complete = true "
             "WHERE source = 'nvd' AND last_synced_at IS NOT NULL AND last_error IS NULL"
         )
     )
