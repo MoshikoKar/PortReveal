@@ -296,10 +296,11 @@ exclusions → schedule → SMTP → optional LDAP → recipients → baseline s
 
 1. Take a backup set (`.\scripts\backup.ps1`) and record the current Git revision
    (`git rev-parse HEAD`) with the stamp.
-2. `git pull`, `npm run setup` (reinstalls capture tools / Chromium when needed), then
-   `.\scripts\run.ps1 -Mode production -ForceRestart`.
+2. `git pull`, `npm run setup` (venv / capture tools; migrates **dev SQLite** from `.env`
+   only), then `.\scripts\run.ps1 -Mode production -ForceRestart` (starts Docker Postgres
+   and runs Alembic against it — check `data/logs/production.log` if migrate fails).
 3. Confirm `/api/health`, sign-in, and a smoke check of inventory before closing the
-   window. Migrations run automatically on start.
+   window. Production migrations run automatically on start via `run.ps1`.
 
 **Rollback (Windows):** stop the app (`.\scripts\run.ps1 -Stop`). If the new revision
 applied a schema migration (or startup failed mid-migration), restore the matching

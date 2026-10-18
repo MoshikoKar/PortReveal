@@ -352,7 +352,15 @@ function Invoke-Checked {
     )
     Write-Log $Label
     $global:LASTEXITCODE = 0
-    & $FilePath @ArgumentList
+    # Tee stdout/stderr into production.log so migrate/build failures are diagnosable
+    # after a -Background start (the console only sees "failed (exit N)").
+    & $FilePath @ArgumentList 2>&1 | ForEach-Object {
+        $line = "$_"
+        Write-Host $line
+        if ($Mode -eq "production") {
+            Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
+        }
+    }
     $code = $global:LASTEXITCODE
     if ($null -eq $code) { $code = 0 }
     if ([int]$code -ne 0) {

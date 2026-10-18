@@ -66,7 +66,8 @@ export function ensureNode() {
 }
 
 export function migrate() {
-  log('running database migrations');
+  // Uses .env (usually SQLite). Production Postgres is migrated by scripts/run.ps1.
+  log('running database migrations (dev .env — production uses run.ps1 + .env.production)');
   if (run(VENV_PYTHON, ['-m', 'app.cli', 'migrate'], { cwd: BACKEND }) !== 0) {
     fail('Database migration failed. See the output above. For a disposable dev DB run: npm run db:reset');
   }

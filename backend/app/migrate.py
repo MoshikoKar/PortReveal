@@ -23,7 +23,13 @@ def alembic_config(url: str | None = None) -> Config:
 
 def upgrade(url: str | None = None) -> None:
     url = url or get_settings().sqlalchemy_url
+    kind = "sqlite" if url.startswith("sqlite") else "postgresql"
     if url.startswith("sqlite:///"):
         Path(url.replace("sqlite:///", "", 1)).parent.mkdir(parents=True, exist_ok=True)
-    command.upgrade(alembic_config(url), "head")
-    log.info("database schema is up to date (%s)", "sqlite" if url.startswith("sqlite") else "postgresql")
+    log.info("running alembic upgrade head (%s)", kind)
+    try:
+        command.upgrade(alembic_config(url), "head")
+    except Exception:
+        log.exception("alembic upgrade failed (%s)", kind)
+        raise
+    log.info("database schema is up to date (%s)", kind)
