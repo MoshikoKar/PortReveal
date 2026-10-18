@@ -457,12 +457,23 @@ def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(
     return {"items": items}
 
 
+def _after_vuln_state_change(db: Session, device_id: int) -> None:
+    """Re-score the device and drop the summary cache so dismiss/undo both refresh immediately."""
+    from ..core.vuln.lifecycle import sync_finding_lifecycle
+    from ..core.vuln.score import apply_risk_scores
+    from ..core.vuln.summary import invalidate_vuln_summary_cache
+
+    now = utcnow()
+    apply_risk_scores(db, [device_id], now=now)
+    sync_finding_lifecycle(db, now=now)
+    invalidate_vuln_summary_cache()
+
+
 @router.post("/{uuid}/vulns/{cve_id}/dismiss")
 def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                  user: User = Depends(require_admin)):
     """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
     from ..core.vuln.display import normalize_cve_id
-    from ..core.vuln.score import apply_risk_scores
 
     cve_id = normalize_cve_id(cve_id)
     d = _get(db, uuid)
@@ -479,7 +490,7 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
                 row.state if row.state in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
             )
             row.state = VULN_STATE_DISMISSED
-    apply_risk_scores(db, [d.id], now=utcnow())
+    _after_vuln_state_change(db, d.id)
     audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
     db.commit()
@@ -490,7 +501,6 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
 def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
     from ..core.vuln.display import normalize_cve_id
-    from ..core.vuln.score import apply_risk_scores
 
     cve_id = normalize_cve_id(cve_id)
     d = _get(db, uuid)
@@ -505,7 +515,7 @@ def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depen
         prior = row.state_before_dismiss
         row.state = prior if prior in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
         row.state_before_dismiss = None
-    apply_risk_scores(db, [d.id], now=utcnow())
+    _after_vuln_state_change(db, d.id)
     audit(db, user.username, "device.vuln_undismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
     db.commit()

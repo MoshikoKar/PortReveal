@@ -95,6 +95,38 @@ def test_summary_cold_cache_self_populates(admin):
     assert r.json()["generated_at"] is not None
 
 
+def test_dismiss_and_undismiss_invalidate_summary_cache(admin, db):
+    """Both dismiss and undo must refresh /api/vulns/summary immediately (not wait for TTL)."""
+    net = make_network(db)
+    scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01")]),
+         network_id=net.id)
+    d = device_by_ip(db, "10.0.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-CACHE", cvss_base=9.8, kev=True))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-CACHE", state=VULN_STATE_CONFIRMED,
+                          matched_at=utcnow()))
+    put_section(db, VulnSettings(enabled=True))
+    db.commit()
+    invalidate_vuln_summary_cache()
+
+    before = admin.get("/api/vulns/summary").json()
+    assert before["severity_counts"]["critical"] == 1
+    generated_at = before["generated_at"]
+
+    assert admin.post(f"/api/devices/{d.uuid}/vulns/CVE-2024-CACHE/dismiss",
+                      headers=csrf(admin)).status_code == 200
+    after_dismiss = admin.get("/api/vulns/summary").json()
+    assert after_dismiss["severity_counts"]["critical"] == 0
+    assert after_dismiss["generated_at"] != generated_at
+
+    assert admin.delete(f"/api/devices/{d.uuid}/vulns/CVE-2024-CACHE/dismiss",
+                        headers=csrf(admin)).status_code == 204
+    after_undo = admin.get("/api/vulns/summary").json()
+    assert after_undo["severity_counts"]["critical"] == 1
+    assert after_undo["generated_at"] != after_dismiss["generated_at"]
+
+
 def test_viewer_can_read_summary(db, client):
     make_network(db)
     assert client.post("/api/setup/admin", json={"username": "owner", "password": "correct-horse-1"}).status_code == 200
