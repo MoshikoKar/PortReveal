@@ -246,7 +246,8 @@ def test_script_budget_uses_scan_duration_or_hard_cap(db):
     job = VulnJob(status=VULN_JOB_QUEUED, trigger=VULN_JOB_TRIGGER_AFTER_SCAN, scan_id=s.id, device_ids=[1])
     db.add(job)
     db.commit()
-    assert vuln_runner._script_budget_seconds(db, job) == 120.0  # 20% of 600s
+    # 20% of port-stage proxy (85% of 600s wall) = 102s; hard cap still 15 minutes.
+    assert vuln_runner._script_budget_seconds(db, job) == 102.0
 
     manual = VulnJob(status=VULN_JOB_QUEUED, trigger=VULN_JOB_TRIGGER_MANUAL, device_ids=[1])
     db.add(manual)

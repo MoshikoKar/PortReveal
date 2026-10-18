@@ -101,14 +101,16 @@ def _load_vulns(db: Session, device_ids: list[int]) -> dict[int, list[VulnRow]]:
         .where(DevicePort.device_id.in_(device_ids), DevicePortVuln.state != VULN_STATE_DISMISSED)
     ).all()
     out: dict[int, list[VulnRow]] = {}
-    seen: dict[int, set[str]] = {}
+    best: dict[int, dict[str, VulnRow]] = {}
     for device_id, cve_id, state, cvss_base, epss_percentile, kev in rows:
-        if cve_id in seen.setdefault(device_id, set()):
-            continue  # the same CVE matched on more than one port of this device counts once
-        seen[device_id].add(cve_id)
-        out.setdefault(device_id, []).append(
-            VulnRow(cve_id=cve_id, cvss_base=cvss_base, epss_percentile=epss_percentile, kev=kev, state=state)
-        )
+        row = VulnRow(cve_id=cve_id, cvss_base=cvss_base, epss_percentile=epss_percentile, kev=kev, state=state)
+        by_cve = best.setdefault(device_id, {})
+        prev = by_cve.get(cve_id)
+        # Same CVE on multiple ports: keep the stronger state (confirmed > potential).
+        if prev is None or (prev.state == VULN_STATE_POTENTIAL and state != VULN_STATE_POTENTIAL):
+            by_cve[cve_id] = row
+    for device_id, by_cve in best.items():
+        out[device_id] = list(by_cve.values())
     return out
 
 

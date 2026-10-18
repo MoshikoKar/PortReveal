@@ -27,9 +27,11 @@ No data leaves the host except through the integrations below.
 |---|---|---|
 | SMTP server (Settings → Notifications) | Daily digest: device labels, IPs, ports, services, change descriptions | Daily, when changes are pending; test emails on demand |
 | LDAP / Active Directory (Settings → Authentication) | Username and password of the person signing in; group lookups | Each LDAP sign-in |
-| Scanned networks | nmap probes and HTTP/RTSP requests | Scans and web captures |
+| Scanned networks | nmap probes and HTTP/RTSP requests; OS detection (`-O`) sends one UDP probe to a closed port (U1 fingerprint) when privileged | Scans and web captures |
+| Local discovery (optional) | mDNS/SSDP multicast listen/query and NetBIOS unicast to already-known device IPs — stays on the LAN | After scans, when Settings → Local discovery is enabled |
+| NVD / CISA KEV / FIRST EPSS (Settings → Vulnerabilities) | **Inbound only**: HTTP GET of public vulnerability data files/API pages. No device, port, CPE, or network inventory is included in any request. Matching and scoring run locally against the downloaded cache. An optional NVD API key only raises the public rate limit. | On first enable / empty cache, then on the configured weekly schedule (or Sync now) |
 
-Whoever operates those systems (mail relay, directory) can see that data. List them in
+Whoever operates those systems (mail relay, directory, public feed hosts) can see that data. List them in
 your processing records if your organization keeps them.
 
 ## Retention

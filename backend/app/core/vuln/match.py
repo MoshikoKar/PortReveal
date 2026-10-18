@@ -87,6 +87,17 @@ def normalize_cpe(raw: str) -> str | None:
     return None
 
 
+# Small alias table for nmap CPE names that differ from NVD's (spec 5.5).
+_CPE_ALIASES: dict[tuple[str, str], tuple[str, str]] = {
+    ("apache", "http_server"): ("apache", "http_server"),
+    ("apache", "httpd"): ("apache", "http_server"),
+    ("openbsd", "openssh"): ("openbsd", "openssh"),
+    ("microsoft", "iis"): ("microsoft", "internet_information_services"),
+    ("microsoft", "internet_information_server"): ("microsoft", "internet_information_services"),
+    ("canonical", "ubuntu_linux"): ("linux", "linux_kernel"),
+}
+
+
 def cpe_vendor_product(cpe23: str) -> tuple[str, str] | None:
     fields = cpe23.split(":")
     if len(fields) < 5 or fields[0] != "cpe" or fields[1] != "2.3":
@@ -94,7 +105,7 @@ def cpe_vendor_product(cpe23: str) -> tuple[str, str] | None:
     vendor, product = fields[3].lower(), fields[4].lower()
     if not vendor or not product or vendor == "*" or product == "*":
         return None
-    return vendor, product
+    return _CPE_ALIASES.get((vendor, product), (vendor, product))
 
 
 def cpe_version(cpe23: str) -> str | None:

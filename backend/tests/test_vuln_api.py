@@ -170,6 +170,7 @@ def _enable_vuln_cache(db, uuid_device_ip="10.0.0.1"):
     db.flush()
     db.add(VulnCpeMatch(cve_id="CVE-2024-0001", cpe23="cpe:2.3:a:openbsd:openssh:7.4:*:*:*:*:*:*:*",
                         vendor_product="openbsd:openssh"))
+    put_section(db, VulnSettings(enabled=True))
     db.commit()
     return d
 
@@ -191,7 +192,9 @@ def test_manual_vuln_job_runs_inline_without_the_background_worker(admin, db):
     assert admin.get("/api/vuln-jobs/active").json()["items"] == []  # already finished
 
 
-def test_manual_vuln_job_requires_known_devices(admin):
+def test_manual_vuln_job_requires_known_devices(admin, db):
+    put_section(db, VulnSettings(enabled=True))
+    db.commit()
     r = admin.post("/api/vuln-jobs", json={"device_uuids": ["00000000-0000-0000-0000-000000000000"]},
                    headers=csrf(admin))
     assert r.status_code == 404

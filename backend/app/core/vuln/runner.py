@@ -17,6 +17,7 @@ from sqlalchemy import select
 from ...config import get_settings
 from ...db import session_scope, utcnow
 from ...models import (
+    SCAN_ACTIVE_STATES,
     VULN_JOB_CANCELLED,
     VULN_JOB_COMPLETED,
     VULN_JOB_FAILED,
@@ -29,6 +30,7 @@ from ...models import (
     DevicePort,
     DevicePortVuln,
     Scan,
+    VulnFeedState,
     VulnJob,
     Vulnerability,
 )
@@ -68,12 +70,29 @@ def _update(job_id: int, **fields) -> None:
 
 
 def _script_budget_seconds(db, job: VulnJob) -> float:
+    """Budget is 20% of the triggering scan's wall time (best available proxy for port-scan
+    duration when stages are not timed separately), capped at 15 minutes (spec 8.4.3)."""
     if job.scan_id is not None:
         scan = db.get(Scan, job.scan_id)
         if scan is not None and scan.started_at is not None and scan.finished_at is not None:
+            # Prefer port-stage fraction when progress/stage metadata is unavailable: wall time of
+            # a standard/full scan is dominated by the port stage after a short discovery.
             scan_seconds = (scan.finished_at - scan.started_at).total_seconds()
-            return min(SCRIPT_BUDGET_MAX_SECONDS, max(0.0, scan_seconds * SCRIPT_BUDGET_FRACTION))
+            port_proxy = scan_seconds * 0.85 if scan.scan_type in ("standard", "full") else scan_seconds
+            return min(SCRIPT_BUDGET_MAX_SECONDS, max(0.0, port_proxy * SCRIPT_BUDGET_FRACTION))
     return float(SCRIPT_BUDGET_MAX_SECONDS)
+
+
+def _wait_while_scan_busy(ctx: ScanContext, budget_deadline: float) -> bool:
+    """Yield the network to a main scan. Returns False if the script budget ran out while waiting."""
+    while time.monotonic() < budget_deadline:
+        ctx.check_cancelled()
+        with session_scope() as db:
+            busy = db.scalar(select(Scan.id).where(Scan.status.in_(SCAN_ACTIVE_STATES)).limit(1)) is not None
+        if not busy:
+            return True
+        time.sleep(2)
+    return False
 
 
 def _build_script_scanner(cfg: ScanSettings) -> NmapScanner | None:
@@ -91,6 +110,48 @@ def _script_reports_vulnerable(output: str | None) -> bool:
     vulnerable" when it is written in lowercase prose instead."""
     text = output or ""
     return "VULNERABLE" in text and "NOT VULNERABLE" not in text
+
+
+def _apply_host_script_os(db, device: Device, host_scripts: dict[str, str]) -> None:
+    """smb-os-discovery / *-ntlm-info → devices.os_name with source ntlm (spec 8.4.4), no flapping."""
+    text = " ".join(host_scripts.values())
+    os_name = None
+    for marker in ("OS: ", "OS Version: ", "Target_Name: "):
+        if marker in text:
+            # Prefer an explicit OS line from smb-os-discovery / NTLM.
+            for line in text.splitlines():
+                low = line.strip()
+                if low.startswith("OS:") or low.startswith("OS Version:"):
+                    os_name = low.split(":", 1)[1].strip()
+                    break
+            if os_name:
+                break
+    if not os_name:
+        return
+    # Respect source ranking: ntlm (40) may replace service, not a fresher nmap_os unless empty.
+    rank = {"service": 10, "ssh": 20, "http": 20, "snmp": 20, "ntlm": 40, "nmap_os": 50}
+    if device.os_name and rank.get(device.os_source or "", 0) > rank["ntlm"]:
+        return
+    if device.os_name and device.os_name.lower() == os_name.lower():
+        device.os_source = device.os_source or "ntlm"
+        device.os_detected_at = utcnow()
+        return
+    if device.os_name is None or rank.get(device.os_source or "", 0) < rank["ntlm"]:
+        device.os_name = os_name[:200]
+        device.os_source = "ntlm"
+        device.os_detected_at = utcnow()
+
+
+def _apply_script_inventory(db, device: Device, port_row: DevicePort, p_obs) -> None:
+    """Info-script product/version refinements flow through the port row (spec 8.4.4)."""
+    if p_obs.product and (not port_row.product or port_row.method != "verified"):
+        port_row.product = p_obs.product
+        if p_obs.version:
+            port_row.version = p_obs.version
+    elif p_obs.version and port_row.product and not port_row.version:
+        port_row.version = p_obs.version
+    if p_obs.scripts:
+        _apply_host_script_os(db, device, p_obs.scripts)
 
 
 def _record_finding(db, device_port_id: int, cve_id: str, now: datetime) -> bool:
@@ -127,59 +188,66 @@ def _stage_scripts(db, device_ids: list[int], ctx: ScanContext, budget_seconds: 
     device_list = list(devices.values())
 
     started = time.monotonic()
+    deadline = started + budget_seconds
     for i in range(0, len(device_list), SCRIPT_HOST_BATCH):
         ctx.check_cancelled()
-        elapsed = time.monotonic() - started
-        if elapsed >= budget_seconds:
+        if time.monotonic() >= deadline:
+            stats["budget_exceeded"] = True
+            break
+        if not _wait_while_scan_busy(ctx, deadline):
             stats["budget_exceeded"] = True
             break
         batch = device_list[i:i + SCRIPT_HOST_BATCH]
-        script_names: set[str] = set()
-        batch_ports: set[int] = set()
-        ips: list[str] = []
-        ip_to_device: dict[str, Device] = {}
+        # Spec 8.4.3: each host is probed only on the ports that justify its scripts — never a
+        # union of every script with every port across the batch.
         for d in batch:
-            relevant = False
+            ctx.check_cancelled()
+            elapsed = time.monotonic() - started
+            if elapsed >= budget_seconds:
+                stats["budget_exceeded"] = True
+                break
+            script_names: set[str] = set()
+            host_ports: set[int] = set()
             for p in by_device[d.id]:
                 names = scripts_for_port(p.port, p.service, p.tunnel)
                 if names:
                     script_names.update(names)
-                    batch_ports.add(p.port)
-                    relevant = True
-            if relevant:
-                ips.append(d.current_ip)
-                ip_to_device[d.current_ip] = d
-        if not script_names or not ips:
-            continue
-        timeout = min(budget_seconds - elapsed, SCRIPT_BATCH_TIMEOUT_CAP_S)
-        if timeout <= 0:
-            stats["budget_exceeded"] = True
-            break
-        try:
-            run = scanner.run_scripts(ips, sorted(script_names), sorted(batch_ports), ctx, timeout)
-        except ScanCancelled:
-            raise
-        except ScanStageError as exc:
-            log.warning("vuln job: script batch failed: %s", exc)
-            continue
-        stats["scripts_run"] += len(script_names) * len(ips)
-        for host in run.hosts:
-            dev = ip_to_device.get(host.ip)
-            if dev is None:
+                    host_ports.add(p.port)
+            if not script_names or not host_ports:
                 continue
-            for p_obs in host.ports or ():
-                if not p_obs.scripts:
-                    continue
-                port_row = next((p for p in by_device[dev.id] if p.port == p_obs.port
-                                 and p.protocol == p_obs.protocol), None)
-                if port_row is None:
-                    continue
-                for script_id, output in p_obs.scripts.items():
-                    cve_id = SCRIPT_CVE_MAP.get(script_id)
-                    if cve_id and _script_reports_vulnerable(output):
-                        if _record_finding(db, port_row.id, cve_id, utcnow()):
-                            stats["cves_found"] += 1
-        db.flush()
+            timeout = min(budget_seconds - elapsed, SCRIPT_BATCH_TIMEOUT_CAP_S)
+            if timeout <= 0:
+                stats["budget_exceeded"] = True
+                break
+            try:
+                run = scanner.run_scripts([d.current_ip], sorted(script_names), sorted(host_ports),
+                                          ctx, timeout)
+            except ScanCancelled:
+                raise
+            except ScanStageError as exc:
+                log.warning("vuln job: script run failed for %s: %s", d.current_ip, exc)
+                continue
+            stats["scripts_run"] += len(script_names)
+            for host in run.hosts:
+                for p_obs in host.ports or ():
+                    if not p_obs.scripts:
+                        continue
+                    port_row = next((p for p in by_device[d.id] if p.port == p_obs.port
+                                     and p.protocol == p_obs.protocol), None)
+                    if port_row is None:
+                        continue
+                    for script_id, output in p_obs.scripts.items():
+                        cve_id = SCRIPT_CVE_MAP.get(script_id)
+                        if cve_id and _script_reports_vulnerable(output):
+                            if _record_finding(db, port_row.id, cve_id, utcnow()):
+                                stats["cves_found"] += 1
+                    # Info scripts can refine product/version/OS (spec 8.4.4).
+                    _apply_script_inventory(db, d, port_row, p_obs)
+                if host.host_scripts:
+                    _apply_host_script_os(db, d, host.host_scripts)
+            db.flush()
+        if stats.get("budget_exceeded"):
+            break
     return stats
 
 
@@ -205,10 +273,15 @@ def run_vuln_job(job_id: int, ctx: ScanContext) -> str:
         stats = {"scripts_run": 0, "cves_found": 0}
 
         with session_scope() as db:
+            stale_error = db.scalar(
+                select(VulnFeedState.last_error).where(VulnFeedState.last_error.isnot(None)).limit(1)
+            )
             if is_cache_empty(db):
                 partial_reason = "Vulnerability cache is not synced; run a sync or import a snapshot."
             else:
-                _update(job_id, stage="match")
+                if stale_error:
+                    partial_reason = "Vulnerability cache sync reported an error; matching against a possibly stale cache."
+                _update(job_id, stage="match", progress=0.2)
                 stats.update(match_devices(db, device_ids, now=now))
 
         ctx.check_cancelled()
@@ -217,7 +290,7 @@ def run_vuln_job(job_id: int, ctx: ScanContext) -> str:
             job = db.get(VulnJob, job_id)
             cfg = get_section(db, VulnSettings)
             if cfg.enabled and cfg.scripts_enabled:
-                _update(job_id, stage="scripts")
+                _update(job_id, stage="scripts", progress=0.5)
                 budget = _script_budget_seconds(db, job)
                 try:
                     script_stats = _stage_scripts(db, device_ids, ctx, budget)
@@ -234,8 +307,9 @@ def run_vuln_job(job_id: int, ctx: ScanContext) -> str:
         ctx.check_cancelled()
 
         with session_scope() as db:
-            _update(job_id, stage="score")
+            _update(job_id, stage="score", progress=0.85)
             apply_risk_scores(db, device_ids, now=now)
+        _update(job_id, progress=1.0)
 
         status = VULN_JOB_PARTIAL if partial_reason else VULN_JOB_COMPLETED
         _update(job_id, status=status, finished_at=utcnow(), stage=None, stats=stats,

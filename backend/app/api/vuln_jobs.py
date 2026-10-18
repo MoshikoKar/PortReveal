@@ -75,6 +75,10 @@ class VulnJobRequest(BaseModel):
 def start_vuln_job(body: VulnJobRequest, request: Request, db: Session = Depends(get_db),
                    user=Depends(require_admin)):
     """Manual "check vulnerabilities" trigger (spec 8.2): device detail button or bulk action."""
+    from ..settings_store import VulnSettings, get_section
+
+    if not get_section(db, VulnSettings).enabled:
+        raise HTTPException(409, "Vulnerability checks are disabled. Enable them in Settings → Vulnerabilities.")
     ids = list(db.scalars(select(Device.id).where(Device.uuid.in_(body.device_uuids))))
     if not ids:
         raise HTTPException(404, "No matching devices")

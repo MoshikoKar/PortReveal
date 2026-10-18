@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 from sqlalchemy import delete, func, select
@@ -32,17 +33,17 @@ log = logging.getLogger(__name__)
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+# Public NVD JSON 2.0 yearly feeds (inbound GET only — no inventory leaves the host). Used for the
+# empty-cache initial load so we do not page ~10 years through the rate-limited API (spec 5.3).
+NVD_JSON_FEED_BASE = "https://nvd.nist.gov/feeds/json/cve/2.0"
+NVD_MIRROR_START_YEAR = 2018  # practical window for CPE-rich CVEs relevant to network services
 
 NVD_WINDOW_DAYS = 120  # NVD API hard limit on the lastMod* window size
 NVD_PAGE_SIZE = 2000
 NVD_RATE_DELAY_NO_KEY = 6.5  # keep well under 5 requests / 30s
 NVD_RATE_DELAY_WITH_KEY = 0.7  # keep well under 50 requests / 30s
-# First run / empty cache: look back far enough that nothing plausibly-relevant is missed. A public
-# JSON mirror (e.g. fkie-cad/nvd-json-data-feeds) avoids the resulting high page count on a fresh
-# install; this module intentionally does not depend on one, so the very first sync on an empty,
-# populous cache runs for a while in the background. The CLI "vuln-import" offline path (spec 5.3
-# bullet 9) is the recommended route for a fast first load, especially on a disconnected network.
-FULL_SYNC_LOOKBACK_DAYS = 3650
+# API lookback after a successful mirror (or when the mirror is unavailable): covers recent edits.
+FULL_SYNC_LOOKBACK_DAYS = 120
 
 Fetcher = Callable[[str, dict | None, dict | None], bytes]
 
@@ -155,26 +156,121 @@ def upsert_cve(db: Session, data: dict, matches: list[dict]) -> None:
 
 
 def _update_feed_state(db: Session, source: str, now: datetime, cursor: datetime | None,
-                       count: int, error: str | None) -> None:
+                       count: int, error: str | None, *, previous_count: int = 0) -> None:
+    """On success, advance the weekly clock and cursor. On failure, record the error but do NOT
+    advance ``last_synced_at`` / cursor — otherwise a mid-pagination failure postpones retries for
+    a full sync interval and permanently skips CVEs from the failed page."""
     row = db.get(VulnFeedState, source)
     if row is None:
         row = VulnFeedState(source=source, record_count=0)
         db.add(row)
+        db.flush()
+    row.last_error = error
+    if error:
+        # Keep prior successful cursor/synced_at; bump record_count only with what we wrote this run.
+        if count:
+            row.record_count = (row.record_count or 0) + count
+        return
     row.last_synced_at = now
     if cursor is not None:
         row.last_modified_cursor = cursor.isoformat()
-    row.record_count = count
-    row.last_error = error
+    row.record_count = previous_count + count if previous_count else (count or row.record_count or 0)
+
+
+def _ingest_nvd_payload(db: Session, payload: dict) -> tuple[int, datetime | None]:
+    count = 0
+    latest: datetime | None = None
+    for item in payload.get("vulnerabilities") or []:
+        data, matches = _parse_cve_item(item)
+        if data is None:
+            continue
+        upsert_cve(db, data, matches)
+        count += 1
+        if data["last_modified"] and (latest is None or data["last_modified"] > latest):
+            latest = data["last_modified"]
+    return count, latest
+
+
+def _load_json_bytes(raw: bytes) -> dict:
+    try:
+        text = gzip.decompress(raw).decode("utf-8")
+    except OSError:
+        text = raw.decode("utf-8")
+    return json.loads(text)
+
+
+def sync_nvd_mirror(db: Session, *, fetch: Fetcher | None = None,
+                    now: datetime | None = None, sleep: Callable[[float], None] = time.sleep) -> dict:
+    """Empty-cache bootstrap: inbound download of public NVD JSON 2.0 yearly feeds (spec 5.3)."""
+    fetch = fetch or _default_fetch
+    now = now or datetime.now(timezone.utc)
+    count = 0
+    latest: datetime | None = None
+    error: str | None = None
+    years = list(range(NVD_MIRROR_START_YEAR, now.year + 1))
+    try:
+        for year in years:
+            url = f"{NVD_JSON_FEED_BASE}/nvdcve-2.0-{year}.json.gz"
+            body = fetch(url, None, None)
+            payload = _load_json_bytes(body)
+            n, lm = _ingest_nvd_payload(db, payload)
+            count += n
+            if lm and (latest is None or lm > latest):
+                latest = lm
+            sleep(0.2)
+        # Also pull the "modified" feed so very recent edits are not missed.
+        mod = fetch(f"{NVD_JSON_FEED_BASE}/nvdcve-2.0-modified.json.gz", None, None)
+        n, lm = _ingest_nvd_payload(db, _load_json_bytes(mod))
+        count += n
+        if lm and (latest is None or lm > latest):
+            latest = lm
+    except Exception as exc:
+        error = str(exc)
+        log.exception("NVD JSON mirror bootstrap failed")
+    return {"count": count, "error": error, "latest": latest}
+
+
+def import_nvd_json(db: Session, path: str | Path) -> dict:
+    """Offline snapshot import: load one or more NVD 2.0 JSON (optionally .gz) files from disk."""
+    root = Path(path)
+    files: list[Path]
+    if root.is_file():
+        files = [root]
+    elif root.is_dir():
+        files = sorted(list(root.glob("*.json")) + list(root.glob("*.json.gz")))
+    else:
+        raise FileNotFoundError(f"vuln import path not found: {path}")
+    count = 0
+    latest: datetime | None = None
+    for f in files:
+        raw = f.read_bytes()
+        payload = _load_json_bytes(raw)
+        n, lm = _ingest_nvd_payload(db, payload)
+        count += n
+        if lm and (latest is None or lm > latest):
+            latest = lm
+    now = datetime.now(timezone.utc)
+    _update_feed_state(db, "nvd", now, latest or now, count, None)
+    return {"count": count, "files": len(files)}
 
 
 def sync_nvd(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
             now: datetime | None = None, sleep: Callable[[float], None] = time.sleep) -> dict:
-    """Incremental NVD sync: resumes from the last `lastModified` cursor seen, or looks back
-    `FULL_SYNC_LOOKBACK_DAYS` on an empty cache. Windows are capped to the API's 120-day limit."""
+    """Incremental NVD sync. Empty cache: public JSON mirror first, then a short API catch-up."""
     fetch = fetch or _default_fetch
     now = now or datetime.now(timezone.utc)
     state = db.get(VulnFeedState, "nvd")
     cursor_start = _parse_dt(state.last_modified_cursor) if state and state.last_modified_cursor else None
+    mirror_count = 0
+    mirror_error: str | None = None
+    if cursor_start is None and is_cache_empty(db):
+        mirrored = sync_nvd_mirror(db, fetch=fetch, now=now, sleep=sleep)
+        mirror_count = mirrored.get("count") or 0
+        if mirrored.get("latest"):
+            cursor_start = mirrored["latest"]
+        if mirrored.get("error") and not mirror_count:
+            mirror_error = mirrored["error"]
+            # Fall through to API lookback so keyless installs still populate eventually.
     window_start = cursor_start or (now - timedelta(days=FULL_SYNC_LOOKBACK_DAYS))
     api_key = decrypt_secret(cfg.nvd_api_key_enc)
     delay = NVD_RATE_DELAY_WITH_KEY if api_key else NVD_RATE_DELAY_NO_KEY
@@ -197,15 +293,11 @@ def sync_nvd(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
                 }
                 body = fetch(NVD_API_URL, params, headers)
                 payload = json.loads(body)
+                n, lm = _ingest_nvd_payload(db, payload)
+                count += n
+                if lm and (latest_modified is None or lm > latest_modified):
+                    latest_modified = lm
                 items = payload.get("vulnerabilities") or []
-                for item in items:
-                    data, matches = _parse_cve_item(item)
-                    if data is None:
-                        continue
-                    upsert_cve(db, data, matches)
-                    count += 1
-                    if data["last_modified"] and (latest_modified is None or data["last_modified"] > latest_modified):
-                        latest_modified = data["last_modified"]
                 total = payload.get("totalResults", len(items))
                 start_index += len(items)
                 if not items or start_index >= total:
@@ -215,8 +307,10 @@ def sync_nvd(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
     except Exception as exc:  # best-effort: a failed sync never breaks scans or scoring
         error = str(exc)
         log.exception("NVD vulnerability feed sync failed")
-    _update_feed_state(db, "nvd", now, latest_modified, count, error)
-    return {"count": count, "error": error}
+    # Prefer the API error when both failed; keep a single feed_state write (no double INSERT).
+    final_error = error or (mirror_error if not (count + mirror_count) else None)
+    _update_feed_state(db, "nvd", now, latest_modified, count + mirror_count, final_error)
+    return {"count": count + mirror_count, "error": final_error}
 
 
 def sync_kev(db: Session, *, fetch: Fetcher | None = None, now: datetime | None = None) -> dict:
@@ -228,10 +322,12 @@ def sync_kev(db: Session, *, fetch: Fetcher | None = None, now: datetime | None 
     error: str | None = None
     try:
         payload = json.loads(fetch(KEV_URL, None, None))
+        seen: set[str] = set()
         for item in payload.get("vulnerabilities") or []:
             cve_id = item.get("cveID")
             if not cve_id:
                 continue
+            seen.add(cve_id)
             row = db.get(Vulnerability, cve_id)
             if row is None:
                 row = Vulnerability(cve_id=cve_id)
@@ -240,6 +336,13 @@ def sync_kev(db: Session, *, fetch: Fetcher | None = None, now: datetime | None 
             row.kev = True
             row.kev_added_at = _parse_date(item.get("dateAdded")) or row.kev_added_at
             count += 1
+        # Clear KEV flags removed from the feed so stale "exploited in the wild" badges do not linger.
+        if seen:
+            stale = db.scalars(select(Vulnerability).where(Vulnerability.kev.is_(True))).all()
+            for row in stale:
+                if row.cve_id not in seen:
+                    row.kev = False
+                    row.kev_added_at = None
     except Exception as exc:
         error = str(exc)
         log.exception("CISA KEV feed sync failed")
@@ -285,16 +388,30 @@ def is_cache_empty(db: Session) -> bool:
 
 
 def sync_due(db: Session, cfg: VulnSettings, *, now: datetime | None = None) -> bool:
-    """Weekly schedule (spec 5.3), plus an immediate first sync when enabled with an empty cache."""
+    """Weekly schedule (spec 5.3), plus an immediate first sync when enabled with an empty cache.
+
+    Honors ``sync_time`` as a best-effort local-time slot (like the daily digest). A prior
+    ``last_error`` on any feed forces an immediate retry so a failed page is not postponed a week.
+    """
     if not cfg.enabled or cfg.offline_mode:
         return False
     if is_cache_empty(db):
         return True
     now = now or datetime.now(timezone.utc)
+    if db.scalar(select(VulnFeedState.source).where(VulnFeedState.last_error.isnot(None)).limit(1)):
+        return True
     last = db.scalar(select(func.max(VulnFeedState.last_synced_at)))
     if last is None:
         return True
-    return now - last >= timedelta(hours=cfg.sync_interval_hours)
+    if now - last < timedelta(hours=cfg.sync_interval_hours):
+        return False
+    try:
+        hh, mm = (int(x) for x in cfg.sync_time.split(":"))
+        due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    except ValueError:
+        return True
+    # Once the interval has elapsed, wait until today's sync_time (or run immediately if past it).
+    return now >= due
 
 
 def sync_all(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
