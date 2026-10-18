@@ -7,18 +7,16 @@ also depends on `exposure_score`, which changes far more often than CVE matches 
 Formula (kept here so the PR / operators can read it in one place):
 
 1. **Per-CVE points** — start from ``10 × CVSS`` (missing CVSS → ``DEFAULT_CVSS``), scale by EPSS
-   percentile when present (``0.6 + 0.4 × p``), apply KEV (``×1.5``, floored to the high-band
-   threshold), and halve potential matches. Then **soft-compress** with
-   ``100 × (1 − e^{−raw/COMPRESS_K})`` so a single critical/KEV finding is high but not already
-   pinned at 100.
+   percentile when present (``0.6 + 0.4 × p``), apply KEV (``×1.5``, floored to the *medium*
+   band so one KEV alone is not already "high"), and halve potential matches. Then
+   **soft-compress** with ``100 × (1 − e^{−raw/COMPRESS_K})``.
 
 2. **Device risk** — take the top ``TOP_N`` compressed scores and fold them with **residual
-   saturation**: each finding fills ``score × (SECONDARY_DECAY**i)`` percent of the *remaining*
-   room to 100. The worst finding dominates; extras help but cannot stack linearly to the ceiling.
+   saturation**: each finding fills ``PRIMARY_WEIGHT × (SECONDARY_DECAY**i)`` of the *remaining*
+   room to 100. One serious finding lands medium; several KEVs/criticals are needed for high.
 
 3. **Combined** — exposure may spend at most ``EXPOSURE_HEADROOM_FRACTION`` of the room left
-   below 100 (scaled by ``exposure/100``). It never multiplies risk by up to 1.5, so a mid-risk
-   host with high exposure stays mid/high instead of jumping to 100.
+   below 100 (scaled by ``exposure/100``). It never multiplies risk by up to 1.5.
 """
 from __future__ import annotations
 
@@ -44,22 +42,22 @@ DEFAULT_CVSS = 5.0  # "CVSS missing: 50" (spec) == 10 * 5.0
 KEV_MULTIPLIER = 1.5
 POTENTIAL_MULTIPLIER = 0.5
 TOP_N = 5
-# Soft-compress raw points so one critical KEV is serious but not already 100.
-COMPRESS_K = 85.0
+# Soft-compress raw points (higher K → gentler curve so one critical KEV is not near 100).
+COMPRESS_K = 180.0
 # First finding uses this fraction of residual room; each next uses SECONDARY_DECAY of that.
-PRIMARY_WEIGHT = 0.82
-SECONDARY_DECAY = 0.35
+PRIMARY_WEIGHT = 0.85
+SECONDARY_DECAY = 0.55
 # Exposure may fill at most this fraction of the room left under 100 — enough to tip a
 # near-threshold host up a band, not enough to push mid-risk devices to 100.
-EXPOSURE_HEADROOM_FRACTION = 0.15
+EXPOSURE_HEADROOM_FRACTION = 0.12
 RISK_CHUNK = 500
 # Dashboard "high-risk devices" card (spec section 5.7): same cut points as exposure.py's
 # HIGH_THRESHOLD/MEDIUM_THRESHOLD, since combined_score shares that 0-100 scale.
 RISK_HIGH_THRESHOLD = 60
 RISK_MEDIUM_THRESHOLD = 30
 RISK_BANDS = ("high", "medium", "low")
-# KEV alone clears the high-risk band on the *raw* score before soft-compress.
-KEV_FLOOR = RISK_HIGH_THRESHOLD
+# KEV alone clears the *medium* band on the raw score before soft-compress — not high.
+KEV_FLOOR = RISK_MEDIUM_THRESHOLD
 
 
 def risk_band_for_score(score: int | float | None) -> str:
