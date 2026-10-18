@@ -54,29 +54,57 @@ def test_vuln_settings_default_off_and_roundtrip(admin):
     assert body["enabled"] is False
     assert set(body["sources"]) == {"nvd", "kev", "epss"}
     assert body["nvd_api_key_set"] is False
+    assert body["epss_high_threshold"] == 0.10
 
     r = admin.put("/api/settings/vuln", json={
         "enabled": True, "sources": ["nvd"], "sync_interval_hours": 48, "sync_time": "05:30",
         "offline_mode": True, "nvd_api_key": "secret-key", "include_potential": False,
-        "min_cvss_display": 4.0, "scripts_enabled": False,
+        "min_cvss_display": 4.0, "epss_high_threshold": 0.25, "scripts_enabled": False,
     }, headers=csrf(admin))
     assert r.status_code == 200
     body = r.json()
     assert body["enabled"] is True and body["sources"] == ["nvd"] and body["offline_mode"] is True
     assert body["nvd_api_key_set"] is True and "nvd_api_key" not in body
+    assert body["epss_high_threshold"] == 0.25
 
     # The key stays set when omitted on a later save.
     r = admin.put("/api/settings/vuln", json={
         "enabled": True, "sources": ["nvd"], "sync_interval_hours": 48, "sync_time": "05:30",
-        "offline_mode": True, "include_potential": False, "min_cvss_display": 4.0, "scripts_enabled": False,
+        "offline_mode": True, "include_potential": False, "min_cvss_display": 4.0,
+        "epss_high_threshold": 0.25, "scripts_enabled": False,
     }, headers=csrf(admin))
     assert r.json()["nvd_api_key_set"] is True
+
+
+def test_vuln_settings_epss_threshold_out_of_range_rejected(admin):
+    r = admin.put("/api/settings/vuln", json={
+        "enabled": False, "sources": ["nvd"], "sync_interval_hours": 168, "sync_time": "04:00",
+        "offline_mode": False, "include_potential": True, "min_cvss_display": 0.0,
+        "epss_high_threshold": 1.5, "scripts_enabled": True,
+    }, headers=csrf(admin))
+    assert r.status_code == 422
+
+
+def test_vuln_settings_old_format_row_still_loads(db):
+    """A row saved before epss_high_threshold existed must still load, with the new default."""
+    from app.models import AppSetting
+    from app.settings_store import get_section
+
+    db.merge(AppSetting(key="vuln", value={
+        "enabled": True, "sources": ["nvd"], "sync_interval_hours": 168, "sync_time": "04:00",
+        "offline_mode": False, "nvd_api_key_enc": "", "include_potential": True,
+        "min_cvss_display": 0.0, "scripts_enabled": True,
+    }))
+    db.commit()
+    cfg = get_section(db, VulnSettings)
+    assert cfg.epss_high_threshold == 0.10
 
 
 def test_vuln_settings_rejects_unknown_source(admin):
     r = admin.put("/api/settings/vuln", json={
         "enabled": False, "sources": ["vulners"], "sync_interval_hours": 168, "sync_time": "04:00",
-        "offline_mode": False, "include_potential": True, "min_cvss_display": 0.0, "scripts_enabled": True,
+        "offline_mode": False, "include_potential": True, "min_cvss_display": 0.0,
+        "epss_high_threshold": 0.10, "scripts_enabled": True,
     }, headers=csrf(admin))
     assert r.status_code == 422
 

@@ -252,6 +252,7 @@ class VulnSettings(BaseModel):
     nvd_api_key_enc: str = ""  # optional: raises the NVD API rate limit, never required
     include_potential: bool = True  # show `potential` (imprecise-version) matches, not just `confirmed`
     min_cvss_display: float = Field(0.0, ge=0.0, le=10.0)
+    epss_high_threshold: float = Field(0.10, ge=0.0, le=1.0)  # EPSS above which a finding is "high exploitation probability"
     # Phase 4: safe/discovery NSE scripts from the fixed SCRIPT_ALLOWLIST, on when vulnerabilities are.
     scripts_enabled: bool = True
 

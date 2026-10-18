@@ -131,6 +131,7 @@ class VulnIn(BaseModel):
     nvd_api_key: str | None = Field(None, max_length=200, description="omit to keep the stored key")
     include_potential: bool = True
     min_cvss_display: float = Field(0.0, ge=0.0, le=10.0)
+    epss_high_threshold: float = Field(0.10, ge=0.0, le=1.0)
     scripts_enabled: bool = True
 
 

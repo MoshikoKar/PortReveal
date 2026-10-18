@@ -536,6 +536,8 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
               onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" />
           </label>
           <Num label="Min CVSS to display" value={s.min_cvss_display} min={0} max={10} onChange={(v) => set({ min_cvss_display: v })} />
+          <Num label="EPSS high-probability threshold" value={s.epss_high_threshold} min={0} max={1} onChange={(v) => set({ epss_high_threshold: v })}
+            hint="EPSS score (0-1) above which a finding counts as high exploitation probability" />
         </div>
         <div className="row wrap">
           <label className="check"><input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />Offline mode (no feed downloads; import with <code>npm run cli -- vuln-import PATH</code>)</label>

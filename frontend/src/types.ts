@@ -583,6 +583,7 @@ export interface VulnSettings {
   nvd_api_key?: string | null;
   include_potential: boolean;
   min_cvss_display: number;
+  epss_high_threshold: number;
   scripts_enabled: boolean;
 }
 
