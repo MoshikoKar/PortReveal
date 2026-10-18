@@ -144,15 +144,16 @@ def mock_probe_endpoint(scheme: str, host: str, port: int, ip: str) -> EndpointP
         ep.pages = [home, login]
         return ep
 
-    # Default: generic nginx site (matches Mock Lab srv-web01 / srv-intranet style hosts).
+    # Default: generic nginx app page (not the stock "Welcome to nginx" default-page
+    # fingerprint — that skips screenshots and left capture dirs empty in tests/dev).
     home = ProbeResult(
         url=f"{base}/",
         final_url=f"{base}/",
         http_status=200,
-        title="Welcome to nginx",
+        title="Internal Web App",
         content_type="text/html",
         server_header="nginx",
-        html='<html><title>Welcome to nginx</title><body><h1>Welcome to nginx!</h1></body></html>',
+        html='<html><title>Internal Web App</title><body><h1>App home</h1><a href="/login">Log in</a></body></html>',
         tls_verified=False if scheme == "https" else None,
         kind=WEB_PAGE_HOME,
     )

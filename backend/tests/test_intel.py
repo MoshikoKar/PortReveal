@@ -350,7 +350,7 @@ def test_mock_lab_web_host_is_not_misclassified_as_hypervisor(db):
     run_web_capture(cap.id, CaptureContext(cap.id))
     db.expire_all()
     h = db.scalar(select(PortHttp).where(PortHttp.device_id == d.id))
-    assert h is not None and h.title == "Welcome to nginx" and h.server == "nginx"
+    assert h is not None and h.title == "Internal Web App" and h.server == "nginx"
     d = device_by_ip(db, "10.99.0.10")
     assert d.device_type != "hypervisor"
 
