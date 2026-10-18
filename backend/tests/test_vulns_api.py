@@ -243,6 +243,14 @@ def test_cve_detail_returns_empty_devices_when_cve_in_cache_but_unmatched(admin,
     assert body["affected_devices"] == [] and body["first_seen_at"] is None
 
 
+def test_cve_detail_unscored_when_cvss_missing(admin, db):
+    """No CVSS in cache → severity unknown (not a guessed medium from DEFAULT_CVSS)."""
+    db.add(Vulnerability(cve_id="CVE-2014-0160", summary="Heartbleed", cvss_base=None, kev=False))
+    db.commit()
+    body = admin.get("/api/vulns/CVE-2014-0160").json()
+    assert body["cvss_base"] is None and body["severity"] == "unknown"
+
+
 def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
     _seed_two_devices(db)
     d = device_by_ip(db, "10.0.0.1")

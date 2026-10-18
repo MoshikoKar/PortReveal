@@ -42,7 +42,7 @@ router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 
 AGE_BUCKETS = ("under_30d", "30_90d", "90_365d", "over_365d", "unknown")
 AGE_BUCKET_PATTERN = "^(" + "|".join(AGE_BUCKETS) + ")$"
-SEVERITY_PATTERN = "^(critical|high|medium|low)$"
+SEVERITY_PATTERN = "^(critical|high|medium|low|unknown)$"
 RISK_BAND_PATTERN = "^(" + "|".join(RISK_BANDS) + ")$"
 STATE_PATTERN = "^(" + "|".join(VULN_STATES) + ")$"
 

@@ -690,7 +690,7 @@ export interface VulnNewFinding {
 export interface VulnSummary {
   generated_at: string;
   epss_threshold: number;
-  severity_counts: { critical: number; high: number; medium: number; low: number };
+  severity_counts: { critical: number; high: number; medium: number; low: number; unknown: number };
   kev_count: number;
   epss_high_count: number;
   confirmed_count: number;

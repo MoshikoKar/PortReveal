@@ -37,7 +37,7 @@ def test_summary_empty_state_is_zeroed_not_an_error(admin):
     r = admin.get("/api/vulns/summary")
     assert r.status_code == 200
     body = r.json()
-    assert body["severity_counts"] == {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    assert body["severity_counts"] == {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
     assert body["kev_count"] == 0 and body["epss_high_count"] == 0
     assert body["confirmed_count"] == 0 and body["potential_count"] == 0
     assert body["top_devices"] == [] and body["top_cves"] == []

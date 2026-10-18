@@ -44,7 +44,7 @@ export default function CveDetail() {
         <div>
           <div className="muted small"><Link to="/vulnerabilities">Vulnerabilities</Link> /</div>
           <h1 className="mono">{cve_id}</h1>
-          <p>Severity on this page is derived from CVSS score, not NVD&apos;s own severity label.</p>
+          <p>Severity bands use the cached CVSS base score (9 / 7 / 4). Missing CVSS is unscored — not a guessed medium.</p>
         </div>
         <Link className="btn" to="/vulnerabilities">&larr; Back to vulnerabilities</Link>
       </div>
@@ -64,7 +64,11 @@ export default function CveDetail() {
                   <dd className="mono">
                     {formatCvss(data.cvss_base)}
                     {data.cvss_vector && <span className="muted small" style={{ marginLeft: 8 }}>{data.cvss_vector}</span>}
-                    {data.severity && <span className="badge outline" style={{ marginLeft: 8, textTransform: 'capitalize' }}>{data.severity}</span>}
+                    {data.cvss_base == null ? (
+                      <span className="badge outline" style={{ marginLeft: 8 }}>Unscored</span>
+                    ) : data.severity && data.severity !== 'unknown' ? (
+                      <span className="badge outline" style={{ marginLeft: 8, textTransform: 'capitalize' }}>{data.severity}</span>
+                    ) : null}
                   </dd>
                   <dt>EPSS</dt>
                   <dd>

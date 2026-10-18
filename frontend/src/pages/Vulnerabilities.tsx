@@ -58,7 +58,7 @@ export default function Vulnerabilities() {
     }
   };
 
-  const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0 };
+  const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
   const epssPct = data ? Math.round(data.epss_threshold * 100) : 0;
 
@@ -67,7 +67,11 @@ export default function Vulnerabilities() {
       <div className="page-head">
         <div>
           <h1>Vulnerabilities</h1>
-          <p>Matched CVEs across the network. Severity bands come from CVSS score, not NVD&apos;s own severity label — the two can disagree.</p>
+          <p>
+            Matched CVEs across the network. Severity bands come from the cached CVSS base score
+            (9 / 7 / 4 thresholds), preferring CVSS v3.1 → v3.0 → v2 when present — not NVD&apos;s
+            own severity label. CVEs with no score in the cache are shown as unscored.
+          </p>
         </div>
         <div className="row wrap no-print" style={{ gap: 8 }}>
           <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
@@ -113,6 +117,10 @@ export default function Vulnerabilities() {
             <Kpi label="High" value={severity.high} color={SEVERITY_COLOR.high} onClick={() => toggle('severity', 'high')} />
             <Kpi label="Medium" value={severity.medium} color={SEVERITY_COLOR.medium} onClick={() => toggle('severity', 'medium')} />
             <Kpi label="Low" value={severity.low} color={SEVERITY_COLOR.low} onClick={() => toggle('severity', 'low')} />
+            {(severity.unknown ?? 0) > 0 && (
+              <Kpi label="Unscored" value={severity.unknown} sub="No CVSS in local cache"
+                onClick={() => toggle('severity', 'unknown')} />
+            )}
             <Kpi label={`High exploit probability (EPSS ≥ ${epssPct}%)`} value={data.epss_high_count}
               sub="FIRST.org exploitation-probability score" onClick={() => set('epss_min', String(data.epss_threshold))} />
             <Kpi label="High-risk devices" value={risk.high} sub={`${risk.medium} medium · ${risk.low} low`}

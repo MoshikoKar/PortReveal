@@ -375,7 +375,8 @@ def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
     result = {
         "generated_at": now,
         "epss_threshold": cfg.epss_high_threshold,
-        "severity_counts": {b: int(severity_counts.get(b, 0)) for b in ("critical", "high", "medium", "low")},
+        "severity_counts": {b: int(severity_counts.get(b, 0))
+                           for b in ("critical", "high", "medium", "low", "unknown")},
         "kev_count": kev_count,
         "epss_high_count": epss_high_count,
         "confirmed_count": int(state_counts.get(VULN_STATE_CONFIRMED, 0)),

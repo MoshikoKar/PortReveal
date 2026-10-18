@@ -6,7 +6,6 @@ from datetime import date, datetime, timezone
 from sqlalchemy import func, select
 
 from app.core.vuln.buckets import severity_bucket, severity_bucket_expr
-from app.core.vuln.score import DEFAULT_CVSS
 from app.models import VulnDailySnapshot, Vulnerability, VulnFindingLifecycle
 
 from .helpers import make_network
@@ -25,9 +24,9 @@ def test_severity_bucket_boundaries():
     assert severity_bucket(0.0) == "low"
 
 
-def test_severity_bucket_none_uses_default_cvss():
-    assert DEFAULT_CVSS == 5.0
-    assert severity_bucket(None) == severity_bucket(DEFAULT_CVSS) == "medium"
+def test_severity_bucket_none_is_unknown_not_guessed_medium():
+    """Display severity comes from CVSS bands only; missing score is unscored, not DEFAULT_CVSS."""
+    assert severity_bucket(None) == "unknown"
 
 
 # --- severity_bucket_expr: same buckets, computed in SQL -------------------------------------
