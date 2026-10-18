@@ -2,11 +2,11 @@ import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 're
 import type { ChangeEvent, DeviceStatus, ScanStatus } from '../types';
 import { EVENT_LABELS, scoreLevel } from '../util';
 
-export function Card({ title, actions, children, flush, className }: {
-  title?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string;
+export function Card({ title, actions, children, flush, className, id }: {
+  title?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string; id?: string;
 }) {
   return (
-    <section className={`card ${className ?? ''}`}>
+    <section id={id} className={`card ${className ?? ''}`}>
       {(title || actions) && (
         <div className="card-head">
           {typeof title === 'string' ? <h2>{title}</h2> : title}
@@ -77,6 +77,25 @@ export function RiskBadge({ score, kind = 'risk' }: { score: number | null | und
   const s = score ?? 0;
   const label = kind === 'risk' ? 'Risk score' : 'Combined score';
   return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`${label} ${s} / 100`}>{s}</span>;
+}
+
+const VULN_JOB_STATUS: Record<string, [string, string]> = {
+  queued: ['outline', 'Vulnerability check queued'],
+  running: ['accent', 'Vulnerability check running'],
+  completed: ['ok', 'Vulnerability check completed'],
+  partial: ['medium', 'Vulnerability check partially completed'],
+  failed: ['high', 'Vulnerability check failed'],
+  cancelled: ['outline', 'Vulnerability check cancelled'],
+};
+
+export function VulnJobBadge({ status }: { status: string | null | undefined }) {
+  if (!status) return null;
+  const [cls, label] = VULN_JOB_STATUS[status] ?? ['outline', status];
+  return (
+    <span className={`badge ${cls} ${status === 'running' ? 'pulse' : ''}`} title={label}>
+      {status === 'running' && <span className="dot" />}{label}
+    </span>
+  );
 }
 
 const IP_ASSIGNMENT: Record<string, [string, string, string]> = {

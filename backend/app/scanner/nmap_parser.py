@@ -88,6 +88,11 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
             if srtt and srtt.lstrip("-").isdigit() and int(srtt) >= 0:
                 obs.rtt_ms = int(srtt) / 1000.0
 
+        for s in host.findall("hostscript/script"):
+            sid = s.get("id")
+            if sid:
+                obs.host_scripts[sid] = s.get("output") or ""
+
         timed_out = host.get("timedout") == "true"
         ports_el = host.find("ports")
         if timed_out:
@@ -122,6 +127,10 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
                         # which nmap still reports as conf 10.
                         if not apply_servicefp(po, svc.get("servicefp")) and po.method == "probed":
                             po.confidence = min(po.confidence or SOFT_MATCH_CONFIDENCE, SOFT_MATCH_CONFIDENCE)
+                for s in p.findall("script"):
+                    sid = s.get("id")
+                    if sid:
+                        po.scripts[sid] = s.get("output") or ""
                 obs.ports.append(po)
         run.hosts.append(obs)
     return run

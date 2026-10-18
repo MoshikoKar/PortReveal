@@ -35,6 +35,7 @@ from ..models import (
     Scan,
     ScanHost,
     User,
+    VulnJob,
     Vulnerability,
     WebCapture,
     WebPage,
@@ -194,6 +195,20 @@ def _profile_out(p: DeviceProfile | None) -> dict:
     }
 
 
+_RECENT_VULN_JOBS = 20  # one job is active at a time by design; this is a bounded, cheap app-side scan
+
+
+def _latest_vuln_job_for_device(db: Session, device_id: int) -> VulnJob | None:
+    recent = db.scalars(select(VulnJob).order_by(VulnJob.id.desc()).limit(_RECENT_VULN_JOBS)).all()
+    return next((j for j in recent if j.device_ids and device_id in j.device_ids), None)
+
+
+def _vuln_job_summary(j: VulnJob | None) -> dict | None:
+    if j is None:
+        return None
+    return {"id": j.id, "status": j.status, "stage": j.stage, "finished_at": j.finished_at}
+
+
 @router.get("/{uuid}")
 def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     d = _get(db, uuid, detail=True)
@@ -214,6 +229,7 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "availability_window_days": AVAILABILITY_WINDOW_DAYS,
         "rtt_samples": [{"rtt_ms": s.rtt_ms, "sampled_at": s.sampled_at}
                         for s in reversed(rtt_samples)],
+        "vuln_job": _vuln_job_summary(_latest_vuln_job_for_device(db, d.id)),
         "ports": [{**port_out(p), "cpe": p.cpe.split() if p.cpe else [], "tunnel": p.tunnel,
                    "http": http_out(p.http)}
                   for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],

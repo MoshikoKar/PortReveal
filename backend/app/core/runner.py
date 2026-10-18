@@ -51,6 +51,7 @@ from ..settings_store import ScanSettings, get_section, get_value, set_value
 from .compare import ScanOutcome, apply_outcome
 from .intel import after_scan, run_watches
 from .snapshots import create_snapshot
+from .vuln.manager import vuln_job_manager
 from .web_capture.auto import maybe_enqueue_auto_web_capture
 from .web_capture.manager import web_capture_manager
 
@@ -359,6 +360,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             log.exception("scan %s: webhook delivery failed", scan_id)
         if auto_capture_id is not None:
             web_capture_manager.wake()
+        vuln_job_manager.wake()  # no-op if nothing was queued (feature disabled, or no devices touched)
         return status
 
     except ScanCancelled:

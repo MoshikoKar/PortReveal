@@ -13,10 +13,12 @@ from sqlalchemy.orm import Session
 
 from .. import metrics
 from ..db import session_scope, utcnow
-from ..models import Device, Event, Scan, ScanHost
+from ..models import VULN_JOB_TRIGGER_AFTER_SCAN, Device, Event, Scan, ScanHost
+from ..settings_store import VulnSettings, get_section
 from .exposure import apply_scores, unique_services
 from .ip_assignment import apply_ip_assignment
 from .tagging import apply_tags, load_facts
+from .vuln.manager import enqueue_vuln_job
 from .vuln.score import apply_risk_scores
 from .watches import evaluate_all
 
@@ -108,10 +110,28 @@ def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:
             except Exception:
                 log.exception("scan %s: service enrichment failed", scan.id)
             report = {e.device.id for e in changed if e.device is not None and e.device.id is not None}
-            return refresh_devices(db, ids, scan_id=scan.id, report_ids=report)
+            events = refresh_devices(db, ids, scan_id=scan.id, report_ids=report)
+            try:
+                _enqueue_vuln_job_after_scan(db, scan, ids)
+            except Exception:
+                log.exception("scan %s: could not enqueue vulnerability check job", scan.id)
+            return events
     except Exception:
         log.exception("scan %s: tagging / exposure scoring failed", scan.id)
         return 0
+
+
+def _enqueue_vuln_job_after_scan(db: Session, scan: Scan, device_ids: list[int]) -> None:
+    """Spec 8.2: queue the background vuln-check pipeline and return immediately -- the main scan
+    is already done and saved. Only queued when the feature is enabled; never blocks the scan.
+
+    Waking the worker is left to the caller (core/runner.py), once this scan's own transaction has
+    committed -- waking it from inside this still-open transaction could have it look for a job
+    before the row is visible.
+    """
+    if not device_ids or not get_section(db, VulnSettings).enabled:
+        return
+    enqueue_vuln_job(db, trigger=VULN_JOB_TRIGGER_AFTER_SCAN, scan_id=scan.id, device_ids=device_ids)
 
 
 def run_watches(*, scan_id: int | None = None) -> None:

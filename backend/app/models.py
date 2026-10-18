@@ -142,6 +142,21 @@ VULN_SOURCE_CACHE = "cache"        # local NVD/KEV/EPSS cache match (core/vuln/m
 VULN_SOURCE_NMAP_SCRIPT = "nmap_script"  # phase 4: SCRIPT_ALLOWLIST finding (e.g. smb-vuln-ms17-010)
 VULN_SOURCES = (VULN_SOURCE_CACHE, VULN_SOURCE_NMAP_SCRIPT)
 
+# Background vulnerability-check jobs (spec section 8): mirrors SCAN_* / WEB_CAPTURE_* below.
+VULN_JOB_QUEUED = "queued"
+VULN_JOB_RUNNING = "running"
+VULN_JOB_COMPLETED = "completed"
+VULN_JOB_PARTIAL = "partial"
+VULN_JOB_FAILED = "failed"
+VULN_JOB_CANCELLED = "cancelled"
+VULN_JOB_ACTIVE_STATES = (VULN_JOB_QUEUED, VULN_JOB_RUNNING)
+VULN_JOB_STATUSES = (
+    VULN_JOB_QUEUED, VULN_JOB_RUNNING, VULN_JOB_COMPLETED, VULN_JOB_PARTIAL, VULN_JOB_FAILED, VULN_JOB_CANCELLED,
+)
+VULN_JOB_TRIGGER_AFTER_SCAN = "after_scan"
+VULN_JOB_TRIGGER_MANUAL = "manual"
+VULN_JOB_TRIGGERS = (VULN_JOB_TRIGGER_AFTER_SCAN, VULN_JOB_TRIGGER_MANUAL)
+
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
 # migration that rewrites the matching constraint.
@@ -160,6 +175,8 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("events", "severity"): SEVERITIES,
     ("device_port_vulns", "state"): VULN_STATES,
     ("device_port_vulns", "source"): VULN_SOURCES,
+    ("vuln_jobs", "status"): VULN_JOB_STATUSES,
+    ("vuln_jobs", "trigger"): VULN_JOB_TRIGGERS,
 }
 
 
@@ -486,6 +503,30 @@ class VulnFeedState(Base):
     last_modified_cursor: Mapped[str | None] = mapped_column(String(40))
     record_count: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class VulnJob(Base):
+    """Background vulnerability-check job (spec section 8): local CPE match, optional allow-listed
+    NSE scripts, then risk/combined rescoring. Mirrors `Scan` / `WebCapture`."""
+
+    __tablename__ = "vuln_jobs"
+    __table_args__ = (one_of("vuln_jobs", "status"), one_of("vuln_jobs", "trigger"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)
+    status: Mapped[str] = mapped_column(String(20), default=VULN_JOB_QUEUED, index=True)
+    trigger: Mapped[str] = mapped_column(String(20), default=VULN_JOB_TRIGGER_MANUAL)
+    scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"), index=True)
+    network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"))
+    device_ids: Mapped[list | None] = mapped_column(JSON)
+    requested_by: Mapped[str | None] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    stage: Mapped[str | None] = mapped_column(String(40))
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    error: Mapped[str | None] = mapped_column(Text)
+    stats: Mapped[dict | None] = mapped_column(JSON)
+    notes: Mapped[str | None] = mapped_column(Text)
 
 
 class PortSnmp(Base):

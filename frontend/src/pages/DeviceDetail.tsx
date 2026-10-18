@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { del } from '../api';
+import { del, post } from '../api';
 import { ExposureCard, ProfileCard, RiskCard, RttCard, TagEditor, Timeline, VulnPanel } from '../components/DeviceIntel';
 import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MockBadge, Pager, RiskBadge, ScanStatusBadge, ScoreBadge } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MockBadge, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
 import { SCAN_TYPE_LABELS, fmtTime, relTime, useApi } from '../util';
@@ -61,6 +61,8 @@ export default function DeviceDetail() {
   const [scPage, setScPage] = useState(1);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [vulnChecking, setVulnChecking] = useState(false);
+  const [vulnError, setVulnError] = useState<string | null>(null);
   const { data: d, error, reload } = useApi<Detail>(`/devices/${uuid}`, undefined, 15000);
   const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 15 }, 15000);
   const scans = useApi<Paged<ScanRow>>(`/devices/${uuid}/scans`, { page: scPage, page_size: 15 });
@@ -85,6 +87,20 @@ export default function DeviceDetail() {
     nav('/devices');
   };
 
+  const checkVulnerabilities = async () => {
+    if (vulnChecking) return;
+    setVulnChecking(true);
+    setVulnError(null);
+    try {
+      await post('/vuln-jobs', { device_uuids: [d.uuid] });
+      await reload();
+    } catch (e: any) {
+      setVulnError(e.message);
+    } finally {
+      setVulnChecking(false);
+    }
+  };
+
   return (
     <>
       <div className="page-head">
@@ -96,6 +112,7 @@ export default function DeviceDetail() {
             <span title="Exposure score"><ScoreBadge score={d.score} /></span>
             {d.risk_scored_at && <span title="Risk score"><RiskBadge score={d.risk_score} kind="risk" /></span>}
             {d.risk_scored_at && <span title="Combined score"><RiskBadge score={d.combined_score} kind="combined" /></span>}
+            {d.vuln_job && <Link to="/reports#vuln-jobs"><VulnJobBadge status={d.vuln_job.status} /></Link>}
             {d.type && <Link className="badge accent" to={`/search?q=${encodeURIComponent(`type:${d.type}`)}`}>{d.type}</Link>}
           </h1>
           <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
@@ -105,11 +122,15 @@ export default function DeviceDetail() {
             <button className="btn" onClick={() => setScanType('standard')}>Standard scan</button>
             <button className="btn warn" onClick={() => setScanType('full')}>Full port scan</button>
             <button className="btn" onClick={() => setWebCapture(true)}>Capture web interfaces</button>
+            <button className="btn" onClick={checkVulnerabilities} disabled={vulnChecking}>
+              {vulnChecking ? 'Checking…' : 'Check vulnerabilities'}
+            </button>
             <button className="btn danger" onClick={remove} disabled={removing}>{removing ? 'Deleting…' : 'Delete'}</button>
           </div>
         )}
       </div>
       <ErrorBox error={removeError} />
+      <ErrorBox error={vulnError} />
 
       <div className="grid two">
         <Card title={`Network exposure — ${open.length} open port${open.length === 1 ? '' : 's'}`} flush

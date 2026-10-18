@@ -198,6 +198,7 @@ export interface DeviceDetail extends DeviceSummary {
   rtt_samples: { rtt_ms: number; sampled_at: string }[];
   risk_level: ScoreLevel;
   combined_level: ScoreLevel;
+  vuln_job: VulnJobSummary | null;
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
   previous_ips: string[];
@@ -595,6 +596,34 @@ export interface DeviceVuln {
   epss_percentile: number | null;
   summary: string | null;
   matched_at: string;
+}
+
+export type VulnJobStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+
+export interface VulnJobSummary {
+  id: number;
+  status: VulnJobStatus;
+  stage: string | null;
+  finished_at: string | null;
+}
+
+export interface VulnJob {
+  id: number;
+  uuid: string;
+  status: VulnJobStatus;
+  trigger: 'after_scan' | 'manual';
+  scan_id: number | null;
+  network_id: number | null;
+  device_count: number;
+  requested_by: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  stage: string | null;
+  progress: number;
+  error: string | null;
+  stats: Record<string, number> | null;
+  notes: string | null;
 }
 
 export interface AuditEntry {

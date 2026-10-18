@@ -26,6 +26,9 @@ class PortObservation:
     confidence: int | None = None
     cpe: str | None = None  # space-separated CPE strings nmap matched
     tunnel: str | None = None  # "ssl" when nmap found the service inside TLS
+    # NSE script id -> output, for the phase-4 allow-listed vulnerability-script stage only
+    # (core/vuln/runner.py). Empty for the main discovery/port-scan stages, which never run scripts.
+    scripts: dict[str, str] = field(default_factory=dict)
 
     @property
     def reliable(self) -> bool:
@@ -50,6 +53,8 @@ class HostObservation:
     # TCP ports probed only on this host (e.g. TrueNAS Apps catalog). Not part of
     # the scan-wide port_scope — compare uses these for per-host closure coverage.
     extra_tcp_ports: tuple[int, ...] | None = None
+    # <hostscript> NSE results (phase-4 vulnerability-script stage only; see `scripts` above).
+    host_scripts: dict[str, str] = field(default_factory=dict)
 
     def merge(self, other: HostObservation) -> None:
         """Merge information from another stage of the same scan."""

@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Card, Empty, ErrorBox, Kpi, Loading, RiskBadge, ScoreBadge } from '../components/ui';
-import type { ReportHost } from '../types';
-import { quoteValue, useApi } from '../util';
+import { Card, Empty, ErrorBox, Kpi, Loading, RiskBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
+import type { Paged, ReportHost, VulnJob } from '../types';
+import { fmtTime, quoteValue, relTime, useApi } from '../util';
 
 interface Exposure {
   levels: { high: number; medium: number; low: number };
@@ -262,7 +262,46 @@ export default function Reports() {
       </Card>
 
       <HeatmapCard />
+      <VulnJobsCard />
     </>
+  );
+}
+
+function VulnJobsCard() {
+  const jobs = useApi<Paged<VulnJob>>('/vuln-jobs', { page_size: 10 }, 10000);
+  const items = jobs.data?.items ?? [];
+  return (
+    <Card id="vuln-jobs" title="Vulnerability check jobs" flush>
+      <ReportBlurb>
+        Background local-CPE match + allow-listed script runs queued after a scan or manually (spec section 8).
+        Each one recomputes risk/combined scores for the devices it covers when it finishes.
+      </ReportBlurb>
+      <ErrorBox error={jobs.error} />
+      {!jobs.data ? (!jobs.error && <Loading />) : !items.length ? <Empty>No vulnerability check has run yet.</Empty> : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Status</th><th>Trigger</th><th className="right">Devices</th><th>Stage</th><th>Finished</th><th>Findings</th></tr></thead>
+            <tbody>
+              {items.map((j) => (
+                <tr key={j.id}>
+                  <td><VulnJobBadge status={j.status} /></td>
+                  <td className="small">{j.trigger === 'manual' ? 'Manual' : 'After scan'}</td>
+                  <td className="right">{j.device_count}</td>
+                  <td className="small">{j.stage ?? '—'}</td>
+                  <td className="nowrap small" title={j.finished_at ? fmtTime(j.finished_at) : undefined}>
+                    {j.finished_at ? relTime(j.finished_at) : '—'}
+                  </td>
+                  <td className="small">
+                    {j.stats ? `${j.stats.matched ?? 0} matched, ${j.stats.cves_found ?? 0} from scripts` : '—'}
+                    {j.error && <div className="muted small" title={j.error}>{j.error.slice(0, 60)}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }
 

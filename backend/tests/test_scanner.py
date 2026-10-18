@@ -97,6 +97,41 @@ def test_parse_timed_out_host_keeps_partial_ports():
     assert h.port_scan_failed and [p.port for p in h.ports] == [22, 80]
 
 
+def test_parse_host_and_port_scripts():
+    """Phase 4 vulnerability-script stage: <hostscript> and per-port <script> output."""
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.6" addrtype="ipv4"/>
+    <hostscript>
+      <script id="smb-os-discovery" output="OS: Windows Server 2019"/>
+    </hostscript>
+    <ports>
+      <port protocol="tcp" portid="445"><state state="open"/>
+        <service name="microsoft-ds" method="probed" conf="10"/>
+        <script id="smb-vuln-ms17-010" output="VULNERABLE: Remote Code Execution"/>
+      </port>
+    </ports>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    h = run.hosts[0]
+    assert h.host_scripts == {"smb-os-discovery": "OS: Windows Server 2019"}
+    assert h.ports[0].scripts == {"smb-vuln-ms17-010": "VULNERABLE: Remote Code Execution"}
+
+
+def test_parse_ports_without_scripts_have_an_empty_dict():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.7" addrtype="ipv4"/>
+    <ports><port protocol="tcp" portid="22"><state state="open"/>
+      <service name="ssh" method="probed" conf="10"/></port></ports>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    assert run.hosts[0].ports[0].scripts == {}
+    assert run.hosts[0].host_scripts == {}
+
+
 def test_parse_rejects_garbage_and_incomplete_output():
     with pytest.raises(ScanStageError):
         parse_nmap_xml("")
