@@ -179,22 +179,24 @@ def test_vuln_score_cvss_default_and_epss_multiplier():
 
 def test_vuln_score_kev_floor_and_potential_discount():
     kev = score.VulnRow("CVE-1", cvss_base=3.0, epss_percentile=None, kev=True, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(kev) == 80  # 30 * 1.5 = 45, floored to 80
+    assert score.vuln_score(kev) == score.KEV_FLOOR  # 30 * 1.5 = 45, floored to high-band threshold
     strong_kev = score.VulnRow("CVE-1", cvss_base=9.0, epss_percentile=None, kev=True, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(strong_kev) == 100  # 90 * 1.5 = 135, capped at 100
+    # 90 * 1.5 = 135 → capped at MAX_SINGLE_VULN_POINTS (not 100) so exposure still matters
+    assert score.vuln_score(strong_kev) == score.MAX_SINGLE_VULN_POINTS
     potential = score.VulnRow("CVE-1", cvss_base=10.0, epss_percentile=None, kev=False, state=VULN_STATE_POTENTIAL)
-    assert score.vuln_score(potential) == 50  # 100 * 0.5
+    assert score.vuln_score(potential) == 50  # min(70, 100) * 0.5
 
 
 def test_compute_risk_worst_dominates_with_capped_secondary():
     vulns = [
-        score.VulnRow("CVE-1", 9.0, None, False, VULN_STATE_CONFIRMED),  # s=90
+        score.VulnRow("CVE-1", 9.0, None, False, VULN_STATE_CONFIRMED),  # s=min(90, 70)=70
         score.VulnRow("CVE-2", 5.0, None, False, VULN_STATE_CONFIRMED),  # s=50
         score.VulnRow("CVE-3", 5.0, None, False, VULN_STATE_CONFIRMED),  # s=50
     ]
     risk, factors = score.compute_risk(vulns)
-    assert risk == 100  # 90 + 0.2 * (50 + 50) = 110, capped at MAX_SCORE
+    assert risk == 70 + round(0.2 * (50 + 50))  # 90; single CVE alone no longer saturates to 100
     assert factors[0]["factor"] == "CVE-1"
+    assert score.risk_band_for_score(score.combine(risk, 0)) == "high"
 
 
 def test_compute_risk_empty_is_zero():
@@ -227,10 +229,46 @@ def test_apply_risk_scores_end_to_end(db):
     score.apply_risk_scores(db, [d.id], now=T)
     db.commit()
     d = device_by_ip(db, "10.0.0.1")
-    assert d.risk_score == 100  # 90 * 1.5 KEV multiplier, capped
+    assert d.risk_score == score.MAX_SINGLE_VULN_POINTS  # 90 * 1.5 → capped per-CVE
     assert d.combined_score == score.combine(d.risk_score, d.exposure_score)
     assert d.risk_scored_at is not None
     assert d.profile.risk_factors[0]["factor"] == "CVE-2024-0009"
+
+
+def test_apply_risk_scores_spread_devices_across_combined_bands(db):
+    """Few mild findings → low/medium; a serious KEV → high — medium band is reachable."""
+    net = make_network(db)
+    scan(ScriptedScanner([
+        host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01"),
+        host("10.0.0.2", [port(80, "http", "nginx", "1.24.0")], mac="00:11:22:33:44:02"),
+        host("10.0.0.3", [port(443, "https", "Apache httpd", "2.4.57")], mac="00:11:22:33:44:03"),
+    ]), network_id=net.id)
+    d_high, d_med, d_low = (device_by_ip(db, ip) for ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3"))
+    p_high = next(p for p in d_high.ports if p.port == 22)
+    p_med = next(p for p in d_med.ports if p.port == 80)
+    p_low = next(p for p in d_low.ports if p.port == 443)
+    db.add_all([
+        Vulnerability(cve_id="CVE-HIGH", cvss_base=9.8, kev=True),
+        Vulnerability(cve_id="CVE-MED", cvss_base=5.0, kev=False),
+        Vulnerability(cve_id="CVE-LOW", cvss_base=2.0, kev=False),
+    ])
+    db.add_all([
+        DevicePortVuln(device_port_id=p_high.id, cve_id="CVE-HIGH", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=p_med.id, cve_id="CVE-MED", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=p_low.id, cve_id="CVE-LOW", state=VULN_STATE_CONFIRMED, matched_at=T),
+    ])
+    db.commit()
+    score.apply_risk_scores(db, [d_high.id, d_med.id, d_low.id], now=T)
+    db.commit()
+    bands = {
+        score.risk_band_for_score(device_by_ip(db, "10.0.0.1").combined_score),
+        score.risk_band_for_score(device_by_ip(db, "10.0.0.2").combined_score),
+        score.risk_band_for_score(device_by_ip(db, "10.0.0.3").combined_score),
+    }
+    assert bands == {"high", "medium", "low"}
+    # Risk and exposure stay separate fields; combined is the product of the two.
+    d_high = device_by_ip(db, "10.0.0.1")
+    assert d_high.risk_score > 0 and d_high.combined_score == score.combine(d_high.risk_score, d_high.exposure_score)
 
 
 # --- sync.py ---------------------------------------------------------------------------------------

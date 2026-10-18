@@ -26,10 +26,12 @@ from ..exposure import MAX_SCORE
 
 DEFAULT_CVSS = 5.0  # "CVSS missing: 50" (spec) == 10 * 5.0
 KEV_MULTIPLIER = 1.5
-KEV_FLOOR = 80
 POTENTIAL_MULTIPLIER = 0.5
 TOP_N = 5
 SECONDARY_WEIGHT = 0.2
+# One CVE must not alone saturate the 0-100 scale: leave headroom for secondary
+# findings and for exposure in combine(), so devices spread across low/medium/high.
+MAX_SINGLE_VULN_POINTS = 70
 COMBINED_EXPOSURE_DIVISOR = 200
 RISK_CHUNK = 500
 # Dashboard "high-risk devices" card (spec section 5.7): same cut points as exposure.py's
@@ -37,6 +39,9 @@ RISK_CHUNK = 500
 RISK_HIGH_THRESHOLD = 60
 RISK_MEDIUM_THRESHOLD = 30
 RISK_BANDS = ("high", "medium", "low")
+# KEV alone clears the high-risk band floor; the old floor of 80 collapsed almost every
+# KEV-bearing host straight into combined=100 once exposure was applied.
+KEV_FLOOR = RISK_HIGH_THRESHOLD
 
 
 def risk_band_for_score(score: int | float | None) -> str:
@@ -63,7 +68,11 @@ def _round(x: float) -> int:
 
 
 def vuln_score(v: VulnRow) -> int:
-    """s_c in [0, 100] for one matched vulnerability."""
+    """s_c in [0, MAX_SINGLE_VULN_POINTS] for one matched vulnerability.
+
+    Capped below 100 so risk and exposure both still move the combined score (spec 5.6):
+    a lone critical/KEV finding lands in the high band without pinning every host at 100.
+    """
     s = 10.0 * (v.cvss_base if v.cvss_base is not None else DEFAULT_CVSS)
     # Exploitation-probability multiplier: 0.6-1.0, scaled by EPSS percentile. A CVE with no EPSS
     # row yet (not synced) is left at its CVSS-only weight rather than guessed at.
@@ -73,7 +82,7 @@ def vuln_score(v: VulnRow) -> int:
         s = max(s * KEV_MULTIPLIER, KEV_FLOOR)
     if v.state == VULN_STATE_POTENTIAL:
         s *= POTENTIAL_MULTIPLIER
-    return max(0, min(MAX_SCORE, _round(s)))
+    return max(0, min(MAX_SINGLE_VULN_POINTS, _round(s)))
 
 
 def compute_risk(vulns: list[VulnRow]) -> tuple[int, list[dict]]:
@@ -81,6 +90,7 @@ def compute_risk(vulns: list[VulnRow]) -> tuple[int, list[dict]]:
 
     R = min(100, s_1 + 0.2 * (s_2 + s_3 + s_4 + s_5)): the worst vulnerability sets the floor,
     the next four add a capped contribution, so many medium findings never outrank one bad one.
+    Risk is kept separate from exposure; ``combine`` folds them into combined_score.
     """
     if not vulns:
         return 0, []
@@ -103,7 +113,7 @@ def compute_risk(vulns: list[VulnRow]) -> tuple[int, list[dict]]:
 
 
 def combine(risk: int, exposure: int) -> int:
-    """C = min(100, R x (1 + exposure/200)): max exposure adds up to 50% to the risk score."""
+    """C = min(100, R × (1 + exposure/200)): exposure amplifies risk (up to +50%), never replaces it."""
     return min(MAX_SCORE, _round(risk * (1 + exposure / COMBINED_EXPOSURE_DIVISOR)))
 
 
