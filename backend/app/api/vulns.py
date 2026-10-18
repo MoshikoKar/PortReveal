@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ..auth.deps import current_user
 from ..core.mockdata import device_visible
 from ..core.vuln.buckets import severity_bucket, severity_bucket_expr
-from ..core.vuln.display import is_visible
+from ..core.vuln.display import is_visible, normalize_cve_id
 from ..core.vuln.score import DEFAULT_CVSS, RISK_BANDS, RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 from ..core.vuln.summary import get_vuln_summary
 from ..db import SessionLocal, get_db, utcnow
@@ -341,6 +341,7 @@ def cve_detail(cve_id: str, db: Session = Depends(get_db), user: User = Depends(
     affected devices (none matched, filtered by min_cvss_display, or on hidden devices)
     still returns metadata with an empty ``affected_devices`` list.
     """
+    cve_id = normalize_cve_id(cve_id)
     vuln = db.get(Vulnerability, cve_id)
     if vuln is None:
         raise HTTPException(404, "Unknown CVE")

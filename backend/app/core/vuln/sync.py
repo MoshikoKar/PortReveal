@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from ...models import VulnCpeMatch, Vulnerability, VulnFeedState
 from ...security import decrypt_secret
 from ...settings_store import VulnSettings
+from .display import normalize_cve_id
 from .match import cpe_vendor_product, normalize_cpe
 
 log = logging.getLogger(__name__)
@@ -95,7 +96,7 @@ def _pick_cvss(cve: dict) -> tuple[float | None, str | None, str | None]:
 def _parse_cve_item(item: dict) -> tuple[dict | None, list[dict]]:
     """One NVD API 2.0 `vulnerabilities[]` entry -> (Vulnerability fields, [VulnCpeMatch fields])."""
     cve = item.get("cve") or {}
-    cve_id = cve.get("id")
+    cve_id = normalize_cve_id(cve.get("id") or "")
     if not cve_id:
         return None, []
     score, vector, severity = _pick_cvss(cve)
@@ -396,7 +397,7 @@ def sync_kev(db: Session, *, fetch: Fetcher | None = None, now: datetime | None 
         payload = json.loads(fetch(KEV_URL, None, None))
         seen: set[str] = set()
         for item in payload.get("vulnerabilities") or []:
-            cve_id = item.get("cveID")
+            cve_id = normalize_cve_id(item.get("cveID") or "")
             if not cve_id:
                 continue
             seen.add(cve_id)
@@ -438,7 +439,7 @@ def sync_epss(db: Session, *, fetch: Fetcher | None = None, now: datetime | None
             text = raw.decode("utf-8")  # already-decompressed (test fixtures, some mirrors)
         lines = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
         for row in csv.DictReader(lines):
-            cve_id = (row.get("cve") or "").strip()
+            cve_id = normalize_cve_id(row.get("cve") or "")
             if not cve_id:
                 continue
             existing = db.get(Vulnerability, cve_id)

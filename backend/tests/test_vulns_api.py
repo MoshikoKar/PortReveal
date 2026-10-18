@@ -251,6 +251,15 @@ def test_cve_detail_unscored_when_cvss_missing(admin, db):
     assert body["cvss_base"] is None and body["severity"] == "unknown"
 
 
+def test_cve_detail_is_case_insensitive(admin, db):
+    db.add(Vulnerability(cve_id="CVE-2025-24813", summary="Tomcat", cvss_base=9.8, kev=False))
+    db.commit()
+    lower = admin.get("/api/vulns/cve-2025-24813")
+    upper = admin.get("/api/vulns/CVE-2025-24813")
+    assert lower.status_code == 200 and upper.status_code == 200
+    assert lower.json()["cve_id"] == upper.json()["cve_id"] == "CVE-2025-24813"
+
+
 def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
     _seed_two_devices(db)
     d = device_by_ip(db, "10.0.0.1")

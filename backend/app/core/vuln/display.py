@@ -9,6 +9,11 @@ from ...settings_store import VulnSettings
 from .score import DEFAULT_CVSS
 
 
+def normalize_cve_id(cve_id: str) -> str:
+    """Canonical CVE id for lookups and storage (NVD form is uppercase)."""
+    return (cve_id or "").strip().upper()
+
+
 def is_visible(state: str, kev: bool, cvss_base: float | None, cfg: VulnSettings) -> bool:
     """False if a finding with this state/KEV/CVSS is below the display floor. A dismissed finding
     is never hidden by the floor -- it stays visible in its own `dismissed` view regardless of

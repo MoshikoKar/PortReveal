@@ -460,8 +460,10 @@ def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(
 def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                  user: User = Depends(require_admin)):
     """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
+    from ..core.vuln.display import normalize_cve_id
     from ..core.vuln.score import apply_risk_scores
 
+    cve_id = normalize_cve_id(cve_id)
     d = _get(db, uuid)
     rows = db.scalars(
         select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
@@ -481,8 +483,10 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
 @router.delete("/{uuid}/vulns/{cve_id}/dismiss", status_code=204)
 def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
+    from ..core.vuln.display import normalize_cve_id
     from ..core.vuln.score import apply_risk_scores
 
+    cve_id = normalize_cve_id(cve_id)
     d = _get(db, uuid)
     rows = db.scalars(
         select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
