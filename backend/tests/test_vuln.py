@@ -287,12 +287,15 @@ def test_apply_risk_scores_spread_devices_across_combined_bands(db):
 
 
 def test_mock_lab_devices_spread_across_risk_bands(db):
-    """Match Mock Lab CPEs against a realistic KEV-heavy cache (like npm run dev + standard scan).
+    """Real Mock Lab inventory + match_all path should yield high 2 / medium 7 / low 0.
 
-    Hand-picking mid CVSS on gw-core never matched reality: once OpenSSH/nginx/Tomcat KEVs from
-    the local cache match, finding hosts used to all land at 60–78 / high. Seed a dense cache and
-    run match_all instead.
+    A fresh ``npm run dev`` standard scan uses scenario step 0 (Tomcat appears only after the
+    step advances). Real NVD-style version pinning gives most OpenSSH hosts a single KEV
+    (medium); only srv-web01 (nginx KEV) and srv-intranet (httpd KEV) clear high. An overly
+    dense universal-SSH-KEV fixture wrongly produced high 5 / medium 2 / low 2.
     """
+    from collections import Counter
+
     from sqlalchemy import select
 
     from app.core.vuln.match import match_all
@@ -300,10 +303,9 @@ def test_mock_lab_devices_spread_across_risk_bands(db):
     from app.scanner.mock_scanner import MockScanner
 
     net = make_network(db, cidr="10.99.0.0/24", name="Mock Lab")
-    # Step 1 unlocks Tomcat on srv-web01 (CVE-2025-24813-style), as after the first Mock Lab advance.
-    scan(MockScanner([(net.id, "10.99.0.0/24", 1)]), network_id=net.id)
+    scan(MockScanner([(net.id, "10.99.0.0/24", 0)]), network_id=net.id)
 
-    def _vuln(cve_id, cvss, kev, vendor_product, ver_end=None):
+    def _vuln(cve_id, cvss, kev, vendor_product, ver_end):
         vendor, product = vendor_product.split(":", 1)
         db.add(Vulnerability(cve_id=cve_id, cvss_base=cvss, kev=kev))
         db.flush()
@@ -311,25 +313,22 @@ def test_mock_lab_devices_spread_across_risk_bands(db):
             cve_id=cve_id,
             cpe23=f"cpe:2.3:a:{vendor}:{product}:*:*:*:*:*:*:*:*",
             vendor_product=vendor_product,
-            version_end=ver_end, version_end_excl=bool(ver_end),
+            version_end=ver_end, version_end_excl=True,
         ))
 
-    # Dense KEV coverage on common Mock Lab products — mirrors a populated local CVE cache.
-    for i, (cvss, end) in enumerate([(9.8, "9.0"), (9.1, "8.9p2"), (8.1, "9.5"), (7.5, None)]):
-        _vuln(f"CVE-SSH-KEV-{i}", cvss, True, "openbsd:openssh", end)
-    for i, (cvss, end) in enumerate([(9.8, "1.25.0"), (7.5, "1.24.1"), (5.3, None)]):
-        _vuln(f"CVE-NGINX-{i}", cvss, i == 0, "f5:nginx", end)
-    _vuln("CVE-2025-24813", 9.8, True, "apache:tomcat", "9.0.99")
-    _vuln("CVE-TOMCAT-MID", 5.0, False, "apache:tomcat", "9.0.99")
-    _vuln("CVE-HTTPD-KEV", 9.0, True, "apache:http_server", "2.4.58")
+    # Version-ranged rows (confirmed matches) shaped like a real cache: one shared OpenSSH KEV,
+    # plus product KEVs that only apply to web01's nginx 1.24.0 and intranet's httpd 2.4.57.
+    _vuln("CVE-SSH-KEV", 9.8, True, "openbsd:openssh", "10.0")
+    _vuln("CVE-NGINX-KEV", 9.8, True, "f5:nginx", "1.25.0")
+    _vuln("CVE-NGINX-MID", 7.5, False, "f5:nginx", "1.25.0")
+    _vuln("CVE-HTTPD-KEV", 9.1, True, "apache:http_server", "2.4.58")
     _vuln("CVE-PG-MID", 5.5, False, "postgresql:postgresql", "16.0")
-    _vuln("CVE-DNSMASQ-LOW", 2.5, False, "thekelleys:dnsmasq", "2.90")
+    _vuln("CVE-DNSMASQ-KEV", 9.0, True, "thekelleys:dnsmasq", "2.90")
     _vuln("CVE-SAMBA-MID", 6.5, False, "samba:samba", "4.20")
     db.commit()
 
     match_all(db, now=T)
-    ids = list(db.scalars(select(Device.id)))
-    score.apply_risk_scores(db, ids, now=T)
+    score.apply_risk_scores(db, list(db.scalars(select(Device.id))), now=T)
     db.commit()
 
     finding_devices = list(db.scalars(
@@ -339,13 +338,19 @@ def test_mock_lab_devices_spread_across_risk_bands(db):
             ).distinct()
         ))
     ).all())
-    assert len(finding_devices) >= 5, "expected several Mock Lab hosts to match the cache"
-    scores = {d.current_ip: (d.risk_score, d.combined_score, d.exposure_score) for d in finding_devices}
-    bands = {score.risk_band_for_score(d.combined_score) for d in finding_devices}
-    combined = [d.combined_score or 0 for d in finding_devices]
-    assert "high" in bands and "medium" in bands, scores
-    # A host with few mid findings must not look like one stacked with many KEVs.
-    assert max(combined) - min(combined) >= 15, scores
+    scores = {
+        d.current_ip: (d.hostname, d.risk_score, d.combined_score, d.exposure_score)
+        for d in finding_devices
+    }
+    assert len(finding_devices) == 9, scores
+    bands = Counter(score.risk_band_for_score(d.combined_score) for d in finding_devices)
+    assert dict(bands) == {"high": 2, "medium": 7}, scores
+    high_ips = {
+        d.current_ip for d in finding_devices
+        if score.risk_band_for_score(d.combined_score) == "high"
+    }
+    assert high_ips == {"10.99.0.10", "10.99.0.12"}, scores
+    assert score.risk_band_for_score(device_by_ip(db, "10.99.0.1").combined_score) == "medium"
 
 
 # --- sync.py ---------------------------------------------------------------------------------------
