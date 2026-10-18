@@ -115,10 +115,9 @@ def mock_probe_endpoint(scheme: str, host: str, port: int, ip: str) -> EndpointP
         ep.pages = [home]
         return ep
 
-    # Scenario A: ESXi hypervisor UI — only for last-octet % 10 == 1 (e.g. 10.0.0.11).
-    # Must not be the default: Mock Lab web hosts like srv-web01 (.10) run nginx and were
-    # mis-typed as hypervisor after auto web-capture used the old ESXi default.
-    if last % 10 == 1:
+    # Scenario A: ESXi hypervisor UI — only last octet 91 (unused by Mock Lab).
+    # Broader patterns (% 10 == 1) hit gw-core (.1), nas01 (.21), ws-lmstudio (.81).
+    if last == 91:
         home = ProbeResult(
             url=f"{base}/",
             final_url=f"{base}/",

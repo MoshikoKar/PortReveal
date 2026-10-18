@@ -319,10 +319,11 @@ def test_scan_tags_and_scores_silently_then_reports_changes(db):
 
 
 def test_web_capture_fills_port_http_and_retags(db):
+    # Mock ESXi scenario is last-octet 91 only (not %10==1, which hits Mock Lab hosts).
     net = make_network(db)
-    scan(ScriptedScanner([host("10.0.0.11", [port(443, "https")])]), network_id=net.id)
-    d = device_by_ip(db, "10.0.0.11")
-    cap = WebCapture(targets="10.0.0.11")
+    scan(ScriptedScanner([host("10.0.0.91", [port(443, "https")])]), network_id=net.id)
+    d = device_by_ip(db, "10.0.0.91")
+    cap = WebCapture(targets="10.0.0.91")
     db.add(cap)
     db.commit()
     run_web_capture(cap.id, CaptureContext(cap.id))
@@ -330,7 +331,7 @@ def test_web_capture_fills_port_http_and_retags(db):
     h = db.scalar(select(PortHttp).where(PortHttp.device_id == d.id))
     assert (h.scheme, h.status, h.title, h.server, h.login, h.default_page) == (
         "https", 200, "VMware ESXi", "VMware ESXi", True, False)
-    d = device_by_ip(db, "10.0.0.11")
+    d = device_by_ip(db, "10.0.0.91")
     assert d.device_type == "hypervisor"
     prof = db.scalar(select(DeviceProfile).where(DeviceProfile.device_id == d.id))
     assert "http_login" in {f["factor"] for f in prof.exposure_factors}
@@ -353,6 +354,62 @@ def test_mock_lab_web_host_is_not_misclassified_as_hypervisor(db):
     assert h is not None and h.title == "Internal Web App" and h.server == "nginx"
     d = device_by_ip(db, "10.99.0.10")
     assert d.device_type != "hypervisor"
+
+
+def test_mock_lab_hosts_not_hypervisor_after_stale_esxi_capture(db):
+    """Stale ESXi PortHttp must not stick on Mock Lab hosts whose product contradicts it."""
+    from app.core.intel import refresh_devices
+    from app.db import utcnow
+    from app.scanner.mock_scanner import MockScanner
+
+    net = make_network(db, cidr="10.99.0.0/24", name="Mock Lab")
+    scan(MockScanner([(net.id, "10.99.0.0/24", 0)]), network_id=net.id)
+
+    # Hosts that were mis-typed as hypervisor in review (stale ESXi captures / broad mock rule).
+    targets = {
+        "10.99.0.1": "FortiGate httpsd",   # gw-core
+        "10.99.0.21": "nginx",             # nas01
+        "10.99.0.30": "Cisco IOS http config",  # sw-core01
+        "10.99.0.80": "Ollama",            # srv-ollama
+        "10.99.0.81": "LM Studio",         # ws-lmstudio
+    }
+    now = utcnow()
+    for ip, product in targets.items():
+        d = device_by_ip(db, ip)
+        assert d is not None, ip
+        web = next(
+            (p for p in d.ports if p.is_open and product.lower() in (p.product or "").lower()),
+            next((p for p in d.ports if p.is_open and p.port in (80, 443, 5000, 11434, 1234)), None),
+        )
+        assert web is not None, ip
+        db.add(PortHttp(
+            device_port_id=web.id, device_id=d.id, scheme="https", status=200,
+            title="VMware ESXi", server="VMware ESXi", login=True, default_page=False,
+            first_seen=now, last_seen=now,
+        ))
+        d.device_type = "hypervisor"
+        d.type_confidence = 90
+    db.commit()
+
+    refresh_devices(db, [device_by_ip(db, ip).id for ip in targets])
+    db.commit()
+    for ip in targets:
+        d = device_by_ip(db, ip)
+        assert d.device_type != "hypervisor", (ip, d.device_type, d.hostname)
+        assert db.scalar(select(PortHttp).where(
+            PortHttp.device_id == d.id, PortHttp.title == "VMware ESXi",
+        )) is None
+
+    # Fresh capture for these last octets must not reintroduce ESXi HTML.
+    for ip in ("10.99.0.1", "10.99.0.21", "10.99.0.81"):
+        cap = WebCapture(targets=ip)
+        db.add(cap)
+        db.commit()
+        run_web_capture(cap.id, CaptureContext(cap.id))
+        db.expire_all()
+        h = db.scalar(select(PortHttp).where(PortHttp.device_id == device_by_ip(db, ip).id))
+        assert h is None or "esxi" not in (h.title or "").lower()
+        assert device_by_ip(db, ip).device_type != "hypervisor"
 
 
 # --- watches --------------------------------------------------------------------------------------------
