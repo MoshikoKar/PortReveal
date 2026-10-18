@@ -161,6 +161,13 @@ VULN_JOB_TRIGGER_AFTER_SCAN = "after_scan"
 VULN_JOB_TRIGGER_MANUAL = "manual"
 VULN_JOB_TRIGGERS = (VULN_JOB_TRIGGER_AFTER_SCAN, VULN_JOB_TRIGGER_MANUAL)
 
+# Why a finding stopped matching (vuln dashboard "resolved" count, spec decision #3): the version
+# changed or the port closed (re-match no longer produces this CVE) vs. the device itself leaving
+# the inventory. Dismissed is tracked separately on the same row and is never "resolved".
+VULN_RESOLUTION_NO_LONGER_MATCHED = "no_longer_matched"
+VULN_RESOLUTION_DEVICE_REMOVED = "device_removed"
+VULN_RESOLUTIONS = (VULN_RESOLUTION_NO_LONGER_MATCHED, VULN_RESOLUTION_DEVICE_REMOVED)
+
 # Weighted device-type classification (spec section 9): a real, open-ended set driven by
 # core/tagging.py's RULES, so not a CHECK-constrained CLOSED_VALUES column. "unknown" is a
 # sentinel distinct from None/NULL: None means no rule matched at all; "unknown" means some
@@ -187,6 +194,7 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("device_port_vulns", "source"): VULN_SOURCES,
     ("vuln_jobs", "status"): VULN_JOB_STATUSES,
     ("vuln_jobs", "trigger"): VULN_JOB_TRIGGERS,
+    ("vuln_finding_lifecycle", "resolution"): VULN_RESOLUTIONS,
 }
 
 
@@ -556,6 +564,59 @@ class VulnJob(Base):
     error: Mapped[str | None] = mapped_column(Text)
     stats: Mapped[dict | None] = mapped_column(JSON)
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class VulnDailySnapshot(Base):
+    """Daily vuln-aggregate point for the dashboard's trend charts. Deliberately separate from
+    `Snapshot` (zlib-blob network-state copies): this is small, structured counters only, kept for
+    a year and downsampled to weekly beyond 90 days at read time (spec decision #6)."""
+
+    __tablename__ = "vuln_daily_snapshots"
+    __table_args__ = (UniqueConstraint("network_id", "snapshot_date", name="uq_vuln_snapshot_day"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, index=True)
+    network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="CASCADE"), index=True)
+    critical: Mapped[int] = mapped_column(Integer, default=0)
+    high: Mapped[int] = mapped_column(Integer, default=0)
+    medium: Mapped[int] = mapped_column(Integer, default=0)
+    low: Mapped[int] = mapped_column(Integer, default=0)
+    kev_count: Mapped[int] = mapped_column(Integer, default=0)
+    confirmed_count: Mapped[int] = mapped_column(Integer, default=0)
+    potential_count: Mapped[int] = mapped_column(Integer, default=0)
+    avg_risk_score: Mapped[float | None] = mapped_column(Float)
+    avg_combined_score: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class VulnFindingLifecycle(Base):
+    """First-seen/resolved tracking for one finding identity (device + port + CVE), spec decision
+    #3. `DevicePortVuln.matched_at` is overwritten on every re-match and the row is hard-deleted
+    once it stops matching, so neither can answer "when was this first seen" or "is this resolved"
+    after the fact -- this table is the durable side-channel for both.
+
+    Identity is stored as plain values (not cascading FKs) so history survives the device or CVE
+    being removed from the live tables; `network_id` is the one soft link, nulled rather than
+    deleted when its network goes away. The sync logic that maintains these rows is added in a
+    later part; this part only defines the shape.
+    """
+
+    __tablename__ = "vuln_finding_lifecycle"
+    __table_args__ = (
+        UniqueConstraint("device_uuid", "port", "protocol", "cve_id", name="uq_vuln_finding_lifecycle"),
+        one_of("vuln_finding_lifecycle", "resolution"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_uuid: Mapped[str] = mapped_column(String(36))
+    port: Mapped[int] = mapped_column(Integer)
+    protocol: Mapped[str] = mapped_column(String(8))
+    cve_id: Mapped[str] = mapped_column(String(20))
+    network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    resolution: Mapped[str | None] = mapped_column(String(20))
+    dismissed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class PortSnmp(Base):
