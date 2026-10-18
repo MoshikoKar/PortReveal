@@ -12,6 +12,9 @@
   --accent: #0ed0d9;
   --accent-dim: #0a4f57;
   --accent-ink: #021a1d; /* text on solid --accent fills */
+  --accent-bg: color-mix(in srgb, var(--accent) 12%, transparent);   /* tinted fills: toggles, accent badges */
+  --accent-ring: color-mix(in srgb, var(--accent) 22%, transparent); /* soft outer focus halo on fields */
+  --brand-ink: #f7f7f7; /* "Port" in the wordmark */
   --brand-blue: #1965d9;
   --brand-ice: #a6eafd; /* "Reveal" in the wordmark */
   --high: #f87171;
@@ -38,7 +41,14 @@
   --radius-xl: 10px;    /* modals */
   --radius-pill: 999px; /* badges, step pills, progress tracks */
   --radius: var(--radius-lg); /* legacy alias */
+  /* Hit-target density. Desktop (fine pointer) stays dense: 32px icon buttons with a 40px hit halo and
+     18px table checkboxes. Coarse pointers (touch) widen both toward the 44px touch guidance. */
+  --icon-halo: 4px;
+  --table-check: 18px;
   color-scheme: dark;
+}
+@media (pointer: coarse) {
+  :root { --icon-halo: 6px; --table-check: 24px; }
 }
 
 * { box-sizing: border-box; }
@@ -53,6 +63,13 @@ body {
 p { line-height: 1.6; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
+/* Content links keep a quiet underline so they are not signalled by color alone (WCAG 1.4.1).
+   Component links (buttons, badges, chips, cards, bar rows, tabs) keep their own chrome. */
+.content a:not(.btn, .badge, .chip, .host-card, .bar-row, .result-shot):not(.tabs a) {
+  text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.content a:not(.btn, .badge, .chip, .host-card, .bar-row, .result-shot):not(.tabs a):hover { text-decoration-color: currentColor; }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 h1 { font-size: 20px; }
 h2 { font-size: 15px; }
@@ -67,6 +84,9 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .row.wrap { flex-wrap: wrap; }
 .stack { display: flex; flex-direction: column; gap: var(--space-3); }
 .spread { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); }
+/* Gap overrides on the spacing scale, for rows/stacks tighter than the default --space-3. */
+.gap-1 { gap: var(--space-1); }
+.gap-2 { gap: var(--space-2); }
 
 /* ---------- layout ---------- */
 .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100%; }
@@ -81,8 +101,8 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .brand-home:hover { color: inherit; text-decoration: none; }
 .sidebar-lockup { display: block; width: 100%; height: auto; }
 .brand-home:has(.sidebar-lockup) { flex: 1; min-width: 0; }
-.brand-logo { display: block; flex-shrink: 0; height: 34px; width: auto; filter: drop-shadow(0 0 6px rgba(14, 208, 217, 0.18)); }
-.brand-name { font-weight: 700; letter-spacing: 0.02em; font-size: 15px; line-height: 1.15; color: #f7f7f7; }
+.brand-logo { display: block; flex-shrink: 0; height: 34px; width: auto; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 18%, transparent)); }
+.brand-name { font-weight: 700; letter-spacing: 0.02em; font-size: 15px; line-height: 1.15; color: var(--brand-ink); }
 .brand-name .brand-reveal {
   color: var(--brand-ice);
   background: linear-gradient(90deg, #7fdcf5, var(--brand-ice));
@@ -136,6 +156,10 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .card-body { padding: 14px 16px; flex: 1; min-height: 0; }
 .card-body.flush { padding: 0; }
+/* A strip of filters/controls inside a flush card, above its table. */
+.card-toolbar { padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border); }
+/* Sub-group label between tables inside one flush card. */
+.card-subhead { padding: var(--space-3) var(--space-4) var(--space-1); font-size: 12px; font-weight: 600; color: var(--muted); }
 .grid { display: grid; gap: var(--space-4); align-items: stretch; }
 .grid.kpis { grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--space-3); }
 .grid.two { grid-template-columns: minmax(0, 1.85fr) minmax(280px, 1fr); }
@@ -205,8 +229,6 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .dl dt { color: var(--muted); }
 .dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
-.kev-card { margin-bottom: 16px; }
-.kev-card.active .card-body { border-left: 4px solid var(--high); }
 
 /* ---------- tables ---------- */
 .table-wrap { overflow-x: auto; }
@@ -221,7 +243,7 @@ tbody tr:hover { background: var(--panel-2); }
 tr.clickable { cursor: pointer; }
 .th-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
 .th-sort:hover { color: var(--text); }
-tr.selected { background: rgba(45, 212, 191, 0.06); }
+tr.selected { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 td.mono, td .mono { font-family: var(--mono); font-size: 12.5px; }
 tr.dim td { color: var(--muted); }
 
@@ -237,7 +259,7 @@ tr.dim td { color: var(--muted); }
 .badge.medium { background: var(--medium-bg); color: var(--medium); }
 .badge.low { background: var(--low-bg); color: var(--low); }
 .badge.ok { background: var(--ok-bg); color: var(--ok); }
-.badge.accent { background: rgba(45, 212, 191, 0.12); color: var(--accent); }
+.badge.accent { background: var(--accent-bg); color: var(--accent); }
 .badge.outline { background: transparent; border-color: var(--border-2); color: var(--text-2); }
 /* Links styled as badges must keep the same box as span.badge (anchor color/underline would skew height). */
 a.badge, a.badge:hover { text-decoration: none; }
@@ -252,7 +274,7 @@ h1.row > a:not(.badge), h1.row > span { display: inline-flex; align-items: cente
 .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; flex-shrink: 0; }
 .chip { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--panel-3); color: var(--text-2); margin: 1px 4px 1px 0; border: 1px solid var(--border); }
 button.chip { cursor: pointer; }
-.chip.on { border-color: var(--accent, #5b8def); color: var(--text); background: color-mix(in srgb, var(--accent, #5b8def) 18%, var(--panel-3)); }
+.chip.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 18%, var(--panel-3)); }
 .chip.suppressed { color: var(--muted); border-color: var(--border-2); text-decoration: line-through; }
 .chip.new { border-color: rgba(248, 113, 113, 0.5); color: var(--high); }
 
@@ -264,10 +286,10 @@ input[type='text'], input[type='password'], input[type='number'], input[type='ti
 textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
 /* Bordered fields: the accent border + solid inner ring replaces the outline. Checkboxes keep the shared outline below. */
 input:not([type='checkbox']):not([type='radio']):focus, select:focus, textarea:focus {
-  outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px rgba(45, 212, 191, 0.22);
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--accent-ring);
 }
 input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
-th > input[type='checkbox'], td > input[type='checkbox'] { width: 18px; height: 18px; margin: 0; }
+th > input[type='checkbox'], td > input[type='checkbox'] { width: var(--table-check); height: var(--table-check); margin: 0; }
 label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-2); }
 label.field .hint { color: var(--muted); font-size: 11.5px; }
 label.check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; }
@@ -295,7 +317,7 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 .btn.see-all:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border); }
 /* Filter toggles: outline when off, accent-tinted outline when on (not a filled primary CTA). */
 .btn.toggle { background: transparent; color: var(--text-2); }
-.btn.toggle.on { border-color: var(--accent); color: var(--text); background: rgba(45, 212, 191, 0.12); }
+.btn.toggle.on { border-color: var(--accent); color: var(--text); background: var(--accent-bg); }
 /* Icon-only buttons: tooltips are intentionally the browser's native `title` (no custom tooltip
    primitive). Every icon-only control must carry both `title` (hover hint) and `aria-label`
    (screen readers / keyboard users, since `title` alone is not reliably announced). */
@@ -307,8 +329,8 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
   min-height: 32px;
   justify-content: center;
 }
-/* Invisible 4px halo: 32px visual size, 40px hit area. */
-.btn.icon::after { content: ''; position: absolute; inset: -4px; }
+/* Invisible halo: 32px visual size, 40px hit area (44px on touch, see --icon-halo). */
+.btn.icon::after { content: ''; position: absolute; inset: calc(-1 * var(--icon-halo)); }
 .btn.icon svg { width: 15px; height: 15px; display: block; }
 
 /* Row actions sit side by side in table cells; bordered (danger) buttons need a gap. */
@@ -350,13 +372,34 @@ td > .btn + .btn { margin-left: var(--space-1); }
 @media (max-width: 700px) { .feed li { grid-template-columns: 1fr; gap: 2px; } }
 
 .bars { display: flex; flex-direction: column; gap: 8px; }
-.bar-row { display: grid; grid-template-columns: 130px 1fr 40px; gap: 10px; align-items: center; font-size: 12.5px; }
+/* Label column scales with the card (same width on every row, so bars line up); long labels truncate
+   with an ellipsis (full text in the row's title) instead of wrapping or running into the bar. */
+.bar-row { display: grid; grid-template-columns: minmax(96px, 32%) minmax(0, 1fr) 44px; gap: 10px; align-items: center; font-size: 12.5px; }
+.bar-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-row.active span:first-child { color: var(--accent); font-weight: 600; }
+/* Bar rows are usually links (Dashboard, Reports) or filter buttons (VulnFacets); one reset for both. */
+a.bar-row, button.bar-row { color: var(--text-2); }
+a.bar-row:hover, button.bar-row:hover { color: var(--text); text-decoration: none; }
+button.bar-row { width: 100%; padding: 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
+.bar-row:focus-visible { border-radius: var(--radius-sm); }
 .bar-track { height: 8px; border-radius: var(--radius-pill); background: var(--panel-3); overflow: hidden; }
 /* display:block is required: .bar-fill is a <span>, and inline boxes ignore percentage width
    (VulnFacets hit this — every track looked empty while Dashboard/Reports set display:block inline). */
 .bar-fill { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--bar-color, var(--accent)); }
 tr.row-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* Severity-by-network matrix: capped name column, equal severity columns, block cells (an empty
+   inline button would sit on the text baseline and drop below its filled neighbours). */
+table.heatmap { table-layout: fixed; }
+table.heatmap col.heatmap-label { width: 180px; }
+.heatmap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.compact td.heatmap-cell { padding: 2px; }
+.heatmap-cell button {
+  display: block; width: 100%; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.heatmap-cell button:disabled { cursor: default; }
+.heatmap-cell button.active { box-shadow: inset 0 0 0 2px var(--accent); }
 #vuln-findings { scroll-margin-top: 72px; }
 
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); }

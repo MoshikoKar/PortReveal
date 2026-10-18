@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { HttpBadge, ShotImg, endpointUrl, isRtspPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
 import { Card, ErrorBox, Loading, Pager } from '../components/ui';
 import type { WebHost, WebHostPage, WebService } from '../types';
@@ -69,7 +69,7 @@ function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number
         </div>
         <div className="small shot-title" title={p.title ?? undefined}>{p.title ?? <span className="muted">Untitled</span>}</div>
         <div>{s.ports.map((port) => <span className="chip" key={port}>{port}</span>)}</div>
-        <div className="row wrap" style={{ gap: 6 }}>
+        <div className="row wrap gap-2">
           {s.has_login && <span className="badge low">login page</span>}
           {p.tls_verified === false && <span className="badge outline">TLS unverified</span>}
         </div>
@@ -84,6 +84,7 @@ function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number
 
 export default function WebHosts() {
   // Filter state lives in the URL (q, noapp=1, hide=kind,kind, page) so reload, Back and shared links keep it.
+  const nav = useNavigate();
   const [sp, setSp] = useSearchParams();
   const page = Math.max(1, Number(sp.get('page')) || 1);
   const showArchived = sp.get('archived') === '1';
@@ -146,7 +147,7 @@ export default function WebHosts() {
           <h1>Web interfaces</h1>
           <p>HTTP(S) and RTSP services from the latest Web Capture — one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Services without a screenshot, default server pages, errors, blank pages and redirects are set aside below.</p>
         </div>
-        <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
+        <div className="row wrap">
           <label className="check small" title="Hosts of networks archived in Settings > Networks are hidden by default">
             <input type="checkbox" checked={showArchived} onChange={(e) => update({ archived: e.target.checked ? '1' : null, page: null })} />Show archived networks
           </label>
@@ -175,11 +176,12 @@ export default function WebHosts() {
               actions={<button className="btn sm ghost" aria-expanded={showNoShot} onClick={() => update({ noshot: showNoShot ? null : '1' })}>{showNoShot ? 'Hide' : 'Show'}</button>}
             >
               {showNoShot && (
+                <div className="table-wrap">
                 <table>
                   <thead><tr><th>Host</th><th>Service</th><th>Title</th><th>Why no screenshot</th></tr></thead>
                   <tbody>
                     {noShotCards.map(({ h, s }) => (
-                      <tr key={`${h.device_uuid}:${s.scheme}:${s.port}`} className="clickable" onClick={() => { window.location.href = `/devices/${h.device_uuid}/web`; }}>
+                      <tr key={`${h.device_uuid}:${s.scheme}:${s.port}`} className="clickable" onClick={() => nav(`/devices/${h.device_uuid}/web`)}>
                         <td>
                           <Link to={`/devices/${h.device_uuid}/web`} onClick={(e) => e.stopPropagation()}>{h.hostname ?? h.ip}</Link>
                           {h.hostname && <div className="mono muted small">{h.ip}</div>}
@@ -191,6 +193,7 @@ export default function WebHosts() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </Card>
           )}
@@ -203,8 +206,8 @@ export default function WebHosts() {
             >
               {showNoApp && (
                 <>
-                  <div className="row wrap" style={{ gap: 6, padding: '10px 14px', borderBottom: '1px solid var(--border, #333)' }}>
-                    <span className="muted small" style={{ marginRight: 4 }}>Show:</span>
+                  <div className="row wrap gap-2 card-toolbar">
+                    <span className="muted small">Show:</span>
                     {NO_APP_FILTERS.map((f) => {
                       const count = noAppGrouped[f.id].length;
                       if (!count) return null;
@@ -222,21 +225,22 @@ export default function WebHosts() {
                     })}
                   </div>
                   {visibleNoAppCount === 0 ? (
-                    <div className="muted small" style={{ padding: 14 }}>All categories are filtered out.</div>
+                    <div className="card-body muted small">All categories are filtered out.</div>
                   ) : (
                     NO_APP_FILTERS.map((f) => {
                       const rows = noAppGrouped[f.id];
                       if (!noAppFilters[f.id] || !rows.length) return null;
                       return (
                         <div key={f.id}>
-                          <div className="muted small" style={{ padding: '10px 14px 4px', fontWeight: 600 }}>
+                          <div className="card-subhead">
                             {f.label} — {rows.length}
                           </div>
+                          <div className="table-wrap">
                           <table>
                             <thead><tr><th>Host</th><th>Ports</th><th>Answered with</th><th /></tr></thead>
                             <tbody>
                               {rows.map((h) => (
-                                <tr key={h.device_uuid} className="clickable" onClick={() => { window.location.href = `/devices/${h.device_uuid}/web`; }}>
+                                <tr key={h.device_uuid} className="clickable" onClick={() => nav(`/devices/${h.device_uuid}/web`)}>
                                   <td>
                                     <Link to={`/devices/${h.device_uuid}/web`} onClick={(e) => e.stopPropagation()}>{h.hostname ?? h.ip}</Link>
                                     {h.hostname && <div className="mono small muted">{h.ip}</div>}
@@ -251,6 +255,7 @@ export default function WebHosts() {
                               ))}
                             </tbody>
                           </table>
+                          </div>
                         </div>
                       );
                     })

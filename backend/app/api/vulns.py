@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
 from ..core.mockdata import device_visible
+from ..core.query.sqlfn import ipv4_int_expr
 from ..core.vuln.buckets import severity_bucket, severity_bucket_expr
 from ..core.vuln.display import is_visible, normalize_cve_id
 from ..core.vuln.score import DEFAULT_CVSS, RISK_BANDS, RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
@@ -50,6 +51,8 @@ SEVERITY_PATTERN = "^(critical|high|medium|low|unknown)$"
 RISK_BAND_PATTERN = "^(" + "|".join(RISK_BANDS) + ")$"
 STATE_PATTERN = "^(" + "|".join(VULN_STATES) + ")$"
 NEW_SINCE_PATTERN = "^(scan|db)$"
+FINDING_SORTS = ("risk", "cve", "device", "network", "port", "cvss", "state", "first_seen")
+FINDING_SORT_PATTERN = "^(" + "|".join(FINDING_SORTS) + ")$"
 # Facet key for devices with no network; round-trips via ?network_id=unassigned.
 NETWORK_UNASSIGNED = "unassigned"
 
@@ -220,6 +223,25 @@ def _apply_filters(q, db: Session, cfg: VulnSettings, f: FindingFilters, now: da
     return q
 
 
+def _findings_order_by(db: Session, sort: str, order: str) -> list:
+    """ORDER BY for the finding list. `risk` (default) is the triage order -- KEV first, then highest
+    CVSS -- and ignores `order`; every other column is directed, then falls back to that order."""
+    triage = [Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), DevicePortVuln.id]
+    if sort == "risk":
+        return triage
+    keys = {
+        "cve": Vulnerability.cve_id,
+        "device": ipv4_int_expr(db.get_bind().dialect.name, Device.current_ip),
+        "network": Network.name,
+        "port": DevicePort.port,
+        "cvss": Vulnerability.cvss_base,
+        "state": DevicePortVuln.state,
+        "first_seen": func.coalesce(VulnFindingLifecycle.first_seen_at, DevicePortVuln.matched_at),
+    }
+    key = keys[sort]
+    return [(key.desc() if order == "desc" else key.asc()).nulls_last(), *triage]
+
+
 def _cpe_match_exists(*extra):
     """True when a vuln_cpe_match row pairs this finding's (cve_id, matched_cpe)."""
     return (
@@ -295,11 +317,13 @@ def list_vulns(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
+    sort: str = Query("risk", pattern=FINDING_SORT_PATTERN),
+    order: str = Query("asc", pattern="^(asc|desc)$"),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Filterable, paginated, CVE-centric finding list -- every card/facet on `/vulnerabilities`
+    """Filterable, sortable, paginated, CVE-centric finding list -- every card/facet on `/vulnerabilities`
     links here with matching query params, so the URL is shareable (spec UX)."""
     cfg = get_section(db, VulnSettings)
     now = utcnow()
@@ -312,7 +336,7 @@ def list_vulns(
     total = db.scalar(_apply_filters(_count_base(), db, cfg, filters, now)) or 0
     rows = db.execute(
         _apply_filters(_rows_base(), db, cfg, filters, now)
-        .order_by(Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), DevicePortVuln.id)
+        .order_by(*_findings_order_by(db, sort, order))
         .offset(paging.offset).limit(paging.page_size)
     ).all()
     items = [

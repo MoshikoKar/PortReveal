@@ -4,7 +4,7 @@ import { post } from '../api';
 import { useApp } from '../context';
 import { EventFeed } from '../components/EventFeed';
 import { Trend } from '../components/Trend';
-import { Card, ErrorBox, Kpi, Loading, MockBadge, Progress, ScanStatusBadge, ScoreBadge } from '../components/ui';
+import { Card, Empty, ErrorBox, Kpi, Loading, MockBadge, Progress, ScanStatusBadge, ScoreBadge } from '../components/ui';
 import type { Dashboard as DashboardData, EventType, Network } from '../types';
 import { EVENT_LABELS, SCAN_TYPE_LABELS, SCORE_HIGH, SCORE_MEDIUM, duration, fmtTime, quoteValue, relTime, scanStageFraction, useApi } from '../util';
 
@@ -147,9 +147,9 @@ export default function Dashboard() {
             {byType.length === 0 ? <div className="muted">No changes in the last 7 days.</div> : (
               <div className="bars">
                 {byType.sort((a, b) => b[1] - a[1]).map(([t, n]) => (
-                  <Link to={`/changes?type=${t}&range=7d`} key={t} className="bar-row" style={{ color: 'var(--text-2)' }}>
+                  <Link to={`/changes?type=${t}&range=7d`} key={t} className="bar-row" title={`${EVENT_LABELS[t]}: ${n}`}>
                     <span>{EVENT_LABELS[t]}</span>
-                    <span className="bar-track"><span className="bar-fill" style={{ display: 'block', width: `${(n / maxType) * 100}%`, ['--bar-color' as any]: TYPE_COLORS[t] }} /></span>
+                    <span className="bar-track"><span className="bar-fill" style={{ width: `${(n / maxType) * 100}%`, ['--bar-color' as any]: TYPE_COLORS[t] }} /></span>
                     <span className="right">{n}</span>
                   </Link>
                 ))}
@@ -164,9 +164,9 @@ export default function Dashboard() {
           <div className="stack">
             <div className="bars">
               {(['high', 'medium', 'low'] as const).map((lvl) => (
-                <Link key={lvl} to={searchLink(LEVEL_QUERIES[lvl])} className="bar-row" style={{ color: 'var(--text-2)' }}>
+                <Link key={lvl} to={searchLink(LEVEL_QUERIES[lvl])} className="bar-row">
                   <span style={{ textTransform: 'capitalize' }}>{lvl}</span>
-                  <span className="bar-track"><span className="bar-fill" style={{ display: 'block', width: `${(data.exposure[lvl] / Math.max(1, devices.total)) * 100}%`, ['--bar-color' as any]: LEVEL_COLORS[lvl] }} /></span>
+                  <span className="bar-track"><span className="bar-fill" style={{ width: `${(data.exposure[lvl] / Math.max(1, devices.total)) * 100}%`, ['--bar-color' as any]: LEVEL_COLORS[lvl] }} /></span>
                   <span className="right">{data.exposure[lvl]}</span>
                 </Link>
               ))}
@@ -190,9 +190,9 @@ export default function Dashboard() {
           {data.device_types.length === 0 ? <div className="muted">No devices classified yet. Types are assigned after a port scan.</div> : (
             <div className="bars">
               {data.device_types.map((t) => (
-                <Link key={t.type} to={searchLink(`type:${quoteValue(t.type)}`)} className="bar-row" style={{ color: 'var(--text-2)' }}>
+                <Link key={t.type} to={searchLink(`type:${quoteValue(t.type)}`)} className="bar-row" title={`${t.type}: ${t.count}`}>
                   <span>{t.type}</span>
-                  <span className="bar-track"><span className="bar-fill" style={{ display: 'block', width: `${(t.count / Math.max(1, ...data.device_types.map((x) => x.count))) * 100}%` }} /></span>
+                  <span className="bar-track"><span className="bar-fill" style={{ width: `${(t.count / Math.max(1, ...data.device_types.map((x) => x.count))) * 100}%` }} /></span>
                   <span className="right">{t.count}</span>
                 </Link>
               ))}
@@ -226,7 +226,7 @@ export default function Dashboard() {
           )}
         </div>
         <Card title="Most exposed ports" flush actions={<Link to="/ports" className="small">See all{data.exposed_ports_total ? ` ${data.exposed_ports_total}` : ''} →</Link>}>
-          {data.top_ports.length === 0 ? <div className="empty">No open ports known yet.</div> : (
+          {data.top_ports.length === 0 ? <Empty>No open ports known yet.</Empty> : (
             <table>
               <tbody>
                 {data.top_ports.map((p) => (
@@ -244,9 +244,9 @@ export default function Dashboard() {
           {data.top_services.length === 0 ? <div className="muted">No services known yet.</div> : (
             <div className="bars">
               {data.top_services.map((s) => (
-                <Link key={s.service} to={`/devices?service=${encodeURIComponent(s.service)}`} className="bar-row" style={{ color: 'var(--text-2)' }}>
+                <Link key={s.service} to={`/devices?service=${encodeURIComponent(s.service)}`} className="bar-row" title={`${s.service}: ${s.count}`}>
                   <span className="mono">{s.service}</span>
-                  <span className="bar-track"><span className="bar-fill" style={{ display: 'block', width: `${(s.count / maxSvc) * 100}%` }} /></span>
+                  <span className="bar-track"><span className="bar-fill" style={{ width: `${(s.count / maxSvc) * 100}%` }} /></span>
                   <span className="right">{s.count}</span>
                 </Link>
               ))}

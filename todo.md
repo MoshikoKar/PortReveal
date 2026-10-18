@@ -4,35 +4,11 @@
 
 ## 📊 Summary
 
-- **Total findings**: 158
+- **Total findings**: 184
 - **Open**: 0
-- **Completed**: 158 (archived — see index below)
-- **Severity distribution:** 🔴 Critical: 4 (0 open), 🟠 High: 41 (0 open), 🟡 Medium: 70 (0 open), 🟢 Low: 43 (0 open)
-- **Audits synced:** prior set + `docs/audit-api-design-2026-10-13.md` + `docs/audit-observability-2026-10-13.md` + `docs/audit-testing-coverage-2026-10-13.md` (all API13/OBS13/TEST13 archived)
-
----
-
-## 🔴 Critical
-
-*(none open)*
-
----
-
-## 🟠 High
-
-*(none open)*
-
----
-
-## 🟡 Medium
-
-*(none open)*
-
----
-
-## 🟢 Low
-
-*(none open)*
+- **Completed**: 184
+- **Severity distribution:** 🔴 Critical: 5 (0 open), 🟠 High: 45 (0 open), 🟡 Medium: 83 (0 open), 🟢 Low: 51 (0 open)
+- **Audits synced:** prior set + `docs/audit-ui-2026-10-18.md` + `docs/audit-ux-flow-2026-10-18.md` (UI18-L1/L6 absorbed into existing UI09-L1 / UI-L3 archive entries — not re-opened)
 
 ---
 
@@ -42,10 +18,11 @@ Completed findings live in `todo-archive/`. This file keeps an index only — no
 
 | Archive file | Period | Entries | Link |
 |--------------|--------|---------|------|
+| completed-migrated-2026-10-18.md | 2026-10-18 | 26 | [open](todo-archive/completed-migrated-2026-10-18.md) |
 | completed-summary.md | summary | 158 | [open](todo-archive/completed-summary.md) |
 
-**Total completed:** 158
+**Total completed:** 184
 
 ---
 
-*Open tasks derived from audit/review reports in `docs/`. Use `22-todo-sync-orchestrator` to refresh. Completed history: `todo-archive/`.*
+*Open tasks derived from audit/review reports in `docs/`. Use `12-todo-sync-orchestrator` to refresh. Completed history: `todo-archive/`.*

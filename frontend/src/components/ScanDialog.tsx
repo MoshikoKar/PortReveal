@@ -25,8 +25,10 @@ export function ScanDialog({ preset, onClose, onStarted }: {
 }) {
   const { system } = useApp();
   const networks = useApi<Network[]>('/networks');
-  const [type, setType] = useState<ScanType>(preset?.scan_type ?? 'standard');
-  const [mode, setMode] = useState<'networks' | 'targets' | 'devices'>(preset?.device_uuids ? 'devices' : 'networks');
+  const initialType: ScanType = preset?.scan_type ?? 'standard';
+  const initialMode = preset?.device_uuids ? 'devices' : 'networks';
+  const [type, setType] = useState<ScanType>(initialType);
+  const [mode, setMode] = useState<'networks' | 'targets' | 'devices'>(initialMode);
   const [selected, setSelected] = useState<number[]>([]);
   const [targets, setTargets] = useState('');
   const [busy, setBusy] = useState(false);
@@ -49,7 +51,8 @@ export function ScanDialog({ preset, onClose, onStarted }: {
   };
 
   const ready = scanReady(form);
-  const dirty = selected.length > 0 || targets !== '';
+  // Any departure from the preset counts, including a type- or target-mode-only change.
+  const dirty = type !== initialType || mode !== initialMode || selected.length > 0 || targets !== '';
   const startHint = scanStartHint(form, { unavailable, unavailableMessage: system?.scanner.message, busy });
   const requestClose = () => confirmDiscard(dirty) && onClose();
 

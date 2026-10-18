@@ -5,7 +5,7 @@ import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { HttpBadge, KIND_LABELS, ShotImg, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
-import { Card, Empty, ErrorBox, Loading, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
+import { Card, Empty, ErrorBox, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, Paged, Scan, SnapshotInfo, WebCapture } from '../types';
 import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, scanStageFraction, useApi, useInFlight } from '../util';
@@ -64,22 +64,33 @@ export default function Scans() {
   const tab = searchParams.get('tab') === 'web-captures' ? 'web-captures' : 'scans';
   const [dialog, setDialog] = useState(false);
   const [wcDialog, setWcDialog] = useState(false);
-  const [wcPage, setWcPage] = useState(1);
   const [wcDetail, setWcDetail] = useState<WebCapture | null>(null);
-  // History page and the open scan's id live in the URL, so reload/Back/shared links keep them.
-  const page = Math.max(1, Number.parseInt(searchParams.get('page') ?? '', 10) || 1);
+  // List pages and the open scan / capture ids live in the URL, so reload/Back/shared links keep them.
+  // Each tab's keys are namespaced (page, snap_page, scan vs. wc_page, capture) so switching tabs keeps them.
+  const pageParam = (key: string) => Math.max(1, Number.parseInt(searchParams.get(key) ?? '', 10) || 1);
+  const page = pageParam('page');
+  const snapPage = pageParam('snap_page');
+  const wcPage = pageParam('wc_page');
   const detailId = Number.parseInt(searchParams.get('scan') ?? '', 10) || null;
-  const setParam = (key: string, value: string | null, replace = false) => {
+  const wcDetailId = Number.parseInt(searchParams.get('capture') ?? '', 10) || null;
+  const setParams = (patch: Record<string, string | null>, replace = false) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      if (value == null) next.delete(key);
-      else next.set(key, value);
+      for (const [key, value] of Object.entries(patch)) {
+        if (value == null) next.delete(key);
+        else next.set(key, value);
+      }
       return next;
     }, { replace });
   };
+  const setParam = (key: string, value: string | null, replace = false) => setParams({ [key]: value }, replace);
   const setPage = (p: number) => setParam('page', p > 1 ? String(p) : null);
+  const setSnapPage = (p: number) => setParam('snap_page', p > 1 ? String(p) : null);
+  const setWcPage = (p: number) => setParam('wc_page', p > 1 ? String(p) : null);
+  // Detail modals belong to one tab, so they close on a switch; list pages and filters stay.
+  const switchTab = (next: 'scans' | 'web-captures') =>
+    setParams({ tab: next === 'scans' ? null : next, scan: null, capture: null });
   const [detail, setDetail] = useState<Scan | null>(null);
-  const [snapPage, setSnapPage] = useState(1);
   // Poll fast only while something is running or queued (here or per the app-wide status poll, which
   // also catches scheduled scans); idle pages refresh slowly. Web-capture endpoints load only on their tab.
   const [scansBusy, setScansBusy] = useState(false);
@@ -201,7 +212,7 @@ export default function Scans() {
       try {
         await del(`/web-captures/${id}`);
         wcHistory.reload();
-        setWcDetail(null);
+        if (wcDetailId === id) closeWcDetail();
       } catch (e: any) {
         setErr(e.message);
       }
@@ -220,14 +231,26 @@ export default function Scans() {
       }
     });
   };
-  const openWcDetail = async (id: number) => {
-    setErr(null);
-    try {
-      setWcDetail(await get<WebCapture>(`/web-captures/${id}`));
-    } catch (e: any) {
-      setErr(`Could not open Web Capture job #${id}: ${e.message}`);
+  const openWcDetail = (id: number) => setParam('capture', String(id));
+  const closeWcDetail = () => setParam('capture', null, true);
+  useEffect(() => {
+    if (!wcDetailId) {
+      setWcDetail(null);
+      return;
     }
-  };
+    let live = true;
+    setErr(null);
+    get<WebCapture>(`/web-captures/${wcDetailId}`).then(
+      (d) => live && setWcDetail(d),
+      (e: any) => {
+        if (!live) return;
+        setErr(`Could not open Web Capture job #${wcDetailId}: ${e.message}`);
+        setParam('capture', null, true);
+      },
+    );
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch only when the URL's capture id changes
+  }, [wcDetailId]);
 
   return (
     <>
@@ -250,15 +273,15 @@ export default function Scans() {
           <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
             <label className="check small" title="Jobs whose every page is on an archived network are hidden by default">
               <input type="checkbox" checked={showArchivedWc}
-                onChange={(e) => setParam('archived', e.target.checked ? '1' : null)} />Show archived networks
+                onChange={(e) => setParams({ archived: e.target.checked ? '1' : null, wc_page: null })} />Show archived networks
             </label>
             {isAdmin && <button className="btn primary" onClick={() => setWcDialog(true)}>Web capture</button>}
           </div>
         )}
       </div>
       <nav className="tabs">
-        <button className={tab === 'scans' ? 'active' : ''} onClick={() => setSearchParams({})}>Network scans</button>
-        <button className={tab === 'web-captures' ? 'active' : ''} onClick={() => setSearchParams({ tab: 'web-captures' })}>Web captures</button>
+        <button className={tab === 'scans' ? 'active' : ''} onClick={() => switchTab('scans')}>Network scans</button>
+        <button className={tab === 'web-captures' ? 'active' : ''} onClick={() => switchTab('web-captures')}>Web captures</button>
       </nav>
       <ErrorBox error={err} />
 
@@ -331,11 +354,11 @@ export default function Scans() {
                 </div>
                 <Pager page={wcPage} pageSize={20} total={wcHistory.data.total} onPage={setWcPage} />
               </>
-            )) : <Loading />}
+            )) : <SkeletonRows cols={7} />}
           </Card>
           {wcDialog && <WebCaptureDialog onClose={() => setWcDialog(false)} onStarted={onWcStarted} />}
           {wcDetail && (
-            <Modal title={`Web Capture #${wcDetail.id}`} onClose={() => setWcDetail(null)}>
+            <Modal title={`Web Capture #${wcDetail.id}`} onClose={closeWcDetail}>
               <dl className="dl">
                 <dt>Status</dt><dd><ScanStatusBadge status={wcDetail.status as any} /></dd>
                 <dt>Targets</dt><dd className="mono">{wcDetail.targets}</dd>
@@ -483,7 +506,7 @@ export default function Scans() {
         <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
           One compact copy of the normalized network state per network per day, kept for the retention period.
         </div>
-        {!snaps.data ? <Loading /> : !snaps.data.items.length ? <Empty>No snapshots yet (created after each successful standard network scan).</Empty> : (
+        {!snaps.data ? <SkeletonRows cols={6} rows={4} /> : !snaps.data.items.length ? <Empty>No snapshots yet (created after each successful standard network scan).</Empty> : (
           <>
             <div className="table-wrap">
             <table>

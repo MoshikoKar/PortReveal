@@ -31,10 +31,9 @@ function FacetBars({ title, buckets, filterKey, filters, onToggle }: {
             const value = String(b.key);
             const active = selected === value;
             return (
-              <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`}
-                style={{ color: 'var(--text-2)', background: 'none', border: 0, padding: 0, width: '100%', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
-                onClick={() => onToggle(filterKey, value)}>
-                <span style={active ? { fontWeight: 600, color: 'var(--accent)' } : undefined}>{b.label ?? value}</span>
+              <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`} aria-pressed={active}
+                title={`${b.label ?? value}: ${b.count}`} onClick={() => onToggle(filterKey, value)}>
+                <span>{b.label ?? value}</span>
                 <span className="bar-track"><span className="bar-fill" style={barFillStyle(b.count, max)} /></span>
                 <span className="right">{b.count}</span>
               </button>
@@ -62,10 +61,9 @@ function VendorProductFacet({ buckets, filters, onToggleKey }: {
             const value = String(b.key);
             const active = vendorProductFacetActive(filters, value);
             return (
-              <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`}
-                style={{ color: 'var(--text-2)', background: 'none', border: 0, padding: 0, width: '100%', cursor: 'pointer', font: 'inherit', textAlign: 'left' }}
-                onClick={() => onToggleKey(value)}>
-                <span style={active ? { fontWeight: 600, color: 'var(--accent)' } : undefined}>{b.label ?? value}</span>
+              <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`} aria-pressed={active}
+                title={`${b.label ?? value}: ${b.count}`} onClick={() => onToggleKey(value)}>
+                <span>{b.label ?? value}</span>
                 <span className="bar-track"><span className="bar-fill" style={barFillStyle(b.count, max)} /></span>
                 <span className="right">{b.count}</span>
               </button>

@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Card, Empty, ErrorBox, Kpi, Loading, RiskBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
 import type { Paged, ReportHost, VulnJob } from '../types';
 import { fmtTime, quoteValue, relTime, useApi } from '../util';
@@ -24,11 +24,14 @@ interface VulnReport {
 const PREVIEW_ROWS = 5;
 const searchLink = (q: string) => `/search?q=${encodeURIComponent(q)}`;
 
+/** Sections whose "See all" state is kept in the URL (`?expand=rare,cves`), so expanded views can be shared. */
+type Section = 'rare' | 'skew' | 'subnets' | 'risk' | 'cves';
+
+/** "See all / Show less" bar closing a flush card list (same as DeviceDetail). */
 function SeeAll({ total, open, onToggle }: { total: number; open: boolean; onToggle: () => void }) {
   if (total <= PREVIEW_ROWS) return null;
   return (
-    <button type="button" className="small" onClick={onToggle}
-      style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent)', cursor: 'pointer' }}>
+    <button type="button" className="btn see-all" aria-expanded={open} onClick={onToggle}>
       {open ? 'Show less' : `See all ${total} →`}
     </button>
   );
@@ -75,11 +78,17 @@ export default function Reports() {
   const skew = useApi<{ items: Skew[] }>('/reports/version-skew');
   const subnets = useApi<{ items: Subnet[] }>('/reports/subnets');
   const vuln = useApi<VulnReport>('/reports/vulnerabilities');
-  const [rareOpen, setRareOpen] = useState(false);
-  const [skewOpen, setSkewOpen] = useState(false);
-  const [subnetsOpen, setSubnetsOpen] = useState(false);
-  const [riskOpen, setRiskOpen] = useState(false);
-  const [cveOpen, setCveOpen] = useState(false);
+  const [sp, setSp] = useSearchParams();
+  const expanded = new Set((sp.get('expand') ?? '').split(',').filter(Boolean));
+  const isOpen = (s: Section) => expanded.has(s);
+  const toggleOpen = (s: Section) => {
+    if (expanded.has(s)) expanded.delete(s);
+    else expanded.add(s);
+    const next = new URLSearchParams(sp);
+    if (expanded.size) next.set('expand', [...expanded].join(','));
+    else next.delete('expand');
+    setSp(next, { replace: true });
+  };
   const e = exposure.data;
   const maxBucket = Math.max(1, ...(e?.distribution.map((b) => b.count) ?? []));
   const rareItems = rare.data?.items ?? [];
@@ -109,9 +118,9 @@ export default function Reports() {
             <Card title="Score distribution">
               <div className="bars">
                 {e.distribution.map((b) => (
-                  <Link key={b.from} to={searchLink(`score:${b.from}-${b.to}`)} className="bar-row" style={{ color: 'var(--text-2)' }}>
+                  <Link key={b.from} to={searchLink(`score:${b.from}-${b.to}`)} className="bar-row">
                     <span className="mono">{b.from}–{b.to}</span>
-                    <span className="bar-track"><span className="bar-fill" style={{ display: 'block', width: `${(b.count / maxBucket) * 100}%`, ['--bar-color' as any]: b.from >= e.thresholds.high ? 'var(--high)' : b.from >= e.thresholds.medium ? 'var(--medium)' : 'var(--ok)' }} /></span>
+                    <span className="bar-track"><span className="bar-fill" style={{ width: `${(b.count / maxBucket) * 100}%`, ['--bar-color' as any]: b.from >= e.thresholds.high ? 'var(--high)' : b.from >= e.thresholds.medium ? 'var(--medium)' : 'var(--ok)' }} /></span>
                     <span className="right">{b.count}</span>
                   </Link>
                 ))}
@@ -125,9 +134,7 @@ export default function Reports() {
       )}
 
       <div className="grid halves">
-        <Card title="Rare services" flush actions={
-          <SeeAll total={rareItems.length} open={rareOpen} onToggle={() => setRareOpen((v) => !v)} />
-        }>
+        <Card title="Rare services" flush>
           <ReportBlurb>
             Ports open on exactly one host of a network with at least {rare.data?.min_hosts ?? '…'} hosts. Often forgotten or unexpected services.
           </ReportBlurb>
@@ -137,7 +144,7 @@ export default function Reports() {
               <table>
                 <thead><tr><th>Port</th><th>Service</th><th>Host</th><th>Network</th></tr></thead>
                 <tbody>
-                  {preview(rareItems, rareOpen).map((r) => (
+                  {preview(rareItems, isOpen('rare')).map((r) => (
                     <tr key={`${r.network}-${r.protocol}${r.port}`} className="clickable" onClick={() => nav(`/devices/${r.host.uuid}`)}>
                       <td className="mono nowrap">{r.port}/{r.protocol}</td>
                       <td>{[r.product, r.version].filter(Boolean).join(' ') || r.service || '—'}</td>
@@ -149,10 +156,9 @@ export default function Reports() {
               </table>
             </div>
           )}
+          <SeeAll total={rareItems.length} open={isOpen('rare')} onToggle={() => toggleOpen('rare')} />
         </Card>
-        <Card title="Version skew" flush actions={
-          <SeeAll total={skewItems.length} open={skewOpen} onToggle={() => setSkewOpen((v) => !v)} />
-        }>
+        <Card title="Version skew" flush>
           <ReportBlurb>
             Products running two or more versions. Click a version to see its hosts.
           </ReportBlurb>
@@ -162,7 +168,7 @@ export default function Reports() {
               <table>
                 <thead><tr><th>Product</th><th>Versions (hosts)</th></tr></thead>
                 <tbody>
-                  {preview(skewItems, skewOpen).map((s) => (
+                  {preview(skewItems, isOpen('skew')).map((s) => (
                     <tr key={s.product}>
                       <td><Link to={searchLink(`product:=${quoteValue(s.product)}`)}>{s.product}</Link><div className="muted small">{s.hosts} hosts</div></td>
                       <td>
@@ -178,15 +184,13 @@ export default function Reports() {
               </table>
             </div>
           )}
+          <SeeAll total={skewItems.length} open={isOpen('skew')} onToggle={() => toggleOpen('skew')} />
         </Card>
       </div>
 
       <div className="grid halves">
         <Card title="At-risk devices" flush actions={
-          <div className="row" style={{ gap: 12 }}>
-            <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
-            <SeeAll total={topDevices.length} open={riskOpen} onToggle={() => setRiskOpen((v) => !v)} />
-          </div>
+          <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
         }>
           <ReportBlurb>
             Devices ranked by combined score (risk from matched CVEs, boosted by exposure) — same numbers as
@@ -201,7 +205,7 @@ export default function Reports() {
               <table>
                 <thead><tr><th>Host</th><th>Network</th><th className="right">Risk</th><th className="right">Combined</th></tr></thead>
                 <tbody>
-                  {preview(topDevices, riskOpen).map((h) => (
+                  {preview(topDevices, isOpen('risk')).map((h) => (
                     <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
                       <td><span className="mono">{h.ip}</span>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
                       <td>{h.network ?? '—'}</td>
@@ -213,12 +217,10 @@ export default function Reports() {
               </table>
             </div>
           )}
+          <SeeAll total={topDevices.length} open={isOpen('risk')} onToggle={() => toggleOpen('risk')} />
         </Card>
         <Card title="Top vulnerabilities" flush actions={
-          <div className="row" style={{ gap: 12 }}>
-            <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
-            <SeeAll total={topCves.length} open={cveOpen} onToggle={() => setCveOpen((v) => !v)} />
-          </div>
+          <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
         }>
           <ReportBlurb>
             CVEs matched on the most devices (confirmed or potential, not dismissed) — same computation as the{' '}
@@ -232,7 +234,7 @@ export default function Reports() {
               <table>
                 <thead><tr><th>CVE</th><th className="right">CVSS</th><th>KEV</th><th className="right">Devices</th></tr></thead>
                 <tbody>
-                  {preview(topCves, cveOpen).map((c) => (
+                  {preview(topCves, isOpen('cves')).map((c) => (
                     <tr key={c.cve_id} className="clickable" onClick={() => nav(searchLink(`cve:${c.cve_id}`))}>
                       <td className="mono">{c.cve_id}</td>
                       <td className="right mono">{c.cvss_base != null ? c.cvss_base.toFixed(1) : '—'}</td>
@@ -244,19 +246,18 @@ export default function Reports() {
               </table>
             </div>
           )}
+          <SeeAll total={topCves.length} open={isOpen('cves')} onToggle={() => toggleOpen('cves')} />
         </Card>
       </div>
 
-      <Card title="Subnets (/24)" flush actions={
-        <SeeAll total={subnetItems.length} open={subnetsOpen} onToggle={() => setSubnetsOpen((v) => !v)} />
-      }>
+      <Card title="Subnets (/24)" flush>
         <ErrorBox error={subnets.error} />
         {!subnets.data ? (!subnets.error && <Loading />) : !subnetItems.length ? <Empty>No IPv4 hosts known yet.</Empty> : (
           <div className="table-wrap">
             <table>
               <thead><tr><th>Subnet</th><th className="right">Hosts</th><th className="right">Active</th><th className="right">Max score</th><th className="right">Average score</th></tr></thead>
               <tbody>
-                {preview(subnetItems, subnetsOpen).map((s) => (
+                {preview(subnetItems, isOpen('subnets')).map((s) => (
                   <tr key={s.subnet} className="clickable" onClick={() => nav(searchLink(s.query))}>
                     <td className="mono">{s.subnet}</td>
                     <td className="right">{s.hosts}</td>
@@ -269,6 +270,7 @@ export default function Reports() {
             </table>
           </div>
         )}
+        <SeeAll total={subnetItems.length} open={isOpen('subnets')} onToggle={() => toggleOpen('subnets')} />
       </Card>
 
       <HeatmapCard />

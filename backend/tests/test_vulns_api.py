@@ -157,6 +157,28 @@ def test_list_vulns_pagination(admin, db):
     assert page1["items"][0]["cve_id"] != page2["items"][0]["cve_id"]
 
 
+def test_list_vulns_sort_and_order(admin, db):
+    _seed_two_devices(db)
+
+    def order(**params) -> list[str]:
+        r = admin.get("/api/vulns", params=params)
+        assert r.status_code == 200
+        return [it["cve_id"] for it in r.json()["items"]]
+
+    # Default triage order: KEV first, then highest CVSS.
+    assert order() == ["CVE-2024-CRIT", "CVE-2024-MED"]
+    assert order(sort="cvss", order="asc") == ["CVE-2024-MED", "CVE-2024-CRIT"]
+    assert order(sort="cvss", order="desc") == ["CVE-2024-CRIT", "CVE-2024-MED"]
+    # Device sorts by numeric IP (10.0.0.1 has CRIT, 10.0.0.2 has MED).
+    assert order(sort="device", order="desc") == ["CVE-2024-MED", "CVE-2024-CRIT"]
+    assert order(sort="port", order="asc") == ["CVE-2024-CRIT", "CVE-2024-MED"]  # 22 before 80
+    assert order(sort="state", order="asc") == ["CVE-2024-CRIT", "CVE-2024-MED"]  # confirmed < potential
+    for key in ("cve", "network", "first_seen"):
+        assert sorted(order(sort=key)) == ["CVE-2024-CRIT", "CVE-2024-MED"]
+    assert admin.get("/api/vulns", params={"sort": "bogus"}).status_code == 422
+    assert admin.get("/api/vulns", params={"order": "sideways"}).status_code == 422
+
+
 def test_list_vulns_exposure_duration_and_cve_age_buckets(admin, db):
     _seed_two_devices(db)
     assert admin.get("/api/vulns", params={"exposure_duration": "under_30d"}).json()["total"] == 2

@@ -6,23 +6,38 @@ import type { Paged, VulnFindingListItem } from '../types';
 import { fmtTime, useApi } from '../util';
 import { buildVulnQuery, type VulnFilters } from '../vulnFilters';
 import { dismissBusyKey, findingRowKey, formatCvss, formatEpss } from '../vulnFormat';
-import { Card, Empty, ErrorBox, Pager, SkeletonRows } from './ui';
+import { Card, Empty, ErrorBox, Pager, SkeletonRows, SortTh } from './ui';
 
 const PAGE_SIZE = 50;
+
+/** Server-side sort keys (GET /api/vulns `sort`). `risk` is the default triage order: KEV, then CVSS. */
+export const FINDING_SORTS = ['risk', 'cve', 'device', 'network', 'port', 'cvss', 'state', 'first_seen'] as const;
+export type FindingSort = (typeof FINDING_SORTS)[number];
+/** Scores and dates read best largest/newest first; names and numbers ascending. */
+export const FINDING_DESC_FIRST: readonly FindingSort[] = ['cvss', 'first_seen'];
 
 /** Paginated CVE-centric findings table. Dismiss/undismiss reuse the existing per-device endpoints;
  * after a mutation the parent reloads the summary so cards stay in sync. */
 export function VulnFindingsTable({
-  filters, page, onPage, onToggleDismissed, onChanged,
+  filters, page, onPage, sort, onSort, onToggleDismissed, onChanged,
 }: {
   filters: VulnFilters;
   page: number;
   onPage: (page: number) => void;
+  sort: { key: FindingSort; desc: boolean };
+  onSort: (key: FindingSort) => void;
   onToggleDismissed: (show: boolean) => void;
   onChanged: () => void;
 }) {
   const { isAdmin } = useApp();
-  const params = buildVulnQuery(filters, { page, page_size: PAGE_SIZE });
+  const params = buildVulnQuery(filters, {
+    page, page_size: PAGE_SIZE,
+    sort: sort.key === 'risk' ? undefined : sort.key,
+    order: sort.key === 'risk' ? undefined : sort.desc ? 'desc' : 'asc',
+  });
+  const sortTh = (key: FindingSort, label: string) => (
+    <SortTh active={sort.key === key} desc={sort.desc} onSort={() => onSort(key)}>{label}</SortTh>
+  );
   const { data, error, reload } = useApi<Paged<VulnFindingListItem>>('/vulns', params, 30000);
   const [busy, setBusy] = useState<string | null>(null);
   const showingDismissed = filters.state === 'dismissed';
@@ -57,11 +72,19 @@ export function VulnFindingsTable({
 
   return (
     <Card title="Findings" flush actions={
-      <label className="check small">
-        <input type="checkbox" checked={showingDismissed}
-          onChange={(e) => onToggleDismissed(e.target.checked)} />
-        show dismissed only
-      </label>
+      <>
+        {sort.key !== 'risk' && (
+          <button type="button" className="btn sm ghost" onClick={() => onSort('risk')}
+            title="Back to the default order: actively exploited (KEV) first, then highest CVSS">
+            Triage order
+          </button>
+        )}
+        <label className="check small">
+          <input type="checkbox" checked={showingDismissed}
+            onChange={(e) => onToggleDismissed(e.target.checked)} />
+          show dismissed only
+        </label>
+      </>
     }>
       <ErrorBox error={error} />
       {!data ? (!error && <SkeletonRows cols={isAdmin ? 8 : 7} rows={5} />) : !items.length ? (
@@ -85,13 +108,13 @@ export function VulnFindingsTable({
             <table className="compact">
               <thead>
                 <tr>
-                  <th>CVE</th>
-                  <th>Device</th>
-                  <th>Network</th>
-                  <th>Port / service</th>
-                  <th>CVSS</th>
-                  <th>State</th>
-                  <th>First seen</th>
+                  {sortTh('cve', 'CVE')}
+                  {sortTh('device', 'Device')}
+                  {sortTh('network', 'Network')}
+                  {sortTh('port', 'Port / service')}
+                  {sortTh('cvss', 'CVSS')}
+                  {sortTh('state', 'State')}
+                  {sortTh('first_seen', 'First seen')}
                   {isAdmin && <th />}
                 </tr>
               </thead>

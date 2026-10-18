@@ -1,7 +1,7 @@
 // Schedule, scan profile, notifications, LDAP and retention forms.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
-import { Card, ErrorBox, Loading } from '../../components/ui';
+import { Card, ErrorBox, Loading, useReportDirty } from '../../components/ui';
 import type { DiscoverySettings, EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
 import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
 
@@ -35,13 +35,6 @@ function useForm<T>(path: string) {
   // Unsaved edits: the working copy differs from what the server last returned.
   const dirty = !!form && !!res.data && JSON.stringify(form) !== JSON.stringify(res.data);
   return { ...res, form, setForm, msg, setMsg, save, saving, dirty };
-}
-
-/** Tell a parent (the setup wizard) whenever the form's unsaved-edits state flips. */
-function useReportDirty(dirty: boolean, onDirtyChange?: (dirty: boolean) => void) {
-  useEffect(() => {
-    onDirtyChange?.(dirty);
-  }, [dirty, onDirtyChange]);
 }
 
 function Msg({ msg }: { msg: { ok: boolean; text: string } | null }) {

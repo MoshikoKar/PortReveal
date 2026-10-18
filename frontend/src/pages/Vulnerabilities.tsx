@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { downloadBlob, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
-import { VulnFindingsTable } from '../components/VulnFindingsTable';
+import { FINDING_DESC_FIRST, FINDING_SORTS, VulnFindingsTable, type FindingSort } from '../components/VulnFindingsTable';
 import { VulnHeatmap } from '../components/VulnHeatmap';
 import { VulnTopLists } from '../components/VulnTopLists';
 import { VulnRiskTrend, VulnSeverityTrend, VulnTrend } from '../components/VulnTrend';
@@ -83,6 +83,22 @@ export default function Vulnerabilities() {
     setSp(next);
   };
   const activeFilters = Object.entries(filters) as [VulnFilterKey, string][];
+  // Findings sort lives in the URL next to the filters (filter helpers keep it, and drop only `page`).
+  const sortKey: FindingSort = FINDING_SORTS.find((k) => k === sp.get('sort')) ?? 'risk';
+  const findingSort = { key: sortKey, desc: sp.get('order') === 'desc' };
+  const setFindingSort = (key: FindingSort) => {
+    const next = new URLSearchParams(sp);
+    if (key === 'risk') {
+      next.delete('sort');
+      next.delete('order');
+    } else {
+      const desc = key === sortKey ? !findingSort.desc : FINDING_DESC_FIRST.includes(key);
+      next.set('sort', key);
+      next.set('order', desc ? 'desc' : 'asc');
+    }
+    next.delete('page');
+    setSp(next);
+  };
 
   const exportCsv = async () => {
     setExportError(null);
@@ -115,7 +131,7 @@ export default function Vulnerabilities() {
             own severity label. CVEs with no score in the cache are shown as unscored.
           </p>
         </div>
-        <div className="row wrap no-print" style={{ gap: 8 }}>
+        <div className="row wrap gap-2 no-print">
           <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
             {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
@@ -126,12 +142,12 @@ export default function Vulnerabilities() {
       <ErrorBox error={error} />
       {/* Chips stay outside the summary loading gate so filter state paints immediately on click. */}
       {activeFilters.length > 0 && (
-        <div className="row wrap" style={{ gap: 8, marginBottom: 12 }}>
+        <div className="row wrap gap-2">
           <span className="muted small">Filters:</span>
           {activeFilters.map(([key, value]) => (
-            <button key={key} type="button" className="badge outline" style={{ cursor: 'pointer', border: 0 }}
-              onClick={() => set(key, undefined, false)} title="Remove this filter">
-              {formatVulnFilterChip(key, value, labelCtx)} ✕
+            <button key={key} type="button" className="btn sm toggle on" aria-pressed="true" title="Remove this filter"
+              onClick={() => set(key, undefined, false)}>
+              {formatVulnFilterChip(key, value, labelCtx)} <span aria-hidden>✕</span>
             </button>
           ))}
           <button type="button" className="btn sm ghost"
@@ -140,23 +156,12 @@ export default function Vulnerabilities() {
       )}
       {!data ? (!error && <Loading />) : (
         <>
-          <Card className={data.kev_count > 0 ? 'kev-card active' : 'kev-card'}>
-            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
-              role="button" tabIndex={0} aria-pressed={filters.kev === 'true'}
-              onClick={() => toggle('kev', 'true')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle('kev', 'true'); } }}>
-              <div>
-                <div className="label" style={{ fontSize: 13, fontWeight: 600, color: data.kev_count > 0 ? 'var(--high)' : 'var(--muted)' }}>
-                  Actively exploited (CISA KEV)
-                  {filters.kev === 'true' && <span className="badge high" style={{ marginLeft: 8 }}>filtered</span>}
-                </div>
-                <div className="muted small">Known to be exploited in the wild — the most urgent findings on this network.</div>
-              </div>
-              <div style={{ fontSize: 40, fontWeight: 700, color: data.kev_count > 0 ? 'var(--high)' : undefined }}>
-                {data.kev_count}
-              </div>
-            </div>
-          </Card>
+          {/* Same toggle affordance as the KPI row (.kpi.active + aria-pressed); full width as the most urgent figure. */}
+          <Kpi label="Actively exploited (CISA KEV)"
+            value={<span style={{ color: data.kev_count > 0 ? 'var(--high)' : undefined }}>{data.kev_count}</span>}
+            sub="Known to be exploited in the wild — the most urgent findings on this network."
+            color={data.kev_count > 0 ? 'var(--high)' : undefined}
+            active={filters.kev === 'true'} onClick={() => toggle('kev', 'true')} />
 
           <div className="grid kpis">
             <Kpi label="Critical" value={severity.critical} color={SEVERITY_COLOR.critical}
@@ -186,7 +191,7 @@ export default function Vulnerabilities() {
 
           <Card title="Vulnerability feed">
             {data.feed.stale && (
-              <div className="badge high" style={{ marginBottom: 10 }}>
+              <div className="badge high" style={{ marginBottom: 'var(--space-3)' }}>
                 Stale — oldest enabled source hasn&apos;t synced in over {data.feed.stale_threshold_hours}h
               </div>
             )}
@@ -237,6 +242,8 @@ export default function Vulnerabilities() {
               filters={filters}
               page={page}
               onPage={setPage}
+              sort={findingSort}
+              onSort={setFindingSort}
               onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined, false)}
               onChanged={() => { void reload(); }}
             />

@@ -14,7 +14,8 @@ export function WebCaptureDialog({ preset, onClose, onStarted }: {
   onClose: () => void;
   onStarted?: () => void;
 }) {
-  const [mode, setMode] = useState<'devices' | 'targets'>(preset?.device_uuids ? 'devices' : 'targets');
+  const initialMode = preset?.device_uuids ? 'devices' : 'targets';
+  const [mode, setMode] = useState<'devices' | 'targets'>(initialMode);
   const [targets, setTargets] = useState(preset?.targets ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +41,8 @@ export function WebCaptureDialog({ preset, onClose, onStarted }: {
   };
 
   const ready = mode === 'devices' ? !!preset?.device_uuids?.length : targets.trim().length > 0;
-  const dirty = targets !== (preset?.targets ?? '');
+  // Any departure from the preset counts, including a mode-only change.
+  const dirty = mode !== initialMode || targets !== (preset?.targets ?? '');
   const startHint = !ready
     ? mode === 'targets' ? 'Enter targets' : 'Select at least one device'
     : busy ? 'Starting web capture…'

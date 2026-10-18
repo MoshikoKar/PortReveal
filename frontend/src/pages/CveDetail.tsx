@@ -53,7 +53,12 @@ export default function CveDetail() {
         <Card><Empty>{cve_id} is not in the local vulnerability cache.</Empty></Card>
       ) : (
         <>
-          <ErrorBox error={error} />
+          {error && (
+            <div className="stack">
+              <ErrorBox error={error} />
+              <div><button type="button" className="btn sm" onClick={() => reload()}>Retry</button></div>
+            </div>
+          )}
           {!data ? (!error && <Loading />) : (
             <>
               <Card title="CVE details">

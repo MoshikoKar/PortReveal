@@ -1,12 +1,13 @@
 // Users, audit log and system health.
 import { useState } from 'react';
 import { del, patch, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Loading, Modal, Pager, ScanStatusBadge, SkeletonRows, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Loading, Modal, Pager, ScanStatusBadge, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import { useApp } from '../../context';
 import type { AuditEntry, Paged, User } from '../../types';
 import { fmtTime, relTime, useApi, useInFlight } from '../../util';
 
-export function UsersSettings() {
+/** `onDirtyChange`: told when the create-user or set-password dialog holds unsaved input (Settings leave guard). */
+export function UsersSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const { user: me } = useApp();
   const { data, error, loading, reload } = useApi<User[]>('/users');
   const [draft, setDraft] = useState<{ username: string; password: string; role: 'admin' | 'viewer' } | null>(null);
@@ -20,6 +21,7 @@ export function UsersSettings() {
   const canCreate = !!draft && !!draft.username.trim() && !!draft.password;
   const closeDraft = () => confirmDiscard(draftDirty) && setDraft(null);
   const closePw = () => confirmDiscard(!!pw?.password) && setPw(null);
+  useReportDirty(draftDirty || !!pw?.password, onDirtyChange);
 
   const changeRole = (u: User, role: 'admin' | 'viewer') => {
     const msg = role === 'viewer'

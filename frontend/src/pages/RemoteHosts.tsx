@@ -45,10 +45,8 @@ function DesktopCard({ h, s, index }: RemoteCard) {
 function Section({ title, count, children }: { title: string; count: number; children: ReactNode }) {
   if (!count) return null;
   return (
-    <section style={{ marginTop: 20 }}>
-      <h2 className="section-title" style={{ fontSize: '1.05rem', margin: '0 0 10px', fontWeight: 600 }}>
-        {title} <span className="muted" style={{ fontWeight: 500 }}>({count})</span>
-      </h2>
+    <section className="stack">
+      <h2>{title} <span className="muted">({count})</span></h2>
       {children}
     </section>
   );

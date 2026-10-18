@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { del, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import { useApp } from '../../context';
 import type { Exclusion } from '../../types';
 import { useApi, useInFlight } from '../../util';
 
 type Draft = { id?: number; value: string; description: string; enabled: boolean };
 
-export function ExclusionsSettings() {
+/** `onDirtyChange`: told when the add/edit dialog holds unsaved edits (Settings / setup leave guards). */
+export function ExclusionsSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const { isAdmin } = useApp();
   const { data, error, loading, reload } = useApi<Exclusion[]>('/exclusions');
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -18,6 +19,7 @@ export function ExclusionsSettings() {
   const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   const canSave = !!draft?.value.trim();
+  useReportDirty(!!draft && dirty, onDirtyChange);
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
   const closeDraft = () => confirmDiscard(dirty) && setDraft(null);

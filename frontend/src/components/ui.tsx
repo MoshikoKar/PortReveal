@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { ChangeEvent, DeviceStatus, ScanStatus } from '../types';
 import { EVENT_LABELS, scoreLevel } from '../util';
 
@@ -168,6 +169,48 @@ export function SortTh({ active, desc, onSort, className, children }: {
   );
 }
 
+type SortValue = string | number | boolean | null | undefined;
+
+/** Compare two cell values: empty values last, numbers numerically, text with numeric collation
+ *  (so CVE ids and IPs order by their digit runs: 10.0.0.9 before 10.0.0.10). */
+function compareSortValues(a: SortValue, b: SortValue): number {
+  const empty = (v: SortValue) => v == null || v === '';
+  if (empty(a) || empty(b)) return empty(a) ? (empty(b) ? 0 : 1) : -1;
+  if (typeof a === 'string' || typeof b === 'string') {
+    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+  }
+  return Number(a) - Number(b);
+}
+
+/** Client-side column sort for small, fully loaded tables (server-paged tables sort in the API).
+ *  Rows keep their source order until a header is clicked; clicking again flips the direction.
+ *  `descFirst` columns (scores, counts) start largest-first. Empty values always sort last. */
+export function useClientSort<T, K extends string>(
+  rows: T[], keys: Record<K, (row: T) => SortValue>, descFirst: readonly NoInfer<K>[] = [],
+) {
+  const [sort, setSort] = useState<{ key: K; desc: boolean } | null>(null);
+  const sorted = useMemo(() => {
+    if (!sort) return rows;
+    const get = keys[sort.key];
+    return [...rows].sort((a, b) => {
+      const va = get(a);
+      const vb = get(b);
+      const cmp = compareSortValues(va, vb);
+      // Keep empties last in both directions.
+      if (va == null || va === '' || vb == null || vb === '') return cmp;
+      return sort.desc ? -cmp : cmp;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `keys` is a fresh literal each render; its getters are pure
+  }, [rows, sort]);
+  const th = (key: K, label: ReactNode, className?: string) => (
+    <SortTh key={key} className={className} active={sort?.key === key} desc={!!sort?.desc}
+      onSort={() => setSort((s) => (s?.key === key ? { key, desc: !s.desc } : { key, desc: descFirst.includes(key) }))}>
+      {label}
+    </SortTh>
+  );
+  return { rows: sorted, th };
+}
+
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
@@ -194,6 +237,58 @@ export function Pager({ page, pageSize, total, onPage }: {
 /** True when closing may proceed: nothing unsaved, or the user agreed to discard it. */
 export function confirmDiscard(dirty: boolean | undefined): boolean {
   return !dirty || confirm('Discard unsaved changes?');
+}
+
+/** Tell a parent (Settings, the setup wizard) whenever a child's unsaved-edits state flips. */
+export function useReportDirty(dirty: boolean, onDirtyChange?: (dirty: boolean) => void) {
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+}
+
+/** React Router stamps every history entry it creates with its position (`idx`). */
+const historyIdx = (state: unknown): number | null => {
+  const idx = (state as { idx?: unknown } | null)?.idx;
+  return typeof idx === 'number' ? idx : null;
+};
+
+/** Active Back/Forward guards; each returns true when it swallowed the pop. */
+const popGuards = new Set<(e: PopStateEvent) => boolean>();
+
+// Registered when this module loads (main.tsx imports it through ErrorBoundary), i.e. before <BrowserRouter>
+// attaches its own popstate listener. Listeners on window run in registration order (a capture flag does not
+// put a later one first, checked in Chrome), so this is what lets a guard stop a pop before the router sees it.
+if (typeof window !== 'undefined') {
+  window.addEventListener('popstate', (e) => {
+    for (const guard of popGuards) {
+      if (guard(e)) {
+        e.stopImmediatePropagation();
+        return;
+      }
+    }
+  }, true);
+}
+
+/** Browser Back/Forward guard while `when` holds (`message` defaults to the confirmDiscard prompt).
+ *  `<BrowserRouter>` has no `useBlocker` (data routers only). If the user declines, the pop is swallowed
+ *  (the router never sees it, so nothing unmounts) and the browser is sent back to the entry it left. */
+export function useHistoryGuard(when: boolean, message?: string) {
+  const { key } = useLocation();
+  useEffect(() => {
+    if (!when) return;
+    const here = historyIdx(window.history.state);
+    const guard = (e: PopStateEvent) => {
+      const to = historyIdx(e.state);
+      if (here == null || to == null) return false;
+      // Our own restore landing back here: the router never left, so it must not see this pop either.
+      if (to === here) return true;
+      if (message ? confirm(message) : confirmDiscard(true)) return false;
+      window.history.go(here - to);
+      return true;
+    };
+    popGuards.add(guard);
+    return () => { popGuards.delete(guard); };
+  }, [when, message, key]);
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';

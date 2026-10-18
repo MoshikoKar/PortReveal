@@ -1,9 +1,11 @@
 // Minimal dependency-free line chart for the 30-day snapshot trend.
+import { Empty } from './ui';
+
 interface Point { date: string; hosts_active: number; open_ports: number }
 
 export function Trend({ points }: { points: Point[] }) {
   if (points.length < 2) {
-    return <div className="empty">Trend appears after two daily snapshots.</div>;
+    return <Empty>Trend appears after two daily snapshots.</Empty>;
   }
   const W = 560, H = 150, L = 34, R = 34, T = 10, B = 22;
   const xs = (i: number) => L + (i * (W - L - R)) / (points.length - 1);

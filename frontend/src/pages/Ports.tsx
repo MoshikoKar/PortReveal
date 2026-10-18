@@ -1,5 +1,5 @@
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Card, Empty, ErrorBox, Loading, SortTh } from '../components/ui';
+import { Card, Empty, ErrorBox, SkeletonRows, SortTh } from '../components/ui';
 import type { ExposedPort, Network } from '../types';
 import { useApi } from '../util';
 
@@ -70,7 +70,7 @@ export default function Ports() {
           Showing the {data.ports.length.toLocaleString()} most-exposed of {data.total.toLocaleString()} ports. Filtering and sorting apply to these only.
         </div>
       )}
-      {!data ? <Loading /> : (
+      {!data ? (!error && <Card flush title="Ports"><SkeletonRows cols={4} /></Card>) : (
         <Card flush title={`${rows.length} port${rows.length === 1 ? '' : 's'} · ${totalHosts} open-port instances`}>
           {rows.length === 0 ? <Empty>No open ports match.</Empty> : (
             <div className="table-wrap">

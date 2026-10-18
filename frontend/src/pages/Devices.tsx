@@ -19,13 +19,17 @@ export default function Devices() {
   const [selectionScope, setSelectionScope] = useState<'page' | 'all'>('page');
   const [selectAllBusy, setSelectAllBusy] = useState(false);
   const [selectAllError, setSelectAllError] = useState<string | null>(null);
+  const [selectionCleared, setSelectionCleared] = useState(false);
   const [scanPreset, setScanPreset] = useState<'standard' | 'full' | null>(null);
   const [webCaptureOpen, setWebCaptureOpen] = useState(false);
   const [showOs, setShowOs] = useState(false);
   const [showRtt, setShowRtt] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [vulnBusy, setVulnBusy] = useState(false);
-  const [vulnMsg, setVulnMsg] = useState<string | null>(null);
+  // Vuln-check queue result: success is a confirmation (alert ok), failure stays in the ErrorBox.
+  const [vulnOk, setVulnOk] = useState<string | null>(null);
+  const [vulnError, setVulnError] = useState<string | null>(null);
+  const clearVulnMsgs = () => { setVulnOk(null); setVulnError(null); };
   const page = Number(sp.get('page') || 1);
   const filterKey = [
     sp.get('q') || '',
@@ -79,11 +83,22 @@ export default function Devices() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qInput]);
 
+  // A filter change drops the selection (it may hold devices outside the new results); paging keeps it.
+  // A brief notice says so, since the checkboxes just silently empty otherwise.
   useEffect(() => {
+    if (selected.size) setSelectionCleared(true);
+    clearVulnMsgs();
     setSelected(new Set());
     setSelectionScope('page');
     setSelectAllError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only when the filters change
   }, [filterKey]);
+
+  useEffect(() => {
+    if (!selectionCleared) return;
+    const t = window.setTimeout(() => setSelectionCleared(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [selectionCleared]);
 
   const sortBy = (col: string) => {
     const same = params.sort === col;
@@ -103,6 +118,7 @@ export default function Devices() {
     else s.add(uuid);
     setSelected(s);
     setSelectionScope('page');
+    setSelectionCleared(false);
   };
 
   const selectPage = (on: boolean) => {
@@ -111,6 +127,7 @@ export default function Devices() {
     setSelected(s);
     setSelectionScope('page');
     setSelectAllError(null);
+    setSelectionCleared(false);
   };
 
   const selectAllMatching = async () => {
@@ -175,23 +192,24 @@ export default function Devices() {
           <span className="muted small">
             {selected.size} selected{selectionScope === 'all' ? ' (all matching)' : ''}
           </span>
-          <button className="btn sm" onClick={() => setScanPreset('standard')}>Standard scan</button>
-          <button className="btn warn sm" onClick={() => setScanPreset('full')}>Full port scan</button>
-          <button className="btn sm" onClick={() => setWebCaptureOpen(true)}>Web capture</button>
+          <button className="btn sm" onClick={() => { clearVulnMsgs(); setScanPreset('standard'); }}>Standard scan</button>
+          <button className="btn warn sm" onClick={() => { clearVulnMsgs(); setScanPreset('full'); }}>Full port scan</button>
+          <button className="btn sm" onClick={() => { clearVulnMsgs(); setWebCaptureOpen(true); }}>Web capture</button>
           <button className="btn sm" disabled={vulnBusy} onClick={async () => {
-            setVulnBusy(true); setVulnMsg(null);
+            setVulnBusy(true); clearVulnMsgs();
             try {
               await post('/vuln-jobs', { device_uuids: [...selected] });
-              setVulnMsg(`Vulnerability check queued for ${selected.size} device(s).`);
+              setVulnOk(`Vulnerability check queued for ${selected.size} device(s).`);
             } catch (e: any) {
-              setVulnMsg(e.message);
+              setVulnError(e.message);
             } finally {
               setVulnBusy(false);
             }
           }}>{vulnBusy ? 'Queuing…' : 'Check vulnerabilities'}</button>
         </>
       )}>
-        <ErrorBox error={error || selectAllError || vulnMsg} />
+        <ErrorBox error={error || selectAllError || vulnError} />
+        {vulnOk && <div className="alert ok" role="status" style={{ margin: '0.75rem 1rem 0' }}>{vulnOk}</div>}
         <div className="row wrap" style={{ gap: 12, padding: '0.5rem 1rem' }}>
           <label className="check small"><input type="checkbox" checked={showOs} onChange={(e) => setShowOs(e.target.checked)} />Show OS column</label>
           <label className="check small"><input type="checkbox" checked={showRtt} onChange={(e) => setShowRtt(e.target.checked)} />Show RTT column</label>
@@ -199,6 +217,13 @@ export default function Devices() {
             <input type="checkbox" checked={showArchived} onChange={(e) => update({ archived: e.target.checked ? '1' : undefined, network_id: undefined })} />Show archived networks
           </label>
         </div>
+        {isAdmin && selectionCleared && (
+          <div className="alert" role="status" style={{ margin: '0.75rem 1rem 0' }}>
+            <span className="small">Selection cleared because the filters changed.</span>
+            {' '}
+            <button className="btn sm ghost" onClick={() => setSelectionCleared(false)}>Dismiss</button>
+          </div>
+        )}
         {showSelectAllBanner && (
           <div className="alert" style={{ margin: '0.75rem 1rem 0' }}>
             <span className="small">

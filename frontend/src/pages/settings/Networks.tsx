@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { del, post, put } from '../../api';
-import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import { useApp } from '../../context';
 import type { Network } from '../../types';
 import { NETWORK_ZONES, fmtTime, useApi, useInFlight } from '../../util';
@@ -11,8 +11,11 @@ const VPN_S2S_TIP = 'Mark networks reached over a site-to-site VPN. Scans use th
   + 'before (so a /16 still finishes in about an hour), force the routed profile even if a NIC looks local, '
   + 'and block "fast" timing so the tunnel never sees a 2000 probes/s burst. Scanning is not slowed or disabled.';
 
-/** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it). */
-export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCount?: (n: number) => void }) {
+/** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it).
+ *  `onDirtyChange`: told when the add/edit dialog holds unsaved edits (Settings / setup leave guards). */
+export function NetworksSettings({ compact, onCount, onDirtyChange }: {
+  compact?: boolean; onCount?: (n: number) => void; onDirtyChange?: (dirty: boolean) => void;
+}) {
   const { isAdmin } = useApp();
   const [showArchived, setShowArchived] = useState(false);
   const { data, error, loading, reload } = useApi<Network[]>('/networks', { include_archived: showArchived ? 'true' : undefined });
@@ -27,6 +30,7 @@ export function NetworksSettings({ compact, onCount }: { compact?: boolean; onCo
   const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   const canSave = !!draft && !!draft.name.trim() && !!draft.cidr.trim();
+  useReportDirty(!!draft && dirty, onDirtyChange);
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
   const closeDraft = () => confirmDiscard(dirty) && setDraft(null);

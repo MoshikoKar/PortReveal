@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { del, post } from '../../api';
-import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../../components/ui';
+import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import type { ApiToken } from '../../types';
 import { fmtTime, relTime, useApi, useInFlight } from '../../util';
 
@@ -9,7 +9,7 @@ const EXPIRY_OPTIONS = [
 ];
 
 /** Personal read-only API tokens (GET/HEAD only), managed from a signed-in session. */
-export function TokensSettings() {
+export function TokensSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const { data, error, loading, reload } = useApi<ApiToken[]>('/tokens');
   const [draft, setDraft] = useState<{ name: string; days: number } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -19,6 +19,7 @@ export function TokensSettings() {
   const [copied, setCopied] = useState(false);
   const { pending, track } = useInFlight();
   const dirty = !!draft?.name;
+  useReportDirty(dirty, onDirtyChange); // feeds the Settings leave guard
 
   const create = async () => {
     if (!draft || saving) return;

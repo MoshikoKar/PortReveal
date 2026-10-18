@@ -1,6 +1,6 @@
 import { useEffect, useState, type MouseEvent } from 'react';
-import { NavLink, Navigate, useLocation, useParams } from 'react-router-dom';
-import { confirmDiscard } from '../components/ui';
+import { NavLink, Navigate, useParams, useSearchParams } from 'react-router-dom';
+import { confirmDiscard, useHistoryGuard } from '../components/ui';
 import { useApp } from '../context';
 import { AuditSettings, HealthPanel, UsersSettings } from './settings/Admin';
 import { DataTransferPanel } from './settings/DataTransfer';
@@ -30,19 +30,25 @@ const TABS = [
 export default function Settings() {
   const { isAdmin } = useApp();
   const { tab } = useParams();
-  const location = useLocation();
+  const [sp, setSp] = useSearchParams();
   const tabs = TABS.filter((t) => isAdmin || t.viewer);
   // Schedule hosts two forms; keep their dirty flags separate so one clear does not wipe the other.
   const [formDirty, setFormDirty] = useState(false);
   const [presenceDirty, setPresenceDirty] = useState(false);
-  const dirty = formDirty || presenceDirty;
+  // List tabs (networks, exclusions, users, tokens): their add/edit dialog holds unsaved input.
+  const [entityDirty, setEntityDirty] = useState(false);
+  const dirty = formDirty || presenceDirty || entityDirty;
   const tabAllowed = !!tab && tabs.some((t) => t.id === tab);
 
   // Fresh tab mount = fresh forms; clear so a prior tab's dirty does not block the next.
   useEffect(() => {
     setFormDirty(false);
     setPresenceDirty(false);
+    setEntityDirty(false);
   }, [tab]);
+
+  // Browser Back/Forward would unmount the dirty form too; restore the URL if the user keeps editing.
+  useHistoryGuard(dirty && tabAllowed);
 
   // Sidebar (and other in-app links): leaving Settings would unmount a dirty form with no tab click.
   useEffect(() => {
@@ -85,11 +91,17 @@ export default function Settings() {
   // Bare /settings gets a real tab URL so the Networks tab shows as active.
   if (!tab) return <Navigate to="/settings/networks" replace />;
   if (!tabAllowed) {
+    // The notice rides in the query (not history state) so it survives a refresh until dismissed.
     const forbidden = TABS.find((t) => t.id === tab);
-    return <Navigate to="/settings/networks" replace state={forbidden ? { deniedTab: forbidden.label } : undefined} />;
+    return <Navigate to={forbidden ? `/settings/networks?denied=${forbidden.id}` : '/settings/networks'} replace />;
   }
 
-  const deniedTab = (location.state as { deniedTab?: string } | null)?.deniedTab;
+  const deniedTab = TABS.find((t) => t.id === sp.get('denied'))?.label;
+  const dismissDenied = () => {
+    const next = new URLSearchParams(sp);
+    next.delete('denied');
+    setSp(next, { replace: true });
+  };
   const onTabClick = (e: MouseEvent<HTMLAnchorElement>, id: string) => {
     if (id === tab) return;
     if (!confirmDiscard(dirty)) e.preventDefault();
@@ -109,10 +121,13 @@ export default function Settings() {
         ))}
       </nav>
       {deniedTab && tab === 'networks' && (
-        <div className="alert warn" role="status">“{deniedTab}” settings are admin only, so you were taken to Networks instead.</div>
+        <div className="alert warn spread" role="status">
+          <span>“{deniedTab}” settings are admin only, so you were taken to Networks instead.</span>
+          <button type="button" className="btn ghost sm" onClick={dismissDenied} aria-label="Dismiss" title="Dismiss">✕</button>
+        </div>
       )}
-      {tab === 'networks' && <NetworksSettings />}
-      {tab === 'exclusions' && <ExclusionsSettings />}
+      {tab === 'networks' && <NetworksSettings onDirtyChange={setEntityDirty} />}
+      {tab === 'exclusions' && <ExclusionsSettings onDirtyChange={setEntityDirty} />}
       {tab === 'schedule' && <><ScheduleForm onDirtyChange={setFormDirty} /><PresenceForm onDirtyChange={setPresenceDirty} /></>}
       {tab === 'scan-profiles' && <ScanProfileForm onDirtyChange={setFormDirty} />}
       {tab === 'web-capture' && <WebCaptureForm onDirtyChange={setFormDirty} />}
@@ -120,11 +135,11 @@ export default function Settings() {
       {tab === 'discovery' && <DiscoveryForm onDirtyChange={setFormDirty} />}
       {tab === 'notifications' && <NotificationsForm onDirtyChange={setFormDirty} />}
       {tab === 'authentication' && <LdapForm onDirtyChange={setFormDirty} />}
-      {tab === 'users' && <UsersSettings />}
+      {tab === 'users' && <UsersSettings onDirtyChange={setEntityDirty} />}
       {tab === 'retention' && <RetentionForm onDirtyChange={setFormDirty} />}
       {tab === 'data' && <DataTransferPanel />}
       {tab === 'audit' && <AuditSettings />}
-      {tab === 'tokens' && <TokensSettings />}
+      {tab === 'tokens' && <TokensSettings onDirtyChange={setEntityDirty} />}
       {tab === 'health' && <HealthPanel />}
     </>
   );

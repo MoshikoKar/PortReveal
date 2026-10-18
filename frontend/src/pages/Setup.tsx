@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { BrandLockup, Logo } from '../components/Layout';
-import { ErrorBox } from '../components/ui';
+import { ErrorBox, useHistoryGuard } from '../components/ui';
 import type { Network, SetupStatus, User } from '../types';
 import { ExclusionsSettings } from './settings/Exclusions';
 import { LdapForm, NotificationsForm, ScheduleForm } from './settings/Forms';
@@ -12,6 +12,7 @@ import { NetworksSettings } from './settings/Networks';
 const STEPS = ['Administrator', 'Network scope', 'Exclusions', 'Schedule', 'SMTP', 'LDAP (optional)', 'Recipients', 'Baseline scan'];
 const STEP_PARAM = 'step';
 const LAST_STEP = STEPS.length - 1;
+const LEAVE_DIRTY_STEP = 'This step has unsaved changes. Leave without saving them?\n\nChoose Cancel, then Save, to keep them.';
 
 /** Keep a step index inside the wizard bounds. */
 function clampRange(raw: number): number {
@@ -130,10 +131,12 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
   };
   // A new step mounts a fresh form, whichever way (footer or browser history) the step changed.
   useEffect(() => setFormDirty(false), [step]);
+  // Browser Back/Forward asks the same question as the footer; declining keeps the step and its URL.
+  useHistoryGuard(formDirty, LEAVE_DIRTY_STEP);
   const next = () => goTo(step + 1);
   /** Footer Back/Next/Skip: leaving a step with unsaved form edits would silently drop them. */
   const leave = (n: number) => {
-    if (formDirty && !confirm('This step has unsaved changes. Leave without saving them?\n\nChoose Cancel, then Save, to keep them.')) return;
+    if (formDirty && !confirm(LEAVE_DIRTY_STEP)) return;
     goTo(n);
   };
   const finish = async () => {
@@ -156,8 +159,8 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
         <div className="card-body stack" style={{ padding: 20 }}>
           <h2>{STEPS[step]}</h2>
           {step === 0 && <AdminStep onUser={(u) => { onUser(u); next(); }} />}
-          {step === 1 && <NetworksSettings compact onCount={setNetCount} />}
-          {step === 2 && <ExclusionsSettings />}
+          {step === 1 && <NetworksSettings compact onCount={setNetCount} onDirtyChange={setFormDirty} />}
+          {step === 2 && <ExclusionsSettings onDirtyChange={setFormDirty} />}
           {step === 3 && <ScheduleForm onSaved={next} onDirtyChange={setFormDirty} />}
           {step === 4 && <NotificationsForm part="smtp" onSaved={next} onDirtyChange={setFormDirty} />}
           {step === 5 && <LdapForm onSaved={next} onDirtyChange={setFormDirty} />}

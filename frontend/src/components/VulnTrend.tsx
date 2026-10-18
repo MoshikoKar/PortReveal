@@ -1,5 +1,6 @@
 import type { VulnSnapshotPoint, VulnWeeklyPoint } from '../types';
 import { linePath, maxOf, trendHasData } from '../vulnChartMath';
+import { Empty } from './ui';
 
 const SERIES: { key: keyof Pick<VulnWeeklyPoint, 'new' | 'resolved' | 'dismissed'>; color: string; label: string }[] = [
   { key: 'new', color: 'var(--high)', label: 'new' },
@@ -17,7 +18,7 @@ const SEVERITY_SERIES: { key: keyof Pick<VulnSnapshotPoint, 'critical' | 'high' 
 export function VulnTrend({ points }: { points: VulnWeeklyPoint[] }) {
   const totals = points.flatMap((p) => [p.new, p.resolved, p.dismissed]);
   if (!trendHasData(totals)) {
-    return <div className="empty">No new, resolved or dismissed findings in this window yet.</div>;
+    return <Empty>No new, resolved or dismissed findings in this window yet.</Empty>;
   }
   const W = 560, H = 150, L = 34, R = 10, T = 10, B = 22;
   const max = maxOf(totals);
@@ -52,7 +53,7 @@ function needsMorePoints(points: VulnSnapshotPoint[]) {
 
 export function VulnSeverityTrend({ points }: { points: VulnSnapshotPoint[] }) {
   if (needsMorePoints(points)) {
-    return <div className="empty">Trend appears after two daily snapshots.</div>;
+    return <Empty>Trend appears after two daily snapshots.</Empty>;
   }
   const W = 560, H = 150, L = 34, R = 10, T = 10, B = 22;
   const max = maxOf(points.flatMap((p) => [p.critical, p.high, p.medium, p.low]));
@@ -83,7 +84,7 @@ export function VulnSeverityTrend({ points }: { points: VulnSnapshotPoint[] }) {
 export function VulnRiskTrend({ points }: { points: VulnSnapshotPoint[] }) {
   const withRisk = points.filter((p) => p.avg_risk_score != null || p.avg_combined_score != null);
   if (needsMorePoints(withRisk)) {
-    return <div className="empty">Trend appears after two daily snapshots with a scored device.</div>;
+    return <Empty>Trend appears after two daily snapshots with a scored device.</Empty>;
   }
   const W = 560, H = 150, L = 34, R = 10, T = 10, B = 22;
   const max = maxOf(withRisk.flatMap((p) => [p.avg_risk_score ?? 0, p.avg_combined_score ?? 0]));

@@ -1,6 +1,7 @@
 import type { VulnSummary } from '../types';
 import { cellFillStyle, maxOf } from '../vulnChartMath';
 import type { VulnFilters } from '../vulnFilters';
+import { useClientSort } from './ui';
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;
 
@@ -12,38 +13,46 @@ export function VulnHeatmap({ rows, filters, onCellClick }: {
   filters: VulnFilters;
   onCellClick: (networkId: number | null, severity: string) => void;
 }) {
+  type Row = (typeof rows)[number];
+  const { rows: sorted, th } = useClientSort<Row, 'network' | (typeof SEVERITIES)[number]>(rows, {
+    network: (r) => r.network,
+    critical: (r) => r.critical, high: (r) => r.high, medium: (r) => r.medium, low: (r) => r.low,
+  }, SEVERITIES);
   if (rows.length === 0) return <div className="muted small">No networks with matched findings yet.</div>;
   const max = maxOf(rows.flatMap((r) => SEVERITIES.map((s) => r[s])));
   return (
     <div className="table-wrap">
-      <table className="compact">
+      {/* Fixed layout: a capped network column, then four equal severity columns. */}
+      <table className="compact heatmap">
+        <colgroup>
+          <col className="heatmap-label" />
+          {SEVERITIES.map((s) => <col key={s} />)}
+        </colgroup>
         <thead>
           <tr>
-            <th>Network</th>
-            {SEVERITIES.map((s) => <th key={s} style={{ textTransform: 'capitalize' }}>{s}</th>)}
+            {th('network', 'Network')}
+            {SEVERITIES.map((s) => th(s, s[0].toUpperCase() + s.slice(1)))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {sorted.map((row) => (
             <tr key={row.network_id ?? 'unassigned'}>
-              <td>{row.network}</td>
+              <td className="heatmap-name" title={row.network}>{row.network}</td>
               {SEVERITIES.map((s) => {
                 const count = row[s];
                 const netKey = row.network_id != null ? String(row.network_id) : 'unassigned';
                 const active = filters.network_id === netKey && filters.severity === s;
                 const fill = cellFillStyle(s, count, max);
                 return (
-                  <td key={s} style={{ padding: 2 }}>
+                  <td key={s} className="heatmap-cell">
                     <button
                       type="button"
+                      className={active ? 'active' : undefined}
                       disabled={count === 0}
+                      aria-pressed={active}
                       title={`${row.network}: ${count} ${s}`}
                       onClick={() => onCellClick(row.network_id, s)}
-                      style={{
-                        width: '100%', height: 28, border: active ? '2px solid var(--accent)' : 0, borderRadius: 3,
-                        padding: 0, cursor: count ? 'pointer' : 'default', fontSize: 12, fontWeight: 600,
-                        background: fill.background, color: fill.color,
-                      }}
+                      style={{ background: fill.background, color: fill.color }}
                     >
                       {count || ''}
                     </button>

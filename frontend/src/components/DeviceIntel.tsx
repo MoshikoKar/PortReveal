@@ -390,8 +390,8 @@ function RttSparkline({ samples }: { samples: { rtt_ms: number; sampled_at: stri
         <line x1={28} y1={RTT_PAD} x2={28} y2={RTT_CHART_H - RTT_PAD} stroke="var(--border, #ccc)" strokeWidth={1} />
         <text x={0} y={RTT_PAD + 8} className="muted" style={{ fontSize: 9 }}>{max.toFixed(0)}</text>
         <text x={0} y={RTT_CHART_H - 2} className="muted" style={{ fontSize: 9 }}>0</text>
-        <polyline points={points} fill="none" stroke="var(--accent, #4a90d9)" strokeWidth={1.5} />
-        <circle cx={28 + (samples.length - 1) * step} cy={y(last.rtt_ms)} r={2.5} fill="var(--accent, #4a90d9)">
+        <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
+        <circle cx={28 + (samples.length - 1) * step} cy={y(last.rtt_ms)} r={2.5} fill="var(--accent)">
           <title>{`${last.rtt_ms.toFixed(1)} ms @ ${fmtTime(last.sampled_at)}`}</title>
         </circle>
       </svg>
