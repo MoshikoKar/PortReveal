@@ -41,6 +41,8 @@ def test_summary_empty_state_is_zeroed_not_an_error(admin):
     assert body["kev_count"] == 0 and body["epss_high_count"] == 0
     assert body["confirmed_count"] == 0 and body["potential_count"] == 0
     assert body["top_devices"] == [] and body["top_cves"] == []
+    assert body["new_since_last_scan"] == [] and body["new_since_last_db_update"] == []
+    assert body["severity_by_network"] == [] and body["snapshot_trend"] == []
     assert len(body["weekly"]) == 12
 
 
