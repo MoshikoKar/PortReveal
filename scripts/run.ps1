@@ -352,14 +352,15 @@ function Invoke-Checked {
     )
     Write-Log $Label
     $global:LASTEXITCODE = 0
-    # Tee stdout/stderr into production.log so migrate/build failures are diagnosable
-    # after a -Background start (the console only sees "failed (exit N)").
-    & $FilePath @ArgumentList 2>&1 | ForEach-Object {
-        $line = "$_"
-        Write-Host $line
-        if ($Mode -eq "production") {
-            Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
-        }
+    # Same stderr-safe tee as Invoke-UvicornOnce: PS 5.1 + ErrorActionPreference Stop turns
+    # native stderr (including Python "--- Logging error ---") into a terminating ErrorRecord
+    # and aborts -Background production starts mid-migrate/build.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $FilePath @ArgumentList 2>&1 | ForEach-Object { Write-ProdTeeLine $_ }
+    } finally {
+        $ErrorActionPreference = $prevEap
     }
     $code = $global:LASTEXITCODE
     if ($null -eq $code) { $code = 0 }

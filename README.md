@@ -520,7 +520,8 @@ Vulnerability matching uses CPE strings from service detection (`-sV`). A
 **discovery** scan only finds live hosts — it does not collect product/version
 data — so the Vulnerabilities page stays empty until a **standard** or **full**
 scan (or Mock Lab baseline) has run against those hosts and the local CVE cache
-is populated.
+is populated. First-time NVD/KEV/EPSS import runs in a background process
+(Settings → Vulnerabilities); refreshing the UI does not cancel it.
 
 Daily schedule (optional discovery then standard), daytime presence scans, and
 correlated absence thresholds are configured under **Settings → Schedule**.

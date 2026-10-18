@@ -164,7 +164,7 @@ def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require
     ``cve_count`` prefers ``vuln_feed_state.record_count`` for NVD so the endpoint stays cheap
     while a large import/sync holds a write lock on ``vulnerabilities`` (COUNT(*) would stall).
     """
-    from ..core.vuln.sync import NVD_MIRROR_START_YEAR, sync_running
+    from ..core.vuln.sync import NVD_MIRROR_START_YEAR, sync_in_progress
 
     feed_rows = db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
     feeds = [
@@ -175,7 +175,8 @@ def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require
          if f.source == "nvd" and not f.mirror_complete else None}
         for f in feed_rows
     ]
-    running = sync_running()
+    # Heartbeat-aware: a browser refresh must not flip the badge to "idle" while ingest is active.
+    running = sync_in_progress(db)
     nvd = next((f for f in feed_rows if f.source == "nvd"), None)
     if running:
         # During import/sync avoid COUNT(*) (SQLite write-lock stalls). Prefer the unique

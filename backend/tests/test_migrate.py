@@ -18,7 +18,7 @@ def test_upgrade_logs_applied_revision_then_up_to_date(tmp_path: Path, caplog):
         upgrade(url)
     applied = [r.message for r in caplog.records if "database schema upgraded" in r.message]
     assert applied, caplog.text
-    assert "empty →" in applied[0]
+    assert "empty ->" in applied[0]
     assert "up to date" not in applied[0]
 
     # Already at head → only then say the schema is up to date.

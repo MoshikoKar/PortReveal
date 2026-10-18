@@ -57,8 +57,11 @@ def upgrade(url: str | None = None) -> None:
     if before == after:
         log.info("database schema is up to date (%s, revision %s)", kind, after or "empty")
     else:
+        # ASCII arrow only: under PowerShell 5.1 pipes stdout is often cp1252, and a Unicode
+        # arrow makes StreamHandler raise, which prints "--- Logging error ---" on stderr and
+        # (with $ErrorActionPreference=Stop) aborts scripts/run.ps1 mid-migrate.
         log.info(
-            "database schema upgraded (%s): %s → %s%s",
+            "database schema upgraded (%s): %s -> %s%s",
             kind,
             before or "empty",
             after or "empty",
