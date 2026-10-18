@@ -128,6 +128,57 @@ def test_write_daily_snapshot_is_idempotent_same_day(db):
     assert db.query(VulnDailySnapshot).filter_by(network_id=None).count() == 1  # same local day: upsert, not insert
 
 
+def test_severity_by_network_matrix(db):
+    net = make_network(db)
+    scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01")]),
+         network_id=net.id)
+    net2 = make_network(db, cidr="10.0.1.0/24", name="Second Net")
+    scan(ScriptedScanner([host("10.0.1.1", [port(80, "http", "nginx", "1.18")], mac="00:11:22:33:44:02")]),
+         network_id=net2.id)
+    da = device_by_ip(db, "10.0.0.1")
+    db_ = device_by_ip(db, "10.0.1.1")
+    pa = next(p for p in da.ports if p.port == 22)
+    pb = next(p for p in db_.ports if p.port == 80)
+    db.add(Vulnerability(cve_id="CVE-2024-CRIT", cvss_base=9.8))
+    db.add(Vulnerability(cve_id="CVE-2024-MED", cvss_base=5.0))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=pa.id, cve_id="CVE-2024-CRIT", state=VULN_STATE_CONFIRMED, matched_at=T))
+    db.add(DevicePortVuln(device_port_id=pb.id, cve_id="CVE-2024-MED", state=VULN_STATE_CONFIRMED, matched_at=T))
+    db.commit()
+
+    summary = refresh_vuln_summary(db, now=T)
+    matrix = {row["network"]: row for row in summary["severity_by_network"]}
+    assert matrix["Test Net"]["critical"] == 1 and matrix["Test Net"]["medium"] == 0
+    assert matrix["Test Net"]["network_id"] == net.id
+    assert matrix["Second Net"]["medium"] == 1 and matrix["Second Net"]["critical"] == 0
+
+    network_facet = {b["key"]: b for b in summary["facets"]["network"]}
+    assert network_facet[net.id]["label"] == "Test Net" and network_facet[net.id]["count"] == 1
+    assert network_facet[net2.id]["label"] == "Second Net" and network_facet[net2.id]["count"] == 1
+
+
+def test_snapshot_trend_full_resolution_within_90_days(db):
+    _seed(db)
+    for days_ago in (5, 10):
+        write_daily_snapshot(db, T - timedelta(days=days_ago))
+    write_daily_snapshot(db, T)
+    db.commit()
+
+    trend = refresh_vuln_summary(db, now=T)["snapshot_trend"]
+    dates = {p["date"] for p in trend}
+    assert len(dates) == 3  # one point per day, no decimation
+
+
+def test_snapshot_trend_decimates_to_weekly_beyond_90_days(db):
+    _seed(db)
+    for days_ago in range(95, 110):  # 16 consecutive days, all older than the 90-day cutoff
+        write_daily_snapshot(db, T - timedelta(days=days_ago))
+    db.commit()
+
+    trend = refresh_vuln_summary(db, now=T)["snapshot_trend"]
+    assert 1 <= len(trend) <= 3  # 16 days span at most 3 ISO weeks, collapsed to one point each
+
+
 def test_write_daily_snapshot_purges_rows_older_than_a_year(db):
     net, _da, _db_ = _seed(db)
     old = VulnDailySnapshot(network_id=None, snapshot_date=(T - timedelta(days=400)).date())

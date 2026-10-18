@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.orm import Session
@@ -39,6 +39,7 @@ from .score import RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 TOP_N = 10
 WEEKS = 12
 SNAPSHOT_RETENTION_DAYS = 365
+SNAPSHOT_DECIMATE_AFTER_DAYS = 90  # rows older than this collapse to one point per week at read time
 AGE_BUCKETS = ("under_30d", "30_90d", "90_365d", "over_365d", "unknown")
 FACET_LIMIT = 20
 
@@ -124,6 +125,21 @@ def _visible(f: _Finding, cfg: VulnSettings) -> bool:
 
 def _top(counter: Counter, n: int = FACET_LIMIT) -> list[dict]:
     return [{"key": k, "count": c} for k, c in counter.most_common(n)]
+
+
+def _network_facet(findings: list[_Finding], n: int = FACET_LIMIT) -> list[dict]:
+    """Keyed by network_id (not name): the only way GET /api/vulns?network_id=... can filter on
+    what this facet shows. `key` is the string "unassigned" for devices with no network, since
+    that can't round-trip through an integer filter -- `label` is always the display name."""
+    counts: Counter = Counter()
+    labels: dict[int | None, str] = {}
+    for f in findings:
+        counts[f.network_id] += 1
+        labels[f.network_id] = f.network_name or "Unassigned"
+    return [
+        {"key": network_id if network_id is not None else "unassigned", "label": labels[network_id], "count": count}
+        for network_id, count in counts.most_common(n)
+    ]
 
 
 def _vendor_product_map(db: Session, pairs: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
@@ -231,6 +247,50 @@ def _top_lists(db: Session) -> dict:
     }
 
 
+def _severity_by_network(findings: list[_Finding]) -> list[dict]:
+    """Network x severity matrix ("Severity by network" in the UI -- distinct from the existing
+    IP-grid exposure heatmap at /api/reports/heatmap, which this is not named after to avoid
+    confusion). `network_id` is None for the unassigned-devices row."""
+    by_network: dict[int | None, Counter] = defaultdict(Counter)
+    names: dict[int | None, str] = {}
+    for f in findings:
+        by_network[f.network_id][severity_bucket(f.cvss_base)] += 1
+        names[f.network_id] = f.network_name or "Unassigned"
+    return [
+        {"network_id": network_id, "network": names[network_id], "critical": counts.get("critical", 0),
+         "high": counts.get("high", 0), "medium": counts.get("medium", 0), "low": counts.get("low", 0)}
+        for network_id, counts in sorted(by_network.items(), key=lambda kv: -sum(kv[1].values()))
+    ]
+
+
+def _decimate_weekly(rows: list[VulnDailySnapshot]) -> list[VulnDailySnapshot]:
+    """One row per ISO week (the latest day seen that week): rows are already date-ordered, so the
+    later assignment for a given week naturally wins."""
+    by_week: dict[date, VulnDailySnapshot] = {}
+    for r in rows:
+        week_start = r.snapshot_date - timedelta(days=r.snapshot_date.weekday())
+        by_week[week_start] = r
+    return [by_week[w] for w in sorted(by_week)]
+
+
+def _snapshot_trend(db: Session, now: datetime) -> list[dict]:
+    """Global (network_id=None) daily snapshot history for the "vuln count over time by severity"
+    and "average network risk score over time" trend charts: full resolution for the last 90 days,
+    one point per week beyond that (decision 6), read-time only -- no second physical table."""
+    rows = list(db.scalars(
+        select(VulnDailySnapshot).where(VulnDailySnapshot.network_id.is_(None))
+        .order_by(VulnDailySnapshot.snapshot_date)
+    ))
+    cutoff = (now - timedelta(days=SNAPSHOT_DECIMATE_AFTER_DAYS)).date()
+    recent = [r for r in rows if r.snapshot_date >= cutoff]
+    old = _decimate_weekly([r for r in rows if r.snapshot_date < cutoff])
+    return [
+        {"date": r.snapshot_date.isoformat(), "critical": r.critical, "high": r.high, "medium": r.medium,
+         "low": r.low, "avg_risk_score": r.avg_risk_score, "avg_combined_score": r.avg_combined_score}
+        for r in old + recent
+    ]
+
+
 def _risk_device_levels(db: Session) -> dict[str, int]:
     expr = case(
         (Device.combined_score >= RISK_HIGH_THRESHOLD, "high"),
@@ -260,7 +320,7 @@ def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
         "os": _top(Counter(f.os_name or "unknown" for f in findings)),
         "service": _top(Counter(f.service or "unknown" for f in findings)),
         "port": _top(Counter(f.port for f in findings)),
-        "network": _top(Counter(f.network_name or "unassigned" for f in findings)),
+        "network": _network_facet(findings),
         "device_type": _top(Counter(f.device_type or "unknown" for f in findings)),
         "vendor_product": _top(Counter(vp_map.get((f.cve_id, f.matched_cpe), "unknown") for f in findings)),
         "cve_age": {b: 0 for b in AGE_BUCKETS} | dict(Counter(_age_bucket(f.published_at, now) for f in findings)),
@@ -279,7 +339,9 @@ def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
         "risk_device_levels": _risk_device_levels(db),
         "feed": _feed_staleness(db, cfg, now),
         "facets": facets,
+        "severity_by_network": _severity_by_network(findings),
         "weekly": _weekly_series(db, now),
+        "snapshot_trend": _snapshot_trend(db, now),
         **_top_lists(db),
     }
     _cache[_cache_key(db)] = (time.monotonic() + _CACHE_TTL_SECONDS, result)

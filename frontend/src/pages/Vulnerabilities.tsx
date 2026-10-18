@@ -1,4 +1,7 @@
 import { useSearchParams } from 'react-router-dom';
+import { VulnFacets } from '../components/VulnFacets';
+import { VulnHeatmap } from '../components/VulnHeatmap';
+import { VulnRiskTrend, VulnSeverityTrend, VulnTrend } from '../components/VulnTrend';
 import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
 import type { VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -82,7 +85,7 @@ export default function Vulnerabilities() {
           <Card title="Vulnerability feed">
             {data.feed.stale && (
               <div className="badge high" style={{ marginBottom: 10 }}>
-                Stale — no sync older than {data.feed.stale_threshold_hours}h among enabled sources
+                Stale — oldest enabled source hasn't synced in over {data.feed.stale_threshold_hours}h
               </div>
             )}
             <dl className="dl">
@@ -100,6 +103,29 @@ export default function Vulnerabilities() {
               </dd>
             </dl>
           </Card>
+
+          <div className="grid three">
+            <Card title="New vs. resolved vs. dismissed (weekly)">
+              <VulnTrend points={data.weekly} />
+            </Card>
+            <Card title="Open vulnerabilities over time (by severity)">
+              <VulnSeverityTrend points={data.snapshot_trend} />
+            </Card>
+            <Card title="Average network risk score over time">
+              <VulnRiskTrend points={data.snapshot_trend} />
+            </Card>
+          </div>
+
+          <Card title="Severity by network" actions={<span className="muted small">Severity is derived from CVSS, not NVD's label</span>}>
+            <VulnHeatmap rows={data.severity_by_network} filters={filters}
+              onCellClick={(networkId, severity) => {
+                let next = toggleVulnFilter(sp, 'severity', severity);
+                next = setVulnFilter(next, 'network_id', networkId != null ? String(networkId) : undefined);
+                setSp(next);
+              }} />
+          </Card>
+
+          <VulnFacets summary={data} filters={filters} onToggle={toggle} />
         </>
       )}
     </>

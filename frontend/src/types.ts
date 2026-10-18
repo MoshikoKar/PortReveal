@@ -638,6 +638,8 @@ export type AgeBucket = 'under_30d' | '30_90d' | '90_365d' | 'over_365d' | 'unkn
 export interface FacetBucket {
   key: string | number;
   count: number;
+  /** Display label, when it differs from `key` (e.g. the network facet is keyed by id). */
+  label?: string;
 }
 
 export interface VulnWeeklyPoint {
@@ -645,6 +647,16 @@ export interface VulnWeeklyPoint {
   new: number;
   resolved: number;
   dismissed: number;
+}
+
+export interface VulnSnapshotPoint {
+  date: string;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  avg_risk_score: number | null;
+  avg_combined_score: number | null;
 }
 
 export interface VulnTopDevice {
@@ -691,7 +703,11 @@ export interface VulnSummary {
     cve_age: Record<AgeBucket, number>;
     exposure_duration: Record<AgeBucket, number>;
   };
+  severity_by_network: {
+    network_id: number | null; network: string; critical: number; high: number; medium: number; low: number;
+  }[];
   weekly: VulnWeeklyPoint[];
+  snapshot_trend: VulnSnapshotPoint[];
   top_devices: VulnTopDevice[];
   top_cves: VulnTopCve[];
 }
