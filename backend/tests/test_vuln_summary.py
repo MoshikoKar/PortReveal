@@ -179,6 +179,30 @@ def test_snapshot_trend_decimates_to_weekly_beyond_90_days(db):
     assert 1 <= len(trend) <= 3  # 16 days span at most 3 ISO weeks, collapsed to one point each
 
 
+def test_new_since_last_scan_lists_findings_matched_after_scan(db):
+    _seed(db)
+    from app.models import Scan
+    for s in db.query(Scan).all():
+        s.finished_at = T - timedelta(hours=1)
+    db.commit()
+    summary = refresh_vuln_summary(db, now=T)
+    cves = {row["cve_id"] for row in summary["new_since_last_scan"]}
+    assert cves == {"CVE-2024-CRIT", "CVE-2024-MED"}
+    assert all(row["device_uuid"] and row["device_ip"] for row in summary["new_since_last_scan"])
+
+
+def test_new_since_last_db_update_uses_newest_enabled_feed_sync(db):
+    _seed(db)
+    from app.models import VulnFeedState
+    db.add(VulnFeedState(source="nvd", last_synced_at=T - timedelta(hours=2)))
+    db.add(VulnFeedState(source="kev", last_synced_at=T - timedelta(minutes=30)))
+    db.add(VulnFeedState(source="epss", last_synced_at=T - timedelta(hours=1)))
+    db.commit()
+    summary = refresh_vuln_summary(db, now=T)
+    # newest enabled sync is kev at T-30m; findings matched_at=T are after that
+    assert {row["cve_id"] for row in summary["new_since_last_db_update"]} == {"CVE-2024-CRIT", "CVE-2024-MED"}
+
+
 def test_write_daily_snapshot_purges_rows_older_than_a_year(db):
     net, _da, _db_ = _seed(db)
     old = VulnDailySnapshot(network_id=None, snapshot_date=(T - timedelta(days=400)).date())

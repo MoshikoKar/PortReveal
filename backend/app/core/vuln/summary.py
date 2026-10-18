@@ -10,12 +10,14 @@ from __future__ import annotations
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from ...models import (
+    SCAN_COMPLETED,
+    SCAN_PARTIAL,
     VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
@@ -23,6 +25,7 @@ from ...models import (
     DevicePort,
     DevicePortVuln,
     Network,
+    Scan,
     VulnCpeMatch,
     VulnDailySnapshot,
     Vulnerability,
@@ -74,6 +77,8 @@ def _age_bucket(ts: datetime | None, now: datetime) -> str:
 
 @dataclass(frozen=True)
 class _Finding:
+    device_uuid: str
+    device_ip: str
     network_id: int | None
     network_name: str | None
     os_name: str | None
@@ -84,6 +89,7 @@ class _Finding:
     cve_id: str
     state: str
     matched_cpe: str | None
+    matched_at: datetime | None
     cvss_base: float | None
     kev: bool
     epss: float | None
@@ -99,9 +105,9 @@ def _load_findings(db: Session) -> list[_Finding]:
     run for the current state, which callers must do first.
     """
     rows = db.execute(
-        select(Device.network_id, Network.name, Device.os_name, Device.device_type,
+        select(Device.uuid, Device.current_ip, Device.network_id, Network.name, Device.os_name, Device.device_type,
                DevicePort.port, DevicePort.protocol, DevicePort.service,
-               DevicePortVuln.cve_id, DevicePortVuln.state, DevicePortVuln.matched_cpe,
+               DevicePortVuln.cve_id, DevicePortVuln.state, DevicePortVuln.matched_cpe, DevicePortVuln.matched_at,
                Vulnerability.cvss_base, Vulnerability.kev, Vulnerability.epss, Vulnerability.published_at,
                VulnFindingLifecycle.first_seen_at)
         .join(DevicePort, DevicePort.device_id == Device.id)
@@ -247,6 +253,42 @@ def _top_lists(db: Session) -> dict:
     }
 
 
+def _seen_at(f: _Finding) -> datetime | None:
+    """Lifecycle first-seen when present; otherwise the match row's matched_at (cold path before
+    sync_finding_lifecycle has run)."""
+    return f.first_seen_at or f.matched_at
+
+
+def _new_finding_row(f: _Finding) -> dict:
+    return {
+        "cve_id": f.cve_id, "device_uuid": f.device_uuid, "device_ip": f.device_ip,
+        "cvss_base": f.cvss_base, "kev": f.kev, "first_seen_at": _seen_at(f),
+    }
+
+
+def _new_lists(db: Session, findings: list[_Finding], feed: dict) -> dict:
+    """Top-N findings first seen at/after the last completed scan, and at/after the newest enabled
+    feed sync ("new vulns since last scan / last DB update" from the spec)."""
+    last_scan = db.scalar(
+        select(Scan.finished_at)
+        .where(Scan.status.in_((SCAN_COMPLETED, SCAN_PARTIAL)), Scan.finished_at.isnot(None))
+        .order_by(Scan.finished_at.desc()).limit(1)
+    )
+    last_db = feed.get("newest_synced_at")
+
+    def since(cutoff: datetime | None) -> list[dict]:
+        if cutoff is None:
+            return []
+        rows = [f for f in findings if (ts := _seen_at(f)) is not None and ts >= cutoff]
+        rows.sort(key=lambda f: _seen_at(f) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        return [_new_finding_row(f) for f in rows[:TOP_N]]
+
+    return {
+        "new_since_last_scan": since(last_scan),
+        "new_since_last_db_update": since(last_db),
+    }
+
+
 def _severity_by_network(findings: list[_Finding]) -> list[dict]:
     """Network x severity matrix ("Severity by network" in the UI -- distinct from the existing
     IP-grid exposure heatmap at /api/reports/heatmap, which this is not named after to avoid
@@ -327,6 +369,7 @@ def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
         "exposure_duration": {b: 0 for b in AGE_BUCKETS}
         | dict(Counter(_age_bucket(f.first_seen_at, now) for f in findings)),
     }
+    feed = _feed_staleness(db, cfg, now)
 
     result = {
         "generated_at": now,
@@ -337,12 +380,13 @@ def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
         "confirmed_count": int(state_counts.get(VULN_STATE_CONFIRMED, 0)),
         "potential_count": int(state_counts.get(VULN_STATE_POTENTIAL, 0)),
         "risk_device_levels": _risk_device_levels(db),
-        "feed": _feed_staleness(db, cfg, now),
+        "feed": feed,
         "facets": facets,
         "severity_by_network": _severity_by_network(findings),
         "weekly": _weekly_series(db, now),
         "snapshot_trend": _snapshot_trend(db, now),
         **_top_lists(db),
+        **_new_lists(db, findings, feed),
     }
     _cache[_cache_key(db)] = (time.monotonic() + _CACHE_TTL_SECONDS, result)
     return result

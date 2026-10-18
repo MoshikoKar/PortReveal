@@ -183,11 +183,15 @@ export default function Reports() {
 
       <div className="grid halves">
         <Card title="At-risk devices" flush actions={
-          <SeeAll total={topDevices.length} open={riskOpen} onToggle={() => setRiskOpen((v) => !v)} />
+          <div className="row" style={{ gap: 12 }}>
+            <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
+            <SeeAll total={topDevices.length} open={riskOpen} onToggle={() => setRiskOpen((v) => !v)} />
+          </div>
         }>
           <ReportBlurb>
-            Devices ranked by combined score (risk from matched CVEs, boosted by exposure). Requires the
-            vulnerability feed to be enabled in Settings.
+            Devices ranked by combined score (risk from matched CVEs, boosted by exposure) — same numbers as
+            the <Link to="/vulnerabilities">vulnerabilities dashboard</Link>. Requires the vulnerability feed
+            to be enabled in Settings.
           </ReportBlurb>
           <ErrorBox error={vuln.error} />
           {!vuln.data ? (!vuln.error && <Loading />) : !topDevices.length ? (
@@ -211,9 +215,15 @@ export default function Reports() {
           )}
         </Card>
         <Card title="Top vulnerabilities" flush actions={
-          <SeeAll total={topCves.length} open={cveOpen} onToggle={() => setCveOpen((v) => !v)} />
+          <div className="row" style={{ gap: 12 }}>
+            <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
+            <SeeAll total={topCves.length} open={cveOpen} onToggle={() => setCveOpen((v) => !v)} />
+          </div>
         }>
-          <ReportBlurb>CVEs matched on the most devices in this inventory (confirmed or potential, not dismissed).</ReportBlurb>
+          <ReportBlurb>
+            CVEs matched on the most devices (confirmed or potential, not dismissed) — same computation as the{' '}
+            <Link to="/vulnerabilities">vulnerabilities dashboard</Link>.
+          </ReportBlurb>
           <ErrorBox error={vuln.error} />
           {!vuln.data ? (!vuln.error && <Loading />) : !topCves.length ? (
             <Empty>No vulnerability matched yet.</Empty>

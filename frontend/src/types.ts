@@ -678,6 +678,15 @@ export interface VulnTopCve {
   device_count: number;
 }
 
+export interface VulnNewFinding {
+  cve_id: string;
+  device_uuid: string;
+  device_ip: string;
+  cvss_base: number | null;
+  kev: boolean;
+  first_seen_at: string | null;
+}
+
 export interface VulnSummary {
   generated_at: string;
   epss_threshold: number;
@@ -710,6 +719,8 @@ export interface VulnSummary {
   snapshot_trend: VulnSnapshotPoint[];
   top_devices: VulnTopDevice[];
   top_cves: VulnTopCve[];
+  new_since_last_scan: VulnNewFinding[];
+  new_since_last_db_update: VulnNewFinding[];
 }
 
 /** One (device, port, cve) finding row from the CVE-centric list (GET /api/vulns); an
