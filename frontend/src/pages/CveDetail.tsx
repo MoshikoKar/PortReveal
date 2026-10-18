@@ -50,7 +50,7 @@ export default function CveDetail() {
       </div>
 
       {notFound ? (
-        <Card><Empty>No visible finding for {cve_id} (unknown, filtered out, or on a hidden device).</Empty></Card>
+        <Card><Empty>{cve_id} is not in the local vulnerability cache.</Empty></Card>
       ) : (
         <>
           <ErrorBox error={error} />

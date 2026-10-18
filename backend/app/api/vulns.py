@@ -335,7 +335,12 @@ def export_vulns(
 @router.get("/{cve_id}")
 def cve_detail(cve_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Metadata, visibility-filtered affected devices/services, and first-seen (the earliest
-    lifecycle first_seen_at across those devices) for one CVE."""
+    lifecycle first_seen_at across those devices) for one CVE.
+
+    404 only when the CVE is absent from the local cache. A known CVE with no visible
+    affected devices (none matched, filtered by min_cvss_display, or on hidden devices)
+    still returns metadata with an empty ``affected_devices`` list.
+    """
     vuln = db.get(Vulnerability, cve_id)
     if vuln is None:
         raise HTTPException(404, "Unknown CVE")
@@ -349,8 +354,6 @@ def cve_detail(cve_id: str, db: Session = Depends(get_db), user: User = Depends(
         .where(device_visible(db), DevicePortVuln.cve_id == cve_id)
     ).all()
     visible = [r for r in rows if is_visible(r[0].state, vuln.kev, vuln.cvss_base, cfg)]
-    if not visible:
-        raise HTTPException(404, "Unknown CVE")
     affected_devices = [
         {"device_uuid": device.uuid, "device_ip": device.current_ip, "device_hostname": device.hostname,
          "network": network_name, "port": port_row.port, "protocol": port_row.protocol,

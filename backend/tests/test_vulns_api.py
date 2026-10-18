@@ -221,11 +221,26 @@ def test_cve_detail_404_for_unknown_cve(admin):
     assert admin.get("/api/vulns/CVE-NOPE-0000").status_code == 404
 
 
-def test_cve_detail_404_when_invisible_under_min_cvss_display(admin, db):
+def test_cve_detail_returns_empty_devices_when_invisible_under_min_cvss_display(admin, db):
+    """CVE is in the cache but every finding is below the display floor → metadata, no devices."""
     _seed_two_devices(db)
     put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
     db.commit()
-    assert admin.get("/api/vulns/CVE-2024-MED").status_code == 404  # below floor, not KEV
+    r = admin.get("/api/vulns/CVE-2024-MED")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cve_id"] == "CVE-2024-MED" and body["affected_devices"] == []
+    assert body["first_seen_at"] is None
+
+
+def test_cve_detail_returns_empty_devices_when_cve_in_cache_but_unmatched(admin, db):
+    db.add(Vulnerability(cve_id="CVE-2024-6387", summary="regreSSHion", cvss_base=8.1, kev=False))
+    db.commit()
+    r = admin.get("/api/vulns/CVE-2024-6387")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cve_id"] == "CVE-2024-6387" and body["cvss_base"] == 8.1
+    assert body["affected_devices"] == [] and body["first_seen_at"] is None
 
 
 def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
