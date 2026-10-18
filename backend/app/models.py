@@ -282,7 +282,7 @@ class Device(Base):
     vendor: Mapped[str | None] = mapped_column(String(200))
     hostname: Mapped[str | None] = mapped_column(String(255), index=True)
     dns_name: Mapped[str | None] = mapped_column(String(255))
-    os_name: Mapped[str | None] = mapped_column(String(255))
+    os_name: Mapped[str | None] = mapped_column(String(255), index=True)
     os_accuracy: Mapped[int | None] = mapped_column(Integer)
     os_detected_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     os_source: Mapped[str | None] = mapped_column(String(20))  # nmap_os | service | ssh | http | snmp | ntlm

@@ -439,6 +439,7 @@ def _vuln_out(dpv: DevicePortVuln, port: DevicePort, vuln: Vulnerability) -> dic
 @router.get("/{uuid}/vulns")
 def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Every CVE matched to this device's ports (confirmed, potential and dismissed)."""
+    from ..core.vuln.display import should_display
     from ..settings_store import VulnSettings, get_section
 
     d = _get(db, uuid)
@@ -449,19 +450,7 @@ def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(
         .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
         .where(DevicePort.device_id == d.id)
     ).all()
-    items = []
-    from ..core.vuln.score import DEFAULT_CVSS
-
-    for dpv, port, vuln in rows:
-        if not cfg.include_potential and dpv.state == VULN_STATE_POTENTIAL:
-            continue
-        # Consistent with scoring: missing CVSS uses DEFAULT_CVSS (not 0). KEV is never hidden by
-        # the display floor — exploited-in-the-wild entries must remain visible.
-        if dpv.state != VULN_STATE_DISMISSED and not vuln.kev:
-            effective_cvss = vuln.cvss_base if vuln.cvss_base is not None else DEFAULT_CVSS
-            if effective_cvss < cfg.min_cvss_display:
-                continue
-        items.append(_vuln_out(dpv, port, vuln))
+    items = [_vuln_out(dpv, port, vuln) for dpv, port, vuln in rows if should_display(dpv, vuln, cfg)]
     items.sort(key=lambda it: (it["state"] == VULN_STATE_DISMISSED, it["kev"] is not True,
                                -(it["cvss_base"] or 0)))
     return {"items": items}

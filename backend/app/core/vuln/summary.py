@@ -32,8 +32,9 @@ from ...models import (
 from ...settings_store import VulnSettings, get_section
 from ..mockdata import device_visible
 from .buckets import severity_bucket
+from .display import is_visible
 from .lifecycle import sync_finding_lifecycle
-from .score import DEFAULT_CVSS, RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
+from .score import RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 
 TOP_N = 10
 WEEKS = 12
@@ -118,13 +119,7 @@ def _load_findings(db: Session) -> list[_Finding]:
 
 
 def _visible(f: _Finding, cfg: VulnSettings) -> bool:
-    """Same display floor as api/devices.py's device_vulns (shared via display.py in part 6)."""
-    if not cfg.include_potential and f.state == VULN_STATE_POTENTIAL:
-        return False
-    if f.kev:
-        return True
-    effective = f.cvss_base if f.cvss_base is not None else DEFAULT_CVSS
-    return effective >= cfg.min_cvss_display
+    return is_visible(f.state, f.kev, f.cvss_base, cfg)
 
 
 def _top(counter: Counter, n: int = FACET_LIMIT) -> list[dict]:

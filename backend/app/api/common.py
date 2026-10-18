@@ -6,7 +6,8 @@ from typing import Any
 from fastapi import Query
 from pydantic import BaseModel
 
-from ..models import Device, DevicePort, Event, Network, Scan, User
+from ..core.vuln.buckets import severity_bucket
+from ..models import Device, DevicePort, DevicePortVuln, Event, Network, Scan, User, Vulnerability
 
 # OpenAPI description for PUT routes on entities (PATCH is the partial-update verb; see docs/api/conventions.md).
 FULL_REPLACE = (
@@ -221,4 +222,54 @@ def scan_out(s: Scan, network_name: str | None = None) -> dict:
         "is_baseline": s.is_baseline,
         "error": s.error,
         "notes": s.notes,
+    }
+
+
+def vuln_finding_out(dpv: DevicePortVuln, port: DevicePort, device: Device, vuln: Vulnerability,
+                     network_name: str | None, first_seen_at) -> dict:
+    """One row of the CVE-centric finding list (GET /api/vulns): a (device, port, cve) match."""
+    return {
+        "cve_id": vuln.cve_id,
+        "device_uuid": device.uuid,
+        "device_ip": device.current_ip,
+        "device_hostname": device.hostname,
+        "network": network_name,
+        "os_name": device.os_name,
+        "device_type": device.device_type,
+        "port": port.port,
+        "protocol": port.protocol,
+        "service": port.service,
+        "product": port.product,
+        "version": port.version,
+        "matched_cpe": dpv.matched_cpe,
+        "state": dpv.state,
+        "source": dpv.source,
+        "cvss_base": vuln.cvss_base,
+        "cvss_vector": vuln.cvss_vector,
+        "severity": severity_bucket(vuln.cvss_base),
+        "kev": vuln.kev,
+        "epss": vuln.epss,
+        "epss_percentile": vuln.epss_percentile,
+        "summary": vuln.summary,
+        "matched_at": dpv.matched_at,
+        "first_seen_at": first_seen_at,
+    }
+
+
+def cve_out(vuln: Vulnerability, affected_devices: list[dict], first_seen_at) -> dict:
+    """Per-CVE detail page: metadata plus the visibility-filtered devices/services it affects."""
+    return {
+        "cve_id": vuln.cve_id,
+        "cvss_base": vuln.cvss_base,
+        "cvss_vector": vuln.cvss_vector,
+        "severity": severity_bucket(vuln.cvss_base),
+        "published_at": vuln.published_at,
+        "last_modified": vuln.last_modified,
+        "kev": vuln.kev,
+        "kev_added_at": vuln.kev_added_at,
+        "epss": vuln.epss,
+        "epss_percentile": vuln.epss_percentile,
+        "summary": vuln.summary,
+        "first_seen_at": first_seen_at,
+        "affected_devices": affected_devices,
     }
