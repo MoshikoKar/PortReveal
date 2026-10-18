@@ -38,12 +38,16 @@ const DEVICE_STATUS: Record<DeviceStatus, [string, string]> = {
 
 export function DeviceStatusBadge({ status, failed }: { status: DeviceStatus; failed?: boolean }) {
   const [cls, label] = DEVICE_STATUS[status] ?? ['', status];
+  const statusBadge = (
+    <span className={`badge ${cls}`} title={status === 'unknown' ? 'Missed by the latest scan; not yet confirmed gone' : undefined}>
+      <span className="dot" />{label}
+    </span>
+  );
+  if (!failed) return statusBadge;
   return (
-    <span className="row" style={{ gap: 6 }}>
-      <span className={`badge ${cls}`} title={status === 'unknown' ? 'Missed by the latest scan; not yet confirmed gone' : undefined}>
-        <span className="dot" />{label}
-      </span>
-      {failed && <span className="badge medium" title="The last port/service scan of this host failed or timed out">Scan failed</span>}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, lineHeight: 1 }}>
+      {statusBadge}
+      <span className="badge medium" title="The last port/service scan of this host failed or timed out">Scan failed</span>
     </span>
   );
 }

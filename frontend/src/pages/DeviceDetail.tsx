@@ -115,7 +115,11 @@ export default function DeviceDetail() {
             <span title="Exposure score"><ScoreBadge score={d.score} /></span>
             {d.risk_scored_at && <span title="Risk score"><RiskBadge score={d.risk_score} kind="risk" /></span>}
             {d.risk_scored_at && <span title="Combined score"><RiskBadge score={d.combined_score} kind="combined" /></span>}
-            {d.vuln_job && <Link to="/reports#vuln-jobs"><VulnJobBadge status={d.vuln_job.status} /></Link>}
+            {d.vuln_job && (
+              <Link to="/reports#vuln-jobs" style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 1 }}>
+                <VulnJobBadge status={d.vuln_job.status} />
+              </Link>
+            )}
             {d.type && (
               <Link className={`badge ${d.type === 'unknown' ? 'outline' : 'accent'}`}
                 to={`/search?q=${encodeURIComponent(`type:${d.type}`)}`}

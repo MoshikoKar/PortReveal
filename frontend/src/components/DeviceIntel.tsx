@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom';
 import { del, post, put } from '../api';
 import type { DeviceDetail, DeviceProfile, DeviceVuln, TimelineItem } from '../types';
 import { CRITICALITY_LEVELS, EVENT_LABELS, SCAN_TYPE_LABELS, fmtTime, useApi } from '../util';
-import { Card, Empty, ErrorBox, Loading, Modal, RiskBadge, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
+import { Card, Empty, ErrorBox, Loading, Modal, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
 
 const TIMELINE_LIMIT = 100;
 const TIMELINE_PREVIEW = 10;
+const VULN_PAGE = 15;
 
 function tagTitle(t: { source: string; reason: string | null }) {
   const kind = t.source === 'manual' ? 'Manual' : t.source === 'suppressed' ? 'Dismissed' : 'Rule';
@@ -244,6 +245,8 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
   const active = items.filter((v) => v.state !== 'dismissed');
   const dismissed = items.filter((v) => v.state === 'dismissed');
   const [showDismissed, setShowDismissed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [page, setPage] = useState(1);
 
   const dismiss = async (cve_id: string) => {
     if (busy) return;
@@ -268,11 +271,19 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
     }
   };
 
+  const rows = [...active, ...(showDismissed ? dismissed : [])];
+  const shown = expanded
+    ? rows
+    : rows.slice((page - 1) * VULN_PAGE, page * VULN_PAGE);
+
   return (
     <Card title="Vulnerabilities" flush
       actions={dismissed.length > 0 && (
         <label className="check small">
-          <input type="checkbox" checked={showDismissed} onChange={(e) => setShowDismissed(e.target.checked)} />
+          <input type="checkbox" checked={showDismissed} onChange={(e) => {
+            setShowDismissed(e.target.checked);
+            setPage(1);
+          }} />
           show {dismissed.length} dismissed
         </label>
       )}>
@@ -280,41 +291,54 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
       {!data ? (!error && <Loading />) : !active.length && !showDismissed ? (
         <Empty>No matched CVEs for this device's identified services.</Empty>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead><tr><th>CVE</th><th>Port / service</th><th>CVSS</th><th>State</th><th></th></tr></thead>
-            <tbody>
-              {[...active, ...(showDismissed ? dismissed : [])].map((v) => (
-                <tr key={`${v.cve_id}-${v.protocol}-${v.port}`} className={v.state === 'dismissed' ? 'dim' : ''}>
-                  <td className="mono nowrap">
-                    {v.cve_id}
-                    {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
-                    {v.epss != null && <span className="muted small" style={{ marginLeft: 6 }}>EPSS {(v.epss * 100).toFixed(0)}%</span>}
-                  </td>
-                  <td className="small">
-                    {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
-                  </td>
-                  <td className="mono small">{v.cvss_base != null ? v.cvss_base.toFixed(1) : '—'}</td>
-                  <td>
-                    <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}>
-                      {v.state}
-                    </span>
-                    {v.source === 'nmap_script' && <span className="badge outline" style={{ marginLeft: 6 }}>script</span>}
-                  </td>
-                  <td className="right">
-                    {isAdmin && (
-                      v.state === 'dismissed' ? (
-                        <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => undismiss(v.cve_id)}>Undo</button>
-                      ) : (
-                        <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => dismiss(v.cve_id)}>Dismiss</button>
-                      )
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="table-wrap">
+            <table className="compact">
+              <thead><tr><th>CVE</th><th>Port / service</th><th>CVSS</th><th>State</th><th></th></tr></thead>
+              <tbody>
+                {shown.map((v) => (
+                  <tr key={`${v.cve_id}-${v.protocol}-${v.port}`} className={v.state === 'dismissed' ? 'dim' : ''}>
+                    <td className="mono nowrap">
+                      {v.cve_id}
+                      {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
+                      {v.epss != null && <span className="muted small" style={{ marginLeft: 6 }}>EPSS {(v.epss * 100).toFixed(0)}%</span>}
+                    </td>
+                    <td className="small">
+                      {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
+                    </td>
+                    <td className="mono small">{v.cvss_base != null ? v.cvss_base.toFixed(1) : '—'}</td>
+                    <td>
+                      <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}>
+                        {v.state}
+                      </span>
+                      {v.source === 'nmap_script' && <span className="badge outline" style={{ marginLeft: 6 }}>script</span>}
+                    </td>
+                    <td className="right">
+                      {isAdmin && (
+                        v.state === 'dismissed' ? (
+                          <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => undismiss(v.cve_id)}>Undo</button>
+                        ) : (
+                          <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => dismiss(v.cve_id)}>Dismiss</button>
+                        )
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {rows.length > VULN_PAGE && (
+            <button type="button" className="btn see-all" aria-expanded={expanded} onClick={() => {
+              setExpanded((v) => !v);
+              setPage(1);
+            }}>
+              {expanded ? 'Show less' : `See all ${rows.length} →`}
+            </button>
+          )}
+          {!expanded && (
+            <Pager page={page} pageSize={VULN_PAGE} total={rows.length} onPage={setPage} />
+          )}
+        </>
       )}
     </Card>
   );

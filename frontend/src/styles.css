@@ -204,6 +204,10 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; line-height: 1.4; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.compact th, table.compact td { padding: 4px 10px; line-height: 1.3; }
+table.compact th { font-size: 11.5px; }
+table.compact .badge { height: 18px; padding: 0 6px; font-size: 11px; }
+table.compact .btn.sm { padding: 2px 8px; }
 th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--panel); position: sticky; top: 0; }
 tbody tr:hover { background: var(--panel-2); }
 tr.clickable { cursor: pointer; }
@@ -215,8 +219,10 @@ tr.dim td { color: var(--muted); }
 
 /* ---------- badges / chips ---------- */
 .badge {
-  display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: var(--radius-pill);
-  font-size: 11.5px; font-weight: 600; white-space: nowrap; border: 1px solid transparent;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 22px; padding: 0 8px; border-radius: var(--radius-pill); box-sizing: border-box;
+  font-size: 11.5px; font-weight: 600; line-height: 1; white-space: nowrap;
+  border: 1px solid transparent; vertical-align: middle; flex-shrink: 0;
   background: var(--info-bg); color: var(--info);
 }
 .badge.high { background: var(--high-bg); color: var(--high); }
@@ -225,7 +231,17 @@ tr.dim td { color: var(--muted); }
 .badge.ok { background: var(--ok-bg); color: var(--ok); }
 .badge.accent { background: rgba(45, 212, 191, 0.12); color: var(--accent); }
 .badge.outline { background: transparent; border-color: var(--border-2); color: var(--text-2); }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
+/* Links styled as badges must keep the same box as span.badge (anchor color/underline would skew height). */
+a.badge, a.badge:hover { text-decoration: none; }
+a.badge.high { color: var(--high); }
+a.badge.medium { color: var(--medium); }
+a.badge.low { color: var(--low); }
+a.badge.ok { color: var(--ok); }
+a.badge.accent { color: var(--accent); }
+a.badge.outline { color: var(--text-2); }
+/* Title-row wrappers around badges (scores, vuln-job link) share one alignment box. */
+h1.row > a:not(.badge), h1.row > span { display: inline-flex; align-items: center; line-height: 1; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; flex-shrink: 0; }
 .chip { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--panel-3); color: var(--text-2); margin: 1px 4px 1px 0; border: 1px solid var(--border); }
 button.chip { cursor: pointer; }
 .chip.on { border-color: var(--accent, #5b8def); color: var(--text); background: color-mix(in srgb, var(--accent, #5b8def) 18%, var(--panel-3)); }
