@@ -31,6 +31,7 @@ from ..models import (
     DevicePortVuln,
     Network,
     User,
+    VulnCpeMatch,
     Vulnerability,
     VulnFindingLifecycle,
 )
@@ -69,6 +70,8 @@ class FindingFilters:
     cve_age: str | None = None
     exposure_duration: str | None = None
     risk_band: str | None = None
+    vendor: str | None = None
+    product: str | None = None
 
 
 def _lifecycle_join_cond():
@@ -156,7 +159,36 @@ def _apply_filters(q, db: Session, cfg: VulnSettings, f: FindingFilters, now: da
             )
         else:  # low
             q = q.where(Device.combined_score < RISK_MEDIUM_THRESHOLD)
+    if f.vendor is not None or f.product is not None:
+        q = q.where(_vendor_product_cond(f.vendor, f.product))
     return q
+
+
+def _cpe_match_exists(*extra):
+    """True when a vuln_cpe_match row pairs this finding's (cve_id, matched_cpe)."""
+    return (
+        select(VulnCpeMatch.id)
+        .where(
+            VulnCpeMatch.cve_id == DevicePortVuln.cve_id,
+            VulnCpeMatch.cpe23 == DevicePortVuln.matched_cpe,
+            *extra,
+        )
+        .exists()
+    )
+
+
+def _vendor_product_cond(vendor: str | None, product: str | None):
+    """Match the summary's vendor/product facet keys (`vendor:product`, or `unknown`)."""
+    if vendor == "unknown" and not product:
+        return or_(DevicePortVuln.matched_cpe.is_(None), ~_cpe_match_exists())
+    extras = []
+    if vendor and product:
+        extras.append(VulnCpeMatch.vendor_product == f"{vendor}:{product}")
+    elif vendor:
+        extras.append(VulnCpeMatch.vendor_product.like(f"{vendor}:%"))
+    elif product:
+        extras.append(VulnCpeMatch.vendor_product.like(f"%:{product}"))
+    return _cpe_match_exists(*extras)
 
 
 def _filters_from_query(
@@ -173,12 +205,14 @@ def _filters_from_query(
     cve_age: str | None,
     exposure_duration: str | None,
     risk_band: str | None,
+    vendor: str | None = None,
+    product: str | None = None,
 ) -> FindingFilters:
     return FindingFilters(
         severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration,
-        risk_band=risk_band,
+        risk_band=risk_band, vendor=vendor, product=product,
     )
 
 
@@ -196,6 +230,8 @@ def list_vulns(
     cve_age: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
     exposure_duration: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
     risk_band: str | None = Query(None, pattern=RISK_BAND_PATTERN),
+    vendor: str | None = Query(None, max_length=100),
+    product: str | None = Query(None, max_length=100),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
@@ -208,6 +244,7 @@ def list_vulns(
         severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
+        vendor=vendor, product=product,
     )
     total = db.scalar(_apply_filters(_count_base(), db, cfg, filters, now)) or 0
     rows = db.execute(
@@ -276,6 +313,8 @@ def export_vulns(
     cve_age: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
     exposure_duration: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
     risk_band: str | None = Query(None, pattern=RISK_BAND_PATTERN),
+    vendor: str | None = Query(None, max_length=100),
+    product: str | None = Query(None, max_length=100),
     user: User = Depends(current_user),
 ):
     """Same filters as GET /api/vulns, no pagination: every matching row, streamed as CSV."""
@@ -283,6 +322,7 @@ def export_vulns(
         severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
+        vendor=vendor, product=product,
     )
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     return StreamingResponse(

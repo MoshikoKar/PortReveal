@@ -9,7 +9,10 @@ import { VulnRiskTrend, VulnSeverityTrend, VulnTrend } from '../components/VulnT
 import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
 import type { VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
-import { buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, toggleVulnFilter, type VulnFilterKey } from '../vulnFilters';
+import {
+  buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, toggleVulnFilter,
+  toggleVendorProductFilter, type VulnFilterKey,
+} from '../vulnFilters';
 
 const SEVERITY_COLOR: Record<string, string> = {
   critical: 'var(--high)', high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)',
@@ -18,7 +21,7 @@ const SEVERITY_COLOR: Record<string, string> = {
 const FILTER_LABELS: Record<VulnFilterKey, string> = {
   severity: 'severity', kev: 'KEV', epss_min: 'EPSS ≥', network_id: 'network', service: 'service',
   port: 'port', os_name: 'OS', device_type: 'device type', state: 'state', cve_age: 'CVE age',
-  exposure_duration: 'exposure duration', risk_band: 'risk band',
+  exposure_duration: 'exposure duration', risk_band: 'risk band', vendor: 'vendor', product: 'product',
 };
 
 export default function Vulnerabilities() {
@@ -31,6 +34,7 @@ export default function Vulnerabilities() {
 
   const toggle = (key: VulnFilterKey, value: string) => setSp(toggleVulnFilter(sp, key, value));
   const set = (key: VulnFilterKey, value: string | undefined) => setSp(setVulnFilter(sp, key, value));
+  const toggleVendorProduct = (facetKey: string) => setSp(toggleVendorProductFilter(sp, facetKey));
   const setPage = (p: number) => {
     const next = new URLSearchParams(sp);
     if (p <= 1) next.delete('page');
@@ -160,7 +164,8 @@ export default function Vulnerabilities() {
               }} />
           </Card>
 
-          <VulnFacets summary={data} filters={filters} onToggle={toggle} />
+          <VulnFacets summary={data} filters={filters} onToggle={toggle}
+            onToggleVendorProduct={toggleVendorProduct} />
           <VulnTopLists summary={data} />
           <VulnFindingsTable
             filters={filters}

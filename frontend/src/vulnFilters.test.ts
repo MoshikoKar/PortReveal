@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, toggleVulnFilter, vulnFilterLink,
+  buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, splitVendorProductKey,
+  toggleVulnFilter, toggleVendorProductFilter, vendorProductFacetActive, vulnFilterLink,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -92,5 +93,36 @@ describe('risk_band filter', () => {
     expect(vulnFilterLink({ risk_band: 'high' })).toBe('/vulnerabilities?risk_band=high');
     expect(toggleVulnFilter(set, 'risk_band', 'high').get('risk_band')).toBeNull();
     expect(clearVulnFilters(set).get('risk_band')).toBeNull();
+  });
+});
+
+describe('vendor / product facet filters', () => {
+  it('splits vendor:product and unknown keys', () => {
+    expect(splitVendorProductKey('apache:httpd')).toEqual({ vendor: 'apache', product: 'httpd' });
+    expect(splitVendorProductKey('unknown')).toEqual({ vendor: 'unknown' });
+  });
+
+  it('toggles both URL params from a facet key', () => {
+    const set = toggleVendorProductFilter(new URLSearchParams(), 'apache:httpd');
+    expect(parseVulnFilters(set)).toEqual({ vendor: 'apache', product: 'httpd' });
+    expect(vendorProductFacetActive(parseVulnFilters(set), 'apache:httpd')).toBe(true);
+    expect(vendorProductFacetActive(parseVulnFilters(set), 'nginx:nginx')).toBe(false);
+    const cleared = toggleVendorProductFilter(set, 'apache:httpd');
+    expect(cleared.get('vendor')).toBeNull();
+    expect(cleared.get('product')).toBeNull();
+  });
+
+  it('toggles the unknown bucket with vendor only', () => {
+    const set = toggleVendorProductFilter(new URLSearchParams(), 'unknown');
+    expect(parseVulnFilters(set)).toEqual({ vendor: 'unknown' });
+    expect(vendorProductFacetActive(parseVulnFilters(set), 'unknown')).toBe(true);
+  });
+
+  it('is cleared by clearVulnFilters', () => {
+    const sp = new URLSearchParams('vendor=apache&product=httpd&page=2');
+    const next = clearVulnFilters(sp);
+    expect(next.get('vendor')).toBeNull();
+    expect(next.get('product')).toBeNull();
+    expect(next.get('page')).toBeNull();
   });
 });

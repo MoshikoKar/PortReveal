@@ -11,7 +11,14 @@ from app.core.vuln.lifecycle import sync_finding_lifecycle
 from app.core.vuln.score import RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 from app.db import utcnow
 from app.main import app
-from app.models import VULN_STATE_CONFIRMED, VULN_STATE_DISMISSED, VULN_STATE_POTENTIAL, DevicePortVuln, Vulnerability
+from app.models import (
+    VULN_STATE_CONFIRMED,
+    VULN_STATE_DISMISSED,
+    VULN_STATE_POTENTIAL,
+    DevicePortVuln,
+    VulnCpeMatch,
+    Vulnerability,
+)
 from app.settings_store import VulnSettings, put_section
 
 from .helpers import ScriptedScanner, device_by_ip, host, make_network, port, scan
@@ -144,6 +151,41 @@ def test_export_vulns_respects_risk_band(admin, db):
     r = admin.get("/api/vulns/export", params={"risk_band": "high"})
     body = r.text
     assert "CVE-2024-CRIT" in body and "CVE-2024-MED" not in body
+
+
+def test_list_vulns_filters_by_vendor_and_product(admin, db):
+    """vendor/product match the summary facet keys via vuln_cpe_match.vendor_product."""
+    _seed_two_devices(db)
+    crit = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
+    med = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-MED").one()
+    crit.matched_cpe = "cpe:2.3:a:openbsd:openssh:7.4:*:*:*:*:*:*:*"
+    med.matched_cpe = "cpe:2.3:a:f5:nginx:1.18:*:*:*:*:*:*:*"
+    db.add(VulnCpeMatch(cve_id="CVE-2024-CRIT", cpe23=crit.matched_cpe, vendor_product="openbsd:openssh"))
+    db.add(VulnCpeMatch(cve_id="CVE-2024-MED", cpe23=med.matched_cpe, vendor_product="f5:nginx"))
+    db.commit()
+
+    both = admin.get("/api/vulns", params={"vendor": "openbsd", "product": "openssh"}).json()
+    assert both["total"] == 1 and both["items"][0]["cve_id"] == "CVE-2024-CRIT"
+    vendor_only = admin.get("/api/vulns", params={"vendor": "f5"}).json()
+    assert vendor_only["total"] == 1 and vendor_only["items"][0]["cve_id"] == "CVE-2024-MED"
+    product_only = admin.get("/api/vulns", params={"product": "openssh"}).json()
+    assert product_only["total"] == 1 and product_only["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    # Clear CPE match so the finding falls into the facet's "unknown" bucket.
+    med.matched_cpe = None
+    db.commit()
+    unknown = admin.get("/api/vulns", params={"vendor": "unknown"}).json()
+    assert unknown["total"] == 1 and unknown["items"][0]["cve_id"] == "CVE-2024-MED"
+
+
+def test_export_vulns_respects_vendor_product(admin, db):
+    _seed_two_devices(db)
+    crit = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
+    crit.matched_cpe = "cpe:2.3:a:openbsd:openssh:7.4:*:*:*:*:*:*:*"
+    db.add(VulnCpeMatch(cve_id="CVE-2024-CRIT", cpe23=crit.matched_cpe, vendor_product="openbsd:openssh"))
+    db.commit()
+    r = admin.get("/api/vulns/export", params={"vendor": "openbsd", "product": "openssh"})
+    assert "CVE-2024-CRIT" in r.text and "CVE-2024-MED" not in r.text
 
 
 def test_list_vulns_respects_min_cvss_display_like_device_endpoint(admin, db):

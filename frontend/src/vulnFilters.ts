@@ -5,7 +5,7 @@
 
 export const VULN_FILTER_KEYS = [
   'severity', 'kev', 'epss_min', 'network_id', 'service', 'port', 'os_name', 'device_type',
-  'state', 'cve_age', 'exposure_duration', 'risk_band',
+  'state', 'cve_age', 'exposure_duration', 'risk_band', 'vendor', 'product',
 ] as const;
 
 export type VulnFilterKey = typeof VULN_FILTER_KEYS[number];
@@ -61,4 +61,36 @@ export function vulnFilterLink(filters: VulnFilters): string {
   }
   const qs = params.toString();
   return qs ? `/vulnerabilities?${qs}` : '/vulnerabilities';
+}
+
+/** Split a summary facet key (`vendor:product` or `unknown`) into URL filter params. */
+export function splitVendorProductKey(key: string): { vendor: string; product?: string } {
+  if (key === 'unknown') return { vendor: 'unknown' };
+  const i = key.indexOf(':');
+  if (i < 0) return { vendor: key };
+  return { vendor: key.slice(0, i), product: key.slice(i + 1) };
+}
+
+/** True when the current URL filters select this vendor/product facet bucket. */
+export function vendorProductFacetActive(filters: VulnFilters, key: string): boolean {
+  const { vendor, product } = splitVendorProductKey(key);
+  if (filters.vendor !== vendor) return false;
+  return product ? filters.product === product : !filters.product;
+}
+
+/** Toggle a vendor/product facet bucket: sets both params (or only vendor=unknown), clears on re-click. */
+export function toggleVendorProductFilter(sp: URLSearchParams, key: string): URLSearchParams {
+  const { vendor, product } = splitVendorProductKey(key);
+  const next = new URLSearchParams(sp);
+  const active = next.get('vendor') === vendor && (product ? next.get('product') === product : !next.get('product'));
+  if (active) {
+    next.delete('vendor');
+    next.delete('product');
+  } else {
+    next.set('vendor', vendor);
+    if (product) next.set('product', product);
+    else next.delete('product');
+  }
+  next.delete('page');
+  return next;
 }

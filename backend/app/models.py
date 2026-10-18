@@ -520,7 +520,7 @@ class DevicePortVuln(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), index=True)
     cve_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.cve_id", ondelete="CASCADE"), index=True)
-    matched_cpe: Mapped[str | None] = mapped_column(String(255))
+    matched_cpe: Mapped[str | None] = mapped_column(String(255), index=True)
     state: Mapped[str] = mapped_column(String(10), default=VULN_STATE_POTENTIAL)
     source: Mapped[str] = mapped_column(String(15), default=VULN_SOURCE_CACHE)
     matched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
