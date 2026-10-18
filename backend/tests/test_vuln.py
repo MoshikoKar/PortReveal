@@ -168,33 +168,35 @@ def test_sync_port_matches_removes_stale_non_dismissed(db):
 # --- score.py ---------------------------------------------------------------------------------------
 def test_vuln_score_cvss_default_and_epss_multiplier():
     plain = score.VulnRow("CVE-1", cvss_base=5.0, epss_percentile=None, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(plain) == 50  # 10 * 5.0, no EPSS data -> no multiplier applied
+    assert round(score.vuln_score(plain)) == 44  # soft-compress(10 * 5.0)
     low_epss = score.VulnRow("CVE-1", cvss_base=5.0, epss_percentile=0.0, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(low_epss) == 30  # 50 * 0.6
+    assert round(score.vuln_score(low_epss)) == 30  # soft-compress(50 * 0.6)
     high_epss = score.VulnRow("CVE-1", cvss_base=5.0, epss_percentile=1.0, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(high_epss) == 50  # 50 * 1.0
+    assert round(score.vuln_score(high_epss)) == 44  # soft-compress(50 * 1.0)
     missing_cvss = score.VulnRow("CVE-1", cvss_base=None, epss_percentile=None, kev=False, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(missing_cvss) == 50  # default CVSS 5.0
+    assert round(score.vuln_score(missing_cvss)) == 44  # default CVSS 5.0
 
 
 def test_vuln_score_kev_floor_and_potential_discount():
     kev = score.VulnRow("CVE-1", cvss_base=3.0, epss_percentile=None, kev=True, state=VULN_STATE_CONFIRMED)
-    assert score.vuln_score(kev) == score.KEV_FLOOR  # 30 * 1.5 = 45, floored to high-band threshold
+    # Raw floored to KEV_FLOOR (60), then soft-compressed below 100.
+    assert round(score.vuln_score(kev)) == round(score._compress(float(score.KEV_FLOOR)))
     strong_kev = score.VulnRow("CVE-1", cvss_base=9.0, epss_percentile=None, kev=True, state=VULN_STATE_CONFIRMED)
-    # 90 * 1.5 = 135 → capped at MAX_SINGLE_VULN_POINTS (not 100) so exposure still matters
-    assert score.vuln_score(strong_kev) == score.MAX_SINGLE_VULN_POINTS
+    pts = score.vuln_score(strong_kev)
+    assert 70 < pts < 100  # soft-compress(135); not pinned at the ceiling
     potential = score.VulnRow("CVE-1", cvss_base=10.0, epss_percentile=None, kev=False, state=VULN_STATE_POTENTIAL)
-    assert score.vuln_score(potential) == 50  # min(70, 100) * 0.5
+    assert round(score.vuln_score(potential)) == 44  # soft-compress(50)
 
 
-def test_compute_risk_worst_dominates_with_capped_secondary():
+def test_compute_risk_worst_dominates_with_residual_saturation():
     vulns = [
-        score.VulnRow("CVE-1", 9.0, None, False, VULN_STATE_CONFIRMED),  # s=min(90, 70)=70
-        score.VulnRow("CVE-2", 5.0, None, False, VULN_STATE_CONFIRMED),  # s=50
-        score.VulnRow("CVE-3", 5.0, None, False, VULN_STATE_CONFIRMED),  # s=50
+        score.VulnRow("CVE-1", 9.0, None, False, VULN_STATE_CONFIRMED),
+        score.VulnRow("CVE-2", 5.0, None, False, VULN_STATE_CONFIRMED),
+        score.VulnRow("CVE-3", 5.0, None, False, VULN_STATE_CONFIRMED),
     ]
     risk, factors = score.compute_risk(vulns)
-    assert risk == 70 + round(0.2 * (50 + 50))  # 90; single CVE alone no longer saturates to 100
+    # Residual saturation: extras help but cannot stack linearly to 100.
+    assert 50 <= risk < 100
     assert factors[0]["factor"] == "CVE-1"
     assert score.risk_band_for_score(score.combine(risk, 0)) == "high"
 
@@ -204,16 +206,20 @@ def test_compute_risk_empty_is_zero():
 
 
 def test_compute_risk_caps_at_five_vulnerabilities():
-    many = [score.VulnRow(f"CVE-{i}", 2.0, None, False, VULN_STATE_CONFIRMED) for i in range(10)]  # s=20 each
+    many = [score.VulnRow(f"CVE-{i}", 2.0, None, False, VULN_STATE_CONFIRMED) for i in range(10)]
     risk, factors = score.compute_risk(many)
     assert len(factors) == 5
-    assert risk == 20 + round(0.2 * (20 * 4))  # worst (20) + 0.2 * four seconds (20 each) = 36
+    assert 0 < risk < 40  # five mild findings stay well below the high band
 
 
-def test_combine_adds_up_to_half_for_max_exposure():
+def test_combine_uses_exposure_headroom_not_multiply_to_ceiling():
     assert score.combine(60, 0) == 60
-    assert score.combine(60, 100) == round(60 * 1.5)
-    assert score.combine(80, 100) == 100  # capped
+    # Max exposure spends only EXPOSURE_HEADROOM_FRACTION of remaining room (not ×1.5).
+    assert score.combine(60, 100) == 66
+    assert score.combine(80, 100) == 83
+    # Mid-risk + max exposure must not jump to 100.
+    assert score.combine(50, 100) < 70
+    assert score.risk_band_for_score(score.combine(50, 100)) == "medium"
 
 
 def test_apply_risk_scores_end_to_end(db):
@@ -229,7 +235,7 @@ def test_apply_risk_scores_end_to_end(db):
     score.apply_risk_scores(db, [d.id], now=T)
     db.commit()
     d = device_by_ip(db, "10.0.0.1")
-    assert d.risk_score == score.MAX_SINGLE_VULN_POINTS  # 90 * 1.5 → capped per-CVE
+    assert 50 <= d.risk_score < 100  # soft-compress + residual weight; not pinned at 100
     assert d.combined_score == score.combine(d.risk_score, d.exposure_score)
     assert d.risk_scored_at is not None
     assert d.profile.risk_factors[0]["factor"] == "CVE-2024-0009"
@@ -266,9 +272,56 @@ def test_apply_risk_scores_spread_devices_across_combined_bands(db):
         score.risk_band_for_score(device_by_ip(db, "10.0.0.3").combined_score),
     }
     assert bands == {"high", "medium", "low"}
-    # Risk and exposure stay separate fields; combined is the product of the two.
+    # Risk and exposure stay separate fields; combined folds exposure via headroom only.
     d_high = device_by_ip(db, "10.0.0.1")
     assert d_high.risk_score > 0 and d_high.combined_score == score.combine(d_high.risk_score, d_high.exposure_score)
+
+
+def test_mock_lab_devices_spread_across_risk_bands(db):
+    """Realistic Mock Lab inventory + varied findings must not collapse into one band."""
+    from app.scanner.mock_scanner import MockScanner
+
+    net = make_network(db, cidr="10.99.0.0/24", name="Mock Lab")
+    scan(MockScanner([(net.id, "10.99.0.0/24", 0)]), network_id=net.id)
+
+    # Attach a gw-core-like stack (several medium), a single KEV on the DC, and one mild
+    # finding on the printer — mirrors the mix seen after a standard Mock Lab vuln job.
+    gw = device_by_ip(db, "10.99.0.1")
+    dc = device_by_ip(db, "10.99.0.5")
+    printer = device_by_ip(db, "10.99.0.20")
+    assert gw and dc and printer
+    gw_port = next(p for p in gw.ports if p.is_open)
+    dc_port = next(p for p in dc.ports if p.is_open)
+    printer_port = next(p for p in printer.ports if p.is_open)
+    db.add_all([
+        Vulnerability(cve_id="CVE-MOCK-KEV", cvss_base=9.8, kev=True),
+        Vulnerability(cve_id="CVE-MOCK-M1", cvss_base=5.0, kev=False),
+        Vulnerability(cve_id="CVE-MOCK-M2", cvss_base=5.3, kev=False),
+        Vulnerability(cve_id="CVE-MOCK-M3", cvss_base=6.0, kev=False),
+        Vulnerability(cve_id="CVE-MOCK-M4", cvss_base=4.5, kev=False),
+        Vulnerability(cve_id="CVE-MOCK-LOW", cvss_base=2.0, kev=False),
+    ])
+    db.add_all([
+        DevicePortVuln(device_port_id=dc_port.id, cve_id="CVE-MOCK-KEV", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=gw_port.id, cve_id="CVE-MOCK-M1", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=gw_port.id, cve_id="CVE-MOCK-M2", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=gw_port.id, cve_id="CVE-MOCK-M3", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=gw_port.id, cve_id="CVE-MOCK-M4", state=VULN_STATE_CONFIRMED, matched_at=T),
+        DevicePortVuln(device_port_id=printer_port.id, cve_id="CVE-MOCK-LOW",
+                       state=VULN_STATE_CONFIRMED, matched_at=T),
+    ])
+    db.commit()
+    score.apply_risk_scores(db, [gw.id, dc.id, printer.id], now=T)
+    db.commit()
+    scored = [device_by_ip(db, ip) for ip in ("10.99.0.1", "10.99.0.5", "10.99.0.20")]
+    bands = {score.risk_band_for_score(d.combined_score) for d in scored}
+    assert bands == {"high", "medium", "low"}, {
+        d.current_ip: (d.risk_score, d.combined_score, d.exposure_score) for d in scored
+    }
+    # Exposure must not lift the mid-stack gateway to the ceiling.
+    gw = device_by_ip(db, "10.99.0.1")
+    assert gw.combined_score < 100
+    assert score.risk_band_for_score(gw.combined_score) == "medium"
 
 
 # --- sync.py ---------------------------------------------------------------------------------------
