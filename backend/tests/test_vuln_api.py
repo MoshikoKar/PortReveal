@@ -12,6 +12,7 @@ from app.models import (
     VULN_JOB_QUEUED,
     VULN_JOB_TRIGGER_AFTER_SCAN,
     VULN_STATE_CONFIRMED,
+    VULN_STATE_POTENTIAL,
     DevicePort,
     VulnCpeMatch,
     Vulnerability,
@@ -185,9 +186,28 @@ def test_device_vulns_list_dismiss_and_undismiss(admin, db):
     r = admin.delete(f"/api/devices/{uuid}/vulns/CVE-2024-0001/dismiss", headers=csrf(admin))
     assert r.status_code == 204
     items = admin.get(f"/api/devices/{uuid}/vulns").json()["items"]
-    assert items[0]["state"] != "dismissed"
+    # Undo must restore confirmed (not fall back to potential).
+    assert items[0]["state"] == VULN_STATE_CONFIRMED
 
     assert admin.post(f"/api/devices/{uuid}/vulns/CVE-NOPE/dismiss", headers=csrf(admin)).status_code == 404
+
+
+def test_undismiss_restores_potential_when_that_was_prior_state(admin, db):
+    uuid = _uuid(admin, "10.0.0.1")
+    d = device_by_ip(db, "10.0.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-POT", cvss_base=5.0))
+    db.flush()
+    from app.db import utcnow
+    from app.models import VULN_SOURCE_CACHE, DevicePortVuln
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-POT", state=VULN_STATE_POTENTIAL,
+                          source=VULN_SOURCE_CACHE, matched_at=utcnow()))
+    db.commit()
+
+    assert admin.post(f"/api/devices/{uuid}/vulns/CVE-2024-POT/dismiss", headers=csrf(admin)).status_code == 200
+    assert admin.delete(f"/api/devices/{uuid}/vulns/CVE-2024-POT/dismiss", headers=csrf(admin)).status_code == 204
+    items = admin.get(f"/api/devices/{uuid}/vulns").json()["items"]
+    assert items[0]["cve_id"] == "CVE-2024-POT" and items[0]["state"] == VULN_STATE_POTENTIAL
 
 
 def test_device_vulns_min_cvss_uses_default_for_missing_and_never_hides_kev(admin, db):

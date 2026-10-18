@@ -22,6 +22,7 @@ from ..models import (
     TAG_SOURCE_MANUAL,
     TAG_SOURCE_RULE,
     TAG_SOURCE_SUPPRESSED,
+    VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
     Device,
@@ -472,7 +473,12 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
     if not rows:
         raise HTTPException(404, "No matching vulnerability on this device")
     for row in rows:
-        row.state = VULN_STATE_DISMISSED
+        if row.state != VULN_STATE_DISMISSED:
+            # Remember confirmed vs potential so Undo can restore the exact prior state.
+            row.state_before_dismiss = (
+                row.state if row.state in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
+            )
+            row.state = VULN_STATE_DISMISSED
     apply_risk_scores(db, [d.id], now=utcnow())
     audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
@@ -496,7 +502,9 @@ def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depen
     if not rows:
         raise HTTPException(404, "No dismissed match for this device/CVE")
     for row in rows:
-        row.state = VULN_STATE_POTENTIAL  # corrected to `confirmed` (if warranted) on the next match run
+        prior = row.state_before_dismiss
+        row.state = prior if prior in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
+        row.state_before_dismiss = None
     apply_risk_scores(db, [d.id], now=utcnow())
     audit(db, user.username, "device.vuln_undismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))

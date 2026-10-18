@@ -516,12 +516,18 @@ class DevicePortVuln(Base):
         UniqueConstraint("device_port_id", "cve_id", name="uq_device_port_vuln"),
         one_of("device_port_vulns", "state"),
         one_of("device_port_vulns", "source"),
+        CheckConstraint(
+            "state_before_dismiss IS NULL OR state_before_dismiss IN ('confirmed', 'potential')",
+            name="ck_device_port_vulns_state_before_dismiss",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), index=True)
     cve_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.cve_id", ondelete="CASCADE"), index=True)
     matched_cpe: Mapped[str | None] = mapped_column(String(255), index=True)
     state: Mapped[str] = mapped_column(String(10), default=VULN_STATE_POTENTIAL)
+    # Set on dismiss; Undo restores this instead of always falling back to potential.
+    state_before_dismiss: Mapped[str | None] = mapped_column(String(10))
     source: Mapped[str] = mapped_column(String(15), default=VULN_SOURCE_CACHE)
     matched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     vulnerability: Mapped[Vulnerability] = relationship(lazy="joined")
