@@ -34,6 +34,11 @@ DEVICE_UNKNOWN = "unknown"          # missed by a scan, not yet confirmed gone
 DEVICE_NOT_DETECTED = "not_detected"  # missed by N consecutive complete scans
 DEVICE_STATUSES = (DEVICE_ACTIVE, DEVICE_UNKNOWN, DEVICE_NOT_DETECTED)
 
+IP_ASSIGNMENT_STATIC = "static"
+IP_ASSIGNMENT_DYNAMIC = "dynamic"
+IP_ASSIGNMENT_UNKNOWN = "unknown"
+IP_ASSIGNMENTS = (IP_ASSIGNMENT_STATIC, IP_ASSIGNMENT_DYNAMIC, IP_ASSIGNMENT_UNKNOWN)
+
 SCAN_QUEUED = "queued"
 SCAN_RUNNING = "running"
 SCAN_COMPLETED = "completed"
@@ -70,6 +75,8 @@ EV_TAG_REMOVED = "tag_removed"
 EV_WATCH_MATCH = "watch_match"
 EV_POLICY_VIOLATION = "policy_violation"
 EV_BANNER_CHANGED = "banner_changed"
+EV_OS_CHANGED = "os_changed"
+EV_MONITOR_CHANGE = "monitor_change"
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -85,14 +92,17 @@ EVENT_TYPES = (
     EV_WATCH_MATCH,
     EV_POLICY_VIOLATION,
     EV_BANNER_CHANGED,
+    EV_OS_CHANGED,
+    EV_MONITOR_CHANGE,
 )
 # Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
-ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION)
+ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE)
 EVENT_SEVERITY = {
     EV_DEVICE_DISCOVERED: "high",
     EV_PORT_OPENED: "high",
     EV_WATCH_MATCH: "high",
     EV_POLICY_VIOLATION: "high",
+    EV_MONITOR_CHANGE: "high",
     EV_SERVICE_CHANGED: "medium",
     EV_DEVICE_DISAPPEARED: "medium",
     EV_PORT_CLOSED: "medium",
@@ -103,6 +113,7 @@ EVENT_SEVERITY = {
     EV_TAG_ADDED: "info",
     EV_TAG_REMOVED: "info",
     EV_BANNER_CHANGED: "info",
+    EV_OS_CHANGED: "low",
 }
 
 SEVERITIES = ("high", "medium", "low", "info")
@@ -115,6 +126,7 @@ TAG_SOURCE_SUPPRESSED = "suppressed"
 TAG_SOURCES = (TAG_SOURCE_RULE, TAG_SOURCE_MANUAL, TAG_SOURCE_SUPPRESSED)
 SEARCH_KIND_WATCH = "watch"
 SEARCH_KIND_POLICY = "policy"
+SEARCH_KIND_MONITOR = "monitor"
 
 CPE_SOURCE_NMAP = "nmap"
 CPE_SOURCE_FAVICON = "favicon"
@@ -122,6 +134,38 @@ CPE_SOURCE_SNMP = "snmp"
 CPE_SOURCE_SSDP = "ssdp"
 CPE_SOURCE_HTTP = "http"
 CPE_SOURCES = (CPE_SOURCE_NMAP, CPE_SOURCE_FAVICON, CPE_SOURCE_SNMP, CPE_SOURCE_SSDP, CPE_SOURCE_HTTP)
+
+# Vulnerability matching (spec section 5): confidence is driven only by version precision, never by
+# backport heuristics. `dismissed` is a manual, learned no — it never reappears for that CVE/port.
+VULN_STATE_CONFIRMED = "confirmed"
+VULN_STATE_POTENTIAL = "potential"
+VULN_STATE_DISMISSED = "dismissed"
+VULN_STATES = (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL, VULN_STATE_DISMISSED)
+
+VULN_SOURCE_CACHE = "cache"        # local NVD/KEV/EPSS cache match (core/vuln/match.py)
+VULN_SOURCE_NMAP_SCRIPT = "nmap_script"  # phase 4: SCRIPT_ALLOWLIST finding (e.g. smb-vuln-ms17-010)
+VULN_SOURCES = (VULN_SOURCE_CACHE, VULN_SOURCE_NMAP_SCRIPT)
+
+# Background vulnerability-check jobs (spec section 8): mirrors SCAN_* / WEB_CAPTURE_* below.
+VULN_JOB_QUEUED = "queued"
+VULN_JOB_RUNNING = "running"
+VULN_JOB_COMPLETED = "completed"
+VULN_JOB_PARTIAL = "partial"
+VULN_JOB_FAILED = "failed"
+VULN_JOB_CANCELLED = "cancelled"
+VULN_JOB_ACTIVE_STATES = (VULN_JOB_QUEUED, VULN_JOB_RUNNING)
+VULN_JOB_STATUSES = (
+    VULN_JOB_QUEUED, VULN_JOB_RUNNING, VULN_JOB_COMPLETED, VULN_JOB_PARTIAL, VULN_JOB_FAILED, VULN_JOB_CANCELLED,
+)
+VULN_JOB_TRIGGER_AFTER_SCAN = "after_scan"
+VULN_JOB_TRIGGER_MANUAL = "manual"
+VULN_JOB_TRIGGERS = (VULN_JOB_TRIGGER_AFTER_SCAN, VULN_JOB_TRIGGER_MANUAL)
+
+# Weighted device-type classification (spec section 9): a real, open-ended set driven by
+# core/tagging.py's RULES, so not a CHECK-constrained CLOSED_VALUES column. "unknown" is a
+# sentinel distinct from None/NULL: None means no rule matched at all; "unknown" means some
+# evidence pointed at a type but the combined score stayed below TYPE_CONFIDENCE_THRESHOLD.
+DEVICE_TYPE_UNKNOWN = "unknown"
 
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
@@ -131,6 +175,7 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("users", "source"): USER_SOURCES,
     ("networks", "zone"): NETWORK_ZONES,
     ("devices", "status"): DEVICE_STATUSES,
+    ("devices", "ip_assignment"): IP_ASSIGNMENTS,
     ("device_tags", "source"): TAG_SOURCES,
     ("device_profiles", "criticality"): CRITICALITY_LEVELS,
     ("scans", "scan_type"): SCAN_TYPES,
@@ -138,6 +183,10 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("scans", "status"): SCAN_STATUSES,
     ("events", "event_type"): EVENT_TYPES,
     ("events", "severity"): SEVERITIES,
+    ("device_port_vulns", "state"): VULN_STATES,
+    ("device_port_vulns", "source"): VULN_SOURCES,
+    ("vuln_jobs", "status"): VULN_JOB_STATUSES,
+    ("vuln_jobs", "trigger"): VULN_JOB_TRIGGERS,
 }
 
 
@@ -191,6 +240,8 @@ class Network(Base):
     vpn_s2s: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     baseline_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Set when removed from Settings: the row and its findings stay, hidden from default views.
+    archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
 
@@ -214,7 +265,7 @@ class AppSetting(Base):
 
 class Device(Base):
     __tablename__ = "devices"
-    __table_args__ = (one_of("devices", "status"),)
+    __table_args__ = (one_of("devices", "status"), one_of("devices", "ip_assignment"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)
     network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), index=True)
@@ -224,6 +275,12 @@ class Device(Base):
     hostname: Mapped[str | None] = mapped_column(String(255), index=True)
     dns_name: Mapped[str | None] = mapped_column(String(255))
     os_name: Mapped[str | None] = mapped_column(String(255))
+    os_accuracy: Mapped[int | None] = mapped_column(Integer)
+    os_detected_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    os_source: Mapped[str | None] = mapped_column(String(20))  # nmap_os | service | ssh | http | snmp | ntlm
+    # Flap guard (compare.py): an OS name that differs from os_name but hasn't yet been seen twice
+    # or crossed the +10 accuracy bar. {"name": str, "accuracy": int | None} or None.
+    os_pending: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default=DEVICE_ACTIVE, index=True)
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)  # retention purge
@@ -238,9 +295,29 @@ class Device(Base):
     absence_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Inventory intelligence (recomputed after every scan / web capture that touches the device)
     device_type: Mapped[str | None] = mapped_column(String(40), index=True)
+    # Weighted multi-signal confidence for device_type, 0-100 (spec section 9). device_type is
+    # "unknown" (not a guess) when the winning type's score falls below TYPE_CONFIDENCE_THRESHOLD.
+    type_confidence: Mapped[int | None] = mapped_column(Integer)
     exposure_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
     classified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Vulnerability-based risk (spec section 5): separate from exposure_score above.
+    risk_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    combined_score: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    risk_scored_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     ssh_hostkey_sha256: Mapped[str | None] = mapped_column(String(64))
+    # Static vs dynamic IP (spec 7): derived from device_ips history in core/ip_assignment.py.
+    ip_assignment: Mapped[str | None] = mapped_column(String(10))
+    # Local-only discovery name (spec section 9.2): mDNS/SSDP/NetBIOS, never nmap/-sU. A weighted
+    # type-classification signal, and a fallback display name when no DNS/nmap hostname is known.
+    discovery_name: Mapped[str | None] = mapped_column(String(255))
+    discovery_source: Mapped[str | None] = mapped_column(String(10))  # mdns | ssdp | netbios
+    # Last time a local discovery pass heard this name; used to age out quietly instead of wiping
+    # per pass when mDNS/SSDP windows or the NetBIOS query budget miss a host.
+    discovery_name_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Latency / uptime (spec 6)
+    last_rtt_ms: Mapped[float | None] = mapped_column(Float)
+    # Since when the device has been continuously seen (reset on a not_detected -> seen transition).
+    continuous_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     ports: Mapped[list[DevicePort]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DevicePort.port"
@@ -266,6 +343,17 @@ class DeviceIP(Base):
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     device: Mapped[Device] = relationship(back_populates="ips")
+
+
+class DeviceRttSample(Base):
+    """One RTT measurement (nmap `<times srtt=...>`) for a device's RTT-over-time chart."""
+
+    __tablename__ = "device_rtt_samples"
+    __table_args__ = (Index("ix_device_rtt_samples_device_sampled", "device_id", "sampled_at"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
+    rtt_ms: Mapped[float] = mapped_column(Float)
+    sampled_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class DevicePort(Base):
@@ -345,6 +433,9 @@ class PortTls(Base):
     """TLS certificate observed on an open port (HTTPS, LDAPS, RDP, etc.)."""
 
     __tablename__ = "port_tls"
+    # Name must match migration 0009 (`ix_port_tls_fingerprint`); auto `index=True` would drift to
+    # `ix_port_tls_fingerprint_sha256` and fail `alembic check` on existing installs.
+    __table_args__ = (Index("ix_port_tls_fingerprint", "fingerprint_sha256"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), unique=True)
     device_id: Mapped[int] = mapped_column(ForeignKey("devices.id", ondelete="CASCADE"), index=True)
@@ -353,7 +444,7 @@ class PortTls(Base):
     issuer: Mapped[str | None] = mapped_column(String(500))
     not_before: Mapped[datetime | None] = mapped_column(UTCDateTime)
     not_after: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    fingerprint_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    fingerprint_sha256: Mapped[str | None] = mapped_column(String(64))
     self_signed: Mapped[bool] = mapped_column(Boolean, default=False)
     expired: Mapped[bool] = mapped_column(Boolean, default=False)
     expires_soon: Mapped[bool] = mapped_column(Boolean, default=False)  # < 30 days
@@ -375,6 +466,96 @@ class PortCpe(Base):
     source: Mapped[str] = mapped_column(String(20), default=CPE_SOURCE_NMAP)
     first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class Vulnerability(Base):
+    """One CVE record from the local vulnerability cache (NVD + CISA KEV + FIRST EPSS)."""
+
+    __tablename__ = "vulnerabilities"
+    cve_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    cvss_base: Mapped[float | None] = mapped_column(Float)
+    cvss_vector: Mapped[str | None] = mapped_column(String(100))
+    severity: Mapped[str | None] = mapped_column(String(10))  # NVD baseSeverity, informational only
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_modified: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    kev: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
+    kev_added_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    epss: Mapped[float | None] = mapped_column(Float)
+    epss_percentile: Mapped[float | None] = mapped_column(Float)
+    summary: Mapped[str | None] = mapped_column(Text)
+
+
+class VulnCpeMatch(Base):
+    """One CPE 2.3 (optionally version-ranged) that a CVE applies to."""
+
+    __tablename__ = "vuln_cpe_match"
+    __table_args__ = (Index("ix_vuln_cpe_match_vendor_product", "vendor_product"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cve_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.cve_id", ondelete="CASCADE"), index=True)
+    cpe23: Mapped[str] = mapped_column(String(255))
+    vendor_product: Mapped[str] = mapped_column(String(200))  # "vendor:product", lowercased, for fast lookup
+    version_start: Mapped[str | None] = mapped_column(String(100))
+    version_start_incl: Mapped[bool | None] = mapped_column(Boolean)
+    version_end: Mapped[str | None] = mapped_column(String(100))
+    version_end_excl: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class DevicePortVuln(Base):
+    """A CVE matched to one device port, by local CPE cache lookup or an allow-listed nmap script."""
+
+    __tablename__ = "device_port_vulns"
+    __table_args__ = (
+        UniqueConstraint("device_port_id", "cve_id", name="uq_device_port_vuln"),
+        one_of("device_port_vulns", "state"),
+        one_of("device_port_vulns", "source"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_port_id: Mapped[int] = mapped_column(ForeignKey("device_ports.id", ondelete="CASCADE"), index=True)
+    cve_id: Mapped[str] = mapped_column(ForeignKey("vulnerabilities.cve_id", ondelete="CASCADE"), index=True)
+    matched_cpe: Mapped[str | None] = mapped_column(String(255))
+    state: Mapped[str] = mapped_column(String(10), default=VULN_STATE_POTENTIAL)
+    source: Mapped[str] = mapped_column(String(15), default=VULN_SOURCE_CACHE)
+    matched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    vulnerability: Mapped[Vulnerability] = relationship(lazy="joined")
+
+
+class VulnFeedState(Base):
+    """Sync bookkeeping for one vulnerability feed source (nvd / kev / epss)."""
+
+    __tablename__ = "vuln_feed_state"
+    source: Mapped[str] = mapped_column(String(10), primary_key=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_modified_cursor: Mapped[str | None] = mapped_column(String(40))
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    # NVD yearly JSON mirror progress (nvd source only). Incomplete mirrors must resume remaining
+    # years; do not treat a partial cache as "bootstrap done".
+    mirror_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    mirror_next_year: Mapped[int | None] = mapped_column(Integer)
+
+
+class VulnJob(Base):
+    """Background vulnerability-check job (spec section 8): local CPE match, optional allow-listed
+    NSE scripts, then risk/combined rescoring. Mirrors `Scan` / `WebCapture`."""
+
+    __tablename__ = "vuln_jobs"
+    __table_args__ = (one_of("vuln_jobs", "status"), one_of("vuln_jobs", "trigger"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)
+    status: Mapped[str] = mapped_column(String(20), default=VULN_JOB_QUEUED, index=True)
+    trigger: Mapped[str] = mapped_column(String(20), default=VULN_JOB_TRIGGER_MANUAL)
+    scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"), index=True)
+    network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"))
+    device_ids: Mapped[list | None] = mapped_column(JSON)
+    requested_by: Mapped[str | None] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    stage: Mapped[str | None] = mapped_column(String(40))
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    error: Mapped[str | None] = mapped_column(Text)
+    stats: Mapped[dict | None] = mapped_column(JSON)
+    notes: Mapped[str | None] = mapped_column(Text)
 
 
 class PortSnmp(Base):
@@ -435,12 +616,14 @@ class DeviceProfile(Base):
     criticality: Mapped[str | None] = mapped_column(String(10))  # CRITICALITY_LEVELS
     notes: Mapped[str | None] = mapped_column(Text)
     exposure_factors: Mapped[list | None] = mapped_column(JSON)
+    risk_factors: Mapped[list | None] = mapped_column(JSON)
+    type_evidence: Mapped[list | None] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     device: Mapped[Device] = relationship(back_populates="profile")
 
 
 class SavedSearch(Base):
-    """A named query. Watches alert on new matches; policies treat every match as a violation."""
+    """A named query. Watches/policies alert on new matches; monitors alert on changes to matching hosts."""
 
     __tablename__ = "saved_searches"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

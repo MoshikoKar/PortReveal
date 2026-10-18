@@ -46,9 +46,18 @@ def host_document(ip: str, db: Session = Depends(get_db), user: User = Depends(c
         raise HTTPException(404, f"No device with IP {ip}")
     tags = tags_by_device(db, [dev.id]).get(dev.id, [])
     port_ids = [p.id for p in dev.ports if p.is_open]
-    http_by = {h.device_port_id: h for h in db.scalars(select(PortHttp).where(PortHttp.device_port_id.in_(port_ids)))} if port_ids else {}
-    tls_by = {t.device_port_id: t for t in db.scalars(select(PortTls).where(PortTls.device_port_id.in_(port_ids)))} if port_ids else {}
-    snmp_by = {s.device_port_id: s for s in db.scalars(select(PortSnmp).where(PortSnmp.device_port_id.in_(port_ids)))} if port_ids else {}
+    http_by = (
+        {h.device_port_id: h for h in db.scalars(select(PortHttp).where(PortHttp.device_port_id.in_(port_ids)))}
+        if port_ids else {}
+    )
+    tls_by = (
+        {t.device_port_id: t for t in db.scalars(select(PortTls).where(PortTls.device_port_id.in_(port_ids)))}
+        if port_ids else {}
+    )
+    snmp_by = (
+        {s.device_port_id: s for s in db.scalars(select(PortSnmp).where(PortSnmp.device_port_id.in_(port_ids)))}
+        if port_ids else {}
+    )
     banners = {}
     if port_ids:
         for b in db.scalars(select(ServiceBanner).where(ServiceBanner.device_port_id.in_(port_ids))

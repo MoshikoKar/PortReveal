@@ -51,12 +51,16 @@ POSTGRES_MAX_OVERFLOW = 10
 POSTGRES_POOL_TIMEOUT_SECONDS = 30
 POSTGRES_POOL_RECYCLE_SECONDS = 1800
 
+# How long a SQLite writer waits for the single write lock (background jobs batch their commits
+# well below this).
+SQLITE_BUSY_TIMEOUT_SECONDS = 60
+
 
 def _sqlite_pragmas(dbapi_conn, _record):
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA foreign_keys=ON")
     cur.execute("PRAGMA journal_mode=WAL")
-    cur.execute("PRAGMA busy_timeout=15000")
+    cur.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_SECONDS * 1000}")
     cur.execute("PRAGMA synchronous=NORMAL")
     cur.close()
 
@@ -72,7 +76,8 @@ def init_engine(url: str | None = None) -> Engine:
         db_file = url.replace("sqlite:///", "", 1)
         if db_file and ":memory:" not in db_file:
             Path(db_file).parent.mkdir(parents=True, exist_ok=True)
-        engine = create_engine(url, connect_args={"check_same_thread": False, "timeout": 15})
+        engine = create_engine(url, connect_args={"check_same_thread": False,
+                                                    "timeout": SQLITE_BUSY_TIMEOUT_SECONDS})
         event.listen(engine, "connect", _sqlite_pragmas)
     else:
         engine = create_engine(

@@ -1,12 +1,13 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { del, post, put } from '../api';
-import type { DeviceDetail, DeviceProfile, TimelineItem } from '../types';
+import type { DeviceDetail, DeviceProfile, DeviceVuln, TimelineItem } from '../types';
 import { CRITICALITY_LEVELS, EVENT_LABELS, SCAN_TYPE_LABELS, fmtTime, useApi } from '../util';
-import { Card, Empty, ErrorBox, Loading, Modal, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
+import { Card, Empty, ErrorBox, Loading, Modal, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, confirmDiscard } from './ui';
 
 const TIMELINE_LIMIT = 100;
 const TIMELINE_PREVIEW = 10;
+const VULN_PAGE = 15;
 
 function tagTitle(t: { source: string; reason: string | null }) {
   const kind = t.source === 'manual' ? 'Manual' : t.source === 'suppressed' ? 'Dismissed' : 'Rule';
@@ -83,7 +84,8 @@ export function TagEditor({ d, isAdmin, onChange }: { d: DeviceDetail; isAdmin: 
       {isAdmin && (
         <div className="muted small">
           Rule tags recompute each scan. × dismisses a rule tag so it stays off; × on a dismissed tag clears the dismiss.
-          Adding a rule or dismissed tag pins it as manual.
+          Adding a rule or dismissed tag pins it as manual. Pinning a type-bearing tag (e.g. printer, camera)
+          overrides automatic device-type classification.
         </div>
       )}
       <ErrorBox error={error} />
@@ -151,6 +153,39 @@ export function ProfileCard({ d, isAdmin, onChange }: { d: DeviceDetail; isAdmin
   );
 }
 
+export function TypeEvidenceCard({ d }: { d: DeviceDetail }) {
+  const evidence = d.profile.type_evidence || [];
+  return (
+    <Card title={<h2 className="row" style={{ gap: 8 }}>
+      Type evidence
+      {d.type_confidence != null && <span className="badge outline">{d.type_confidence}%</span>}
+    </h2>} flush>
+      {!evidence.length ? (
+        <div className="card-body muted small">
+          {d.type === 'unknown'
+            ? 'Signals were too weak to assert a device type (shown as unknown to avoid false positives).'
+            : 'No type evidence recorded yet.'}
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Signal</th><th>Points</th><th>Detail</th></tr></thead>
+            <tbody>
+              {evidence.map((e, i) => (
+                <tr key={`${e.factor}-${i}`}>
+                  <td className="mono small">{e.factor}</td>
+                  <td className="mono small">+{e.points}</td>
+                  <td className="small">{e.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function ExposureCard({ d }: { d: DeviceDetail }) {
   const factors = d.profile.exposure_factors;
   return (
@@ -170,6 +205,194 @@ export function ExposureCard({ d }: { d: DeviceDetail }) {
             ))}
           </tbody>
         </table>
+      )}
+    </Card>
+  );
+}
+
+export function RiskCard({ d }: { d: DeviceDetail }) {
+  const factors = d.profile.risk_factors;
+  return (
+    <Card title={<h2 className="row" style={{ gap: 8 }}>Risk score <RiskBadge score={d.risk_score} kind="risk" /></h2>} flush>
+      {!d.risk_scored_at ? (
+        <div className="card-body muted small">Not scored yet: no vulnerability feed sync has run, or no CVE matched this device's services.</div>
+      ) : !factors.length ? (
+        <div className="card-body muted small">No known vulnerabilities matched to this device's identified services.</div>
+      ) : (
+        <table>
+          <tbody>
+            {factors.map((f, i) => (
+              <tr key={`${f.factor}-${i}`}>
+                <td>{f.detail}</td>
+                <td className="right mono nowrap">+{f.points}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="card-body muted small" style={{ borderTop: '1px solid var(--border)' }}>
+        Combined score (risk boosted by exposure): <RiskBadge score={d.combined_score} kind="combined" />
+      </div>
+    </Card>
+  );
+}
+
+/** Matched CVEs for this device's open services (spec section 5): confirmed/potential, KEV, EPSS. */
+export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: boolean; onReload: () => void }) {
+  const { data, error, reload } = useApi<{ items: DeviceVuln[] }>(`/devices/${d.uuid}/vulns`, undefined, 30000);
+  const [busy, setBusy] = useState<string | null>(null);
+  const items = data?.items ?? [];
+  const active = items.filter((v) => v.state !== 'dismissed');
+  const dismissed = items.filter((v) => v.state === 'dismissed');
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [page, setPage] = useState(1);
+
+  const dismiss = async (cve_id: string) => {
+    if (busy) return;
+    setBusy(cve_id);
+    try {
+      await post(`/devices/${d.uuid}/vulns/${encodeURIComponent(cve_id)}/dismiss`);
+      await reload();
+      onReload();
+    } finally {
+      setBusy(null);
+    }
+  };
+  const undismiss = async (cve_id: string) => {
+    if (busy) return;
+    setBusy(cve_id);
+    try {
+      await del(`/devices/${d.uuid}/vulns/${encodeURIComponent(cve_id)}/dismiss`);
+      await reload();
+      onReload();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rows = [...active, ...(showDismissed ? dismissed : [])];
+  const shown = expanded
+    ? rows
+    : rows.slice((page - 1) * VULN_PAGE, page * VULN_PAGE);
+
+  return (
+    <Card title="Vulnerabilities" flush
+      actions={dismissed.length > 0 && (
+        <label className="check small">
+          <input type="checkbox" checked={showDismissed} onChange={(e) => {
+            setShowDismissed(e.target.checked);
+            setPage(1);
+          }} />
+          show {dismissed.length} dismissed
+        </label>
+      )}>
+      <ErrorBox error={error} />
+      {!data ? (!error && <Loading />) : !active.length && !showDismissed ? (
+        <Empty>No matched CVEs for this device's identified services.</Empty>
+      ) : (
+        <>
+          <div className="table-wrap">
+            <table className="compact">
+              <thead><tr><th>CVE</th><th>Port / service</th><th>CVSS</th><th>State</th><th></th></tr></thead>
+              <tbody>
+                {shown.map((v) => (
+                  <tr key={`${v.cve_id}-${v.protocol}-${v.port}`} className={v.state === 'dismissed' ? 'dim' : ''}>
+                    <td className="mono nowrap">
+                      {v.cve_id}
+                      {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
+                      {v.epss != null && <span className="muted small" style={{ marginLeft: 6 }}>EPSS {(v.epss * 100).toFixed(0)}%</span>}
+                    </td>
+                    <td className="small">
+                      {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
+                    </td>
+                    <td className="mono small">{v.cvss_base != null ? v.cvss_base.toFixed(1) : '—'}</td>
+                    <td>
+                      <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}>
+                        {v.state}
+                      </span>
+                      {v.source === 'nmap_script' && <span className="badge outline" style={{ marginLeft: 6 }}>script</span>}
+                    </td>
+                    <td className="right">
+                      {isAdmin && (
+                        v.state === 'dismissed' ? (
+                          <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => undismiss(v.cve_id)}>Undo</button>
+                        ) : (
+                          <button className="btn sm ghost" disabled={busy === v.cve_id} onClick={() => dismiss(v.cve_id)}>Dismiss</button>
+                        )
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {rows.length > VULN_PAGE && (
+            <button type="button" className="btn see-all" aria-expanded={expanded} onClick={() => {
+              setExpanded((v) => !v);
+              setPage(1);
+            }}>
+              {expanded ? 'Show less' : `See all ${rows.length} →`}
+            </button>
+          )}
+          {!expanded && (
+            <Pager page={page} pageSize={VULN_PAGE} total={rows.length} onPage={setPage} />
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
+
+const RTT_CHART_W = 280;
+const RTT_CHART_H = 64;
+const RTT_PAD = 4;
+
+/** Minimal dependency-free RTT-over-time chart with a zero baseline so small changes are not exaggerated. */
+function RttSparkline({ samples }: { samples: { rtt_ms: number; sampled_at: string }[] }) {
+  if (samples.length < 2) return null;
+  const values = samples.map((s) => s.rtt_ms);
+  const max = Math.max(...values, 1);
+  const step = (RTT_CHART_W - 28) / (samples.length - 1);
+  const y = (v: number) => RTT_PAD + (1 - v / max) * (RTT_CHART_H - 2 * RTT_PAD);
+  const points = values.map((v, i) => `${(28 + i * step).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const last = samples[samples.length - 1];
+  return (
+    <div>
+      <svg width={RTT_CHART_W} height={RTT_CHART_H} role="img"
+        aria-label={`RTT over time, 0 to ${max.toFixed(1)} ms`}>
+        <line x1={28} y1={y(0)} x2={RTT_CHART_W} y2={y(0)} stroke="var(--border, #ccc)" strokeWidth={1} />
+        <line x1={28} y1={RTT_PAD} x2={28} y2={RTT_CHART_H - RTT_PAD} stroke="var(--border, #ccc)" strokeWidth={1} />
+        <text x={0} y={RTT_PAD + 8} className="muted" style={{ fontSize: 9 }}>{max.toFixed(0)}</text>
+        <text x={0} y={RTT_CHART_H - 2} className="muted" style={{ fontSize: 9 }}>0</text>
+        <polyline points={points} fill="none" stroke="var(--accent, #4a90d9)" strokeWidth={1.5} />
+        <circle cx={28 + (samples.length - 1) * step} cy={y(last.rtt_ms)} r={2.5} fill="var(--accent, #4a90d9)">
+          <title>{`${last.rtt_ms.toFixed(1)} ms @ ${fmtTime(last.sampled_at)}`}</title>
+        </circle>
+      </svg>
+      <div className="muted small">Hover the end point for the latest sample. Scale starts at 0 ms.</div>
+    </div>
+  );
+}
+
+export function RttCard({ d }: { d: DeviceDetail }) {
+  return (
+    <Card title="Latency &amp; uptime">
+      <dl className="dl">
+        <dt>Last RTT</dt>
+        <dd>
+          {d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">—</span>}
+          <div className="muted small">Unprivileged TCP-connect scans report less accurate RTT than privileged SYN scans.</div>
+        </dd>
+        <dt>Availability ({d.availability_window_days}d)</dt>
+        <dd>{d.availability_pct != null ? `${d.availability_pct}%` : <span className="muted">not enough history</span>}</dd>
+        <dt>Continuous since</dt>
+        <dd>{d.continuous_since ? fmtTime(d.continuous_since) : <span className="muted">—</span>}</dd>
+      </dl>
+      {d.rtt_samples.length >= 2 && (
+        <div className="card-body" style={{ paddingTop: 0 }}>
+          <RttSparkline samples={d.rtt_samples} />
+        </div>
       )}
     </Card>
   );

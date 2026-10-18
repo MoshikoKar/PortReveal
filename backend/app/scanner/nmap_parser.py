@@ -69,9 +69,43 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
         user = [n.get("name") for n in names if n.get("name")]
         obs.hostname = _clean((ptr or user or [None])[0])
 
-        osmatch = host.find("os/osmatch")
-        if osmatch is not None and osmatch.get("name"):
-            obs.os_name = f"{osmatch.get('name')} ({osmatch.get('accuracy', '?')}%)"
+        best_name, best_accuracy = None, None
+        for osmatch in host.findall("os/osmatch"):
+            name = osmatch.get("name")
+            if not name:
+                continue
+            accuracy_raw = osmatch.get("accuracy")
+            accuracy = int(accuracy_raw) if accuracy_raw and accuracy_raw.isdigit() else None
+            if best_name is None or (accuracy is not None and (best_accuracy is None or accuracy > best_accuracy)):
+                best_name, best_accuracy = name, accuracy
+        if best_name is not None:
+            obs.os_name = best_name
+            obs.os_accuracy = best_accuracy
+            obs.os_from_osmatch = True
+            obs.os_source = "nmap_os"
+        else:
+            # Service ostype is a weak fallback only (never overrides a prior -O match on merge).
+            for p in host.findall("ports/port"):
+                svc = p.find("service")
+                if svc is None:
+                    continue
+                ostype = (svc.get("ostype") or "").strip()
+                if ostype:
+                    obs.os_name = ostype
+                    obs.os_source = "service"
+                    obs.os_from_osmatch = False
+                    break
+
+        times = host.find("times")
+        if times is not None:
+            srtt = times.get("srtt")  # microseconds
+            if srtt and srtt.lstrip("-").isdigit() and int(srtt) >= 0:
+                obs.rtt_ms = int(srtt) / 1000.0
+
+        for s in host.findall("hostscript/script"):
+            sid = s.get("id")
+            if sid:
+                obs.host_scripts[sid] = s.get("output") or ""
 
         timed_out = host.get("timedout") == "true"
         ports_el = host.find("ports")
@@ -107,6 +141,10 @@ def parse_nmap_xml(xml_text: str) -> ParsedRun:
                         # which nmap still reports as conf 10.
                         if not apply_servicefp(po, svc.get("servicefp")) and po.method == "probed":
                             po.confidence = min(po.confidence or SOFT_MATCH_CONFIDENCE, SOFT_MATCH_CONFIDENCE)
+                for s in p.findall("script"):
+                    sid = s.get("id")
+                    if sid:
+                        po.scripts[sid] = s.get("output") or ""
                 obs.ports.append(po)
         run.hosts.append(obs)
     return run

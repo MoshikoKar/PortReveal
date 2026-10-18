@@ -8,6 +8,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
+from ..core.availability import AVAILABILITY_WINDOW_DAYS, availability_pct
 from ..core.exposure import level as exposure_level
 from ..core.mockdata import device_visible, event_visible, scan_visible
 from ..core.query.compile import compile_host
@@ -21,15 +22,21 @@ from ..models import (
     TAG_SOURCE_MANUAL,
     TAG_SOURCE_RULE,
     TAG_SOURCE_SUPPRESSED,
+    VULN_STATE_DISMISSED,
+    VULN_STATE_POTENTIAL,
     Device,
     DevicePort,
+    DevicePortVuln,
     DeviceProfile,
+    DeviceRttSample,
     DeviceTag,
     Event,
     Network,
     Scan,
     ScanHost,
     User,
+    Vulnerability,
+    VulnJob,
     WebCapture,
     WebPage,
 )
@@ -49,8 +56,10 @@ def _device_filter_conds(
     network_id: int | None,
     port: int | None,
     service: str | None,
+    include_archived: bool = False,
 ) -> list:
-    conds: list = [device_visible(db)]
+    # Filtering by one network explicitly is an opt-in to its findings, archived or not.
+    conds: list = [device_visible(db, include_archived=include_archived or network_id is not None)]
     if q and q.strip():
         conds.append(compile_host(prepare(q), make_ctx(db)))
     if status:
@@ -100,6 +109,9 @@ def _device_order_by(db: Session, sort: str, order: str) -> list:
         return [directed(_open_port_count_expr()), directed(ip_key, flip=True), directed(Device.id)]
     if sort == "status":
         return [directed(Device.status), directed(ip_key), directed(Device.id)]
+    if sort == "os":
+        os_key = func.coalesce(func.nullif(Device.os_name, ""), "~")
+        return [directed(os_key), directed(ip_key), directed(Device.id)]
     return [directed(ip_key), directed(Device.id)]
 
 
@@ -110,13 +122,15 @@ def list_devices(
     network_id: int | None = None,
     port: int | None = Query(None, ge=1, le=65535),
     service: str | None = Query(None, max_length=100),
-    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status)$"),
+    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status|os)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
+    include_archived: bool = False,
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service)
+    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service,
+                                 include_archived=include_archived)
     total = db.scalar(select(func.count(Device.id)).where(*conds)) or 0
     devices = list(db.scalars(
         select(Device)
@@ -137,13 +151,15 @@ def list_device_uuids(
     network_id: int | None = None,
     port: int | None = Query(None, ge=1, le=65535),
     service: str | None = Query(None, max_length=100),
-    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status)$"),
+    sort: str = Query("ip", pattern="^(ip|hostname|last_seen|first_seen|open_ports|status|os)$"),
     order: str = Query("asc", pattern="^(asc|desc)$"),
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
     """All device UUIDs matching the same filters as the list endpoint (for bulk select)."""
-    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service)
+    conds = _device_filter_conds(db, q=q, status=status, network_id=network_id, port=port, service=service,
+                                 include_archived=include_archived)
     # LIMIT cap+1 in SQL: never materializes more than the cap; one extra row detects overflow,
     # and the COUNT only runs then (for the error message).
     uuids = list(db.scalars(
@@ -179,8 +195,35 @@ def _profile_out(p: DeviceProfile | None) -> dict:
     return {
         "owner": p.owner if p else None, "location": p.location if p else None,
         "criticality": p.criticality if p else None, "notes": p.notes if p else None,
-        "exposure_factors": (p.exposure_factors or []) if p else [], "updated_at": p.updated_at if p else None,
+        "exposure_factors": (p.exposure_factors or []) if p else [],
+        "risk_factors": (p.risk_factors or []) if p else [],
+        "type_evidence": (p.type_evidence or []) if p else [],
+        "updated_at": p.updated_at if p else None,
     }
+
+
+def _latest_vuln_job_for_device(db: Session, device_id: int) -> VulnJob | None:
+    """Newest job that targeted this device. JSON device_ids is scanned in Python (portable across
+    SQLite/Postgres); bound the walk so a busy install cannot load the whole history."""
+    # Walk newest-first in chunks until a hit (covers jobs older than a tiny recent window).
+    offset, chunk = 0, 100
+    while offset < 2000:
+        batch = db.scalars(
+            select(VulnJob).order_by(VulnJob.id.desc()).offset(offset).limit(chunk)
+        ).all()
+        if not batch:
+            return None
+        for j in batch:
+            if j.device_ids and device_id in j.device_ids:
+                return j
+        offset += chunk
+    return None
+
+
+def _vuln_job_summary(j: VulnJob | None) -> dict | None:
+    if j is None:
+        return None
+    return {"id": j.id, "status": j.status, "stage": j.stage, "finished_at": j.finished_at}
 
 
 @router.get("/{uuid}")
@@ -188,20 +231,33 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
     d = _get(db, uuid, detail=True)
     net = d.network
     score = d.exposure_score or 0
+    now = utcnow()
+    rtt_samples = db.scalars(
+        select(DeviceRttSample).where(DeviceRttSample.device_id == d.id)
+        .order_by(DeviceRttSample.sampled_at.desc()).limit(200)
+    ).all()
     out = device_summary(d, network_name=net.name if net else None)
     out.update({
         "dns_name": d.dns_name,
         "missed_scans": d.missed_scans,
         "last_port_scan_at": d.last_port_scan_at,
         "full_scanned_at": d.full_scanned_at,
+        "availability_pct": availability_pct(db, d.id, now=now),
+        "availability_window_days": AVAILABILITY_WINDOW_DAYS,
+        "rtt_samples": [{"rtt_ms": s.rtt_ms, "sampled_at": s.sampled_at}
+                        for s in reversed(rtt_samples)],
+        "vuln_job": _vuln_job_summary(_latest_vuln_job_for_device(db, d.id)),
         "ports": [{**port_out(p), "cpe": p.cpe.split() if p.cpe else [], "tunnel": p.tunnel,
                    "http": http_out(p.http)}
                   for p in sorted(d.ports, key=lambda p: (not p.is_open, p.port))],
         "ips": [{"ip": i.ip, "first_seen": i.first_seen, "last_seen": i.last_seen} for i in d.ips],
         "previous_ips": [i.ip for i in d.ips if i.ip != d.current_ip],
         "type": d.device_type,
+        "type_confidence": d.type_confidence,
         "score": score,
         "score_level": exposure_level(score),
+        "risk_level": exposure_level(d.risk_score or 0),
+        "combined_level": exposure_level(d.combined_score or 0),
         "classified_at": d.classified_at,
         "zone": net.zone if net else None,
         "tags": [_tag_out(t) for t in d.tags],
@@ -312,7 +368,7 @@ def device_timeline(uuid: str, limit: int = Query(100, ge=1, le=TIMELINE_MAX_PER
     """Events, scans and web captures of one device, newest first (the UI groups them by day)."""
     d = _get(db, uuid)
     items: list[dict] = []
-    for e in db.scalars(select(Event).where(Event.device_id == d.id, event_visible(db))
+    for e in db.scalars(select(Event).where(Event.device_id == d.id, event_visible(db, include_archived=True))
                         .order_by(Event.id.desc()).limit(limit)).unique():
         items.append({"kind": "event", "at": e.created_at, **event_out(e)})
     for sh, s in db.execute(
@@ -337,7 +393,7 @@ def device_timeline(uuid: str, limit: int = Query(100, ge=1, le=TIMELINE_MAX_PER
 def device_events(uuid: str, paging: Paging = Depends(), db: Session = Depends(get_db),
                   user: User = Depends(current_user)):
     d = _get(db, uuid)
-    conds = (Event.device_id == d.id, event_visible(db))
+    conds = (Event.device_id == d.id, event_visible(db, include_archived=True))
     base = select(Event).where(*conds)
     total = db.scalar(select(func.count(Event.id)).where(*conds)) or 0
     rows = db.scalars(base.order_by(Event.id.desc()).offset(paging.offset).limit(paging.page_size)).unique().all()
@@ -359,6 +415,99 @@ def device_scans(uuid: str, paging: Paging = Depends(), db: Session = Depends(ge
         "created_at": sh.created_at, "ip": sh.ip, "status": sh.status, "open_ports": sh.open_ports,
     } for sh, s in rows]
     return paged(items, total, paging)
+
+
+def _vuln_out(dpv: DevicePortVuln, port: DevicePort, vuln: Vulnerability) -> dict:
+    return {
+        "cve_id": vuln.cve_id,
+        "port": port.port, "protocol": port.protocol, "service": port.service,
+        "product": port.product, "version": port.version,
+        "matched_cpe": dpv.matched_cpe,
+        "state": dpv.state,
+        "source": dpv.source,
+        "cvss_base": vuln.cvss_base,
+        "cvss_vector": vuln.cvss_vector,
+        "severity": vuln.severity,
+        "kev": vuln.kev,
+        "epss": vuln.epss,
+        "epss_percentile": vuln.epss_percentile,
+        "summary": vuln.summary,
+        "matched_at": dpv.matched_at,
+    }
+
+
+@router.get("/{uuid}/vulns")
+def device_vulns(uuid: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Every CVE matched to this device's ports (confirmed, potential and dismissed)."""
+    from ..settings_store import VulnSettings, get_section
+
+    d = _get(db, uuid)
+    cfg = get_section(db, VulnSettings)
+    rows = db.execute(
+        select(DevicePortVuln, DevicePort, Vulnerability)
+        .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
+        .where(DevicePort.device_id == d.id)
+    ).all()
+    items = []
+    from ..core.vuln.score import DEFAULT_CVSS
+
+    for dpv, port, vuln in rows:
+        if not cfg.include_potential and dpv.state == VULN_STATE_POTENTIAL:
+            continue
+        # Consistent with scoring: missing CVSS uses DEFAULT_CVSS (not 0). KEV is never hidden by
+        # the display floor — exploited-in-the-wild entries must remain visible.
+        if dpv.state != VULN_STATE_DISMISSED and not vuln.kev:
+            effective_cvss = vuln.cvss_base if vuln.cvss_base is not None else DEFAULT_CVSS
+            if effective_cvss < cfg.min_cvss_display:
+                continue
+        items.append(_vuln_out(dpv, port, vuln))
+    items.sort(key=lambda it: (it["state"] == VULN_STATE_DISMISSED, it["kev"] is not True,
+                               -(it["cvss_base"] or 0)))
+    return {"items": items}
+
+
+@router.post("/{uuid}/vulns/{cve_id}/dismiss")
+def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
+                 user: User = Depends(require_admin)):
+    """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
+    from ..core.vuln.score import apply_risk_scores
+
+    d = _get(db, uuid)
+    rows = db.scalars(
+        select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .where(DevicePort.device_id == d.id, DevicePortVuln.cve_id == cve_id)
+    ).all()
+    if not rows:
+        raise HTTPException(404, "No matching vulnerability on this device")
+    for row in rows:
+        row.state = VULN_STATE_DISMISSED
+    apply_risk_scores(db, [d.id], now=utcnow())
+    audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
+          {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{uuid}/vulns/{cve_id}/dismiss", status_code=204)
+def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
+    from ..core.vuln.score import apply_risk_scores
+
+    d = _get(db, uuid)
+    rows = db.scalars(
+        select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .where(DevicePort.device_id == d.id, DevicePortVuln.cve_id == cve_id,
+               DevicePortVuln.state == VULN_STATE_DISMISSED)
+    ).all()
+    if not rows:
+        raise HTTPException(404, "No dismissed match for this device/CVE")
+    for row in rows:
+        row.state = VULN_STATE_POTENTIAL  # corrected to `confirmed` (if warranted) on the next match run
+    apply_risk_scores(db, [d.id], now=utcnow())
+    audit(db, user.username, "device.vuln_undismiss", d.hostname or d.current_ip,
+          {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
+    db.commit()
 
 
 @router.delete("/{uuid}", status_code=204)

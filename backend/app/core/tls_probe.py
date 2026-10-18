@@ -77,8 +77,14 @@ def _weak_key(cert: x509.Certificate) -> bool:
 def parse_der(der: bytes, *, now: datetime | None = None) -> CertInfo:
     now = now or datetime.now(timezone.utc)
     cert = x509.load_der_x509_certificate(der)
-    nb = cert.not_valid_before_utc if hasattr(cert, "not_valid_before_utc") else cert.not_valid_before.replace(tzinfo=timezone.utc)
-    na = cert.not_valid_after_utc if hasattr(cert, "not_valid_after_utc") else cert.not_valid_after.replace(tzinfo=timezone.utc)
+    if hasattr(cert, "not_valid_before_utc"):
+        nb = cert.not_valid_before_utc
+    else:
+        nb = cert.not_valid_before.replace(tzinfo=timezone.utc)
+    if hasattr(cert, "not_valid_after_utc"):
+        na = cert.not_valid_after_utc
+    else:
+        na = cert.not_valid_after.replace(tzinfo=timezone.utc)
     cn = _name_cn(cert.subject)
     san = _sans(cert)
     issuer_cn = _name_cn(cert.issuer)

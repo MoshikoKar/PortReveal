@@ -89,8 +89,14 @@ export default function Scans() {
   const snaps = useApi<Paged<SnapshotInfo>>('/snapshots', { page: snapPage, page_size: 10 }, 30000);
   const mock = useApi<MockState>(system?.scanner.mock_active ? '/dev/mock' : null, undefined, 5000);
   const onWcTab = tab === 'web-captures';
-  const wcHistory = useApi<Paged<WebCapture>>(onWcTab ? '/web-captures' : null, { page: wcPage, page_size: 20 }, 5000);
-  const wcActive = useApi<{ running: WebCapture[]; queued: WebCapture[] }>(onWcTab ? '/web-captures/active' : null, undefined, 4000);
+  const showArchivedWc = searchParams.get('archived') === '1';
+  const wcHistory = useApi<Paged<WebCapture>>(onWcTab ? '/web-captures' : null, {
+    page: wcPage, page_size: 20, include_archived: showArchivedWc ? 'true' : undefined,
+  }, 5000);
+  const wcActive = useApi<{ running: WebCapture[]; queued: WebCapture[] }>(
+    onWcTab ? '/web-captures/active' : null,
+    { include_archived: showArchivedWc ? 'true' : undefined },
+    4000);
   useEffect(() => {
     if (active.data) setScansBusy(active.data.running.length + active.data.queued.length > 0);
   }, [active.data]);
@@ -240,8 +246,14 @@ export default function Scans() {
             Scan now
           </button>
         )}
-        {isAdmin && tab === 'web-captures' && (
-          <button className="btn primary" onClick={() => setWcDialog(true)}>Web capture</button>
+        {tab === 'web-captures' && (
+          <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
+            <label className="check small" title="Jobs whose every page is on an archived network are hidden by default">
+              <input type="checkbox" checked={showArchivedWc}
+                onChange={(e) => setParam('archived', e.target.checked ? '1' : null)} />Show archived networks
+            </label>
+            {isAdmin && <button className="btn primary" onClick={() => setWcDialog(true)}>Web capture</button>}
+          </div>
         )}
       </div>
       <nav className="tabs">

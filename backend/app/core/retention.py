@@ -17,6 +17,7 @@ from ..models import (
     WEB_CAPTURE_ACTIVE_STATES,
     AuditLog,
     Device,
+    DeviceRttSample,
     Event,
     Scan,
     ScanHost,
@@ -29,16 +30,18 @@ from .web_storage import cleanup_capture_dirs, delete_capture_files
 log = logging.getLogger(__name__)
 
 
-def run_retention(db: Session, days: int, raw_days: int = 7, now: datetime | None = None) -> dict[str, int]:
+def run_retention(db: Session, days: int, raw_days: int = 7, now: datetime | None = None,
+                  rtt_days: int = 90) -> dict[str, int]:
     """DB deletes, commit, then filesystem cleanup (no transaction held open during rmtree)."""
-    counts, stale_uuids = purge_expired(db, days, now)
+    counts, stale_uuids = purge_expired(db, days, now, rtt_days=rtt_days)
     db.commit()
     counts.update(cleanup_files(stale_uuids, live_capture_uuids(db), raw_days))
     log.info("Retention cleanup (%s days): %s", days, counts)
     return counts
 
 
-def purge_expired(db: Session, days: int, now: datetime | None = None) -> tuple[dict[str, int], list[str]]:
+def purge_expired(db: Session, days: int, now: datetime | None = None,
+                  rtt_days: int = 90) -> tuple[dict[str, int], list[str]]:
     """Delete expired rows (not committed). Returns counts and the uuids of deleted web captures,
     whose files the caller removes with cleanup_files() once the deletes are committed."""
     now = now or utcnow()
@@ -50,6 +53,8 @@ def purge_expired(db: Session, days: int, now: datetime | None = None) -> tuple[
 
     _del("events", delete(Event).where(Event.created_at < cutoff))
     _del("scan_hosts", delete(ScanHost).where(ScanHost.created_at < cutoff))
+    _del("device_rtt_samples", delete(DeviceRttSample).where(
+        DeviceRttSample.sampled_at < now - timedelta(days=rtt_days)))
     _del("snapshots", delete(Snapshot).where(Snapshot.snapshot_date < cutoff.date()))
     _del("scans", delete(Scan).where(Scan.created_at < cutoff, Scan.status.not_in(SCAN_ACTIVE_STATES)))
     _del("audit_log", delete(AuditLog).where(AuditLog.created_at < cutoff))

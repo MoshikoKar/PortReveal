@@ -41,6 +41,7 @@ from ..models import (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_REAPPEARED,
     EV_IP_CHANGED,
+    EV_OS_CHANGED,
     EV_PORT_CLOSED,
     EV_PORT_OPENED,
     EV_SERVICE_CHANGED,
@@ -52,6 +53,7 @@ from ..models import (
     Device,
     DeviceIP,
     DevicePort,
+    DeviceRttSample,
     Event,
     Network,
     Scan,
@@ -61,12 +63,22 @@ from ..netutils import AddressSet, PortScope, ip_sort_key
 from ..scanner.known_ports import merge_port_scope
 from ..scanner.types import VERIFIED_METHOD, HostObservation, PortObservation
 from ..scanner.verify_services import WEAK_SERVICE_LABELS
-from ..settings_store import PresenceSettings, ScanSettings, get_section
+from ..settings_store import PresenceSettings, RetentionSettings, ScanSettings, get_section
 from .identity import identity_hostname, match_hosts, normalize_hostname, normalize_mac
 
 log = logging.getLogger(__name__)
 
 MASS_GUARD_MIN = 10  # never trip the guard below this many removals
+# Higher wins. A service/banner guess must never replace a precise -O / NSE OS result.
+_OS_SOURCE_RANK = {
+    "service": 10,
+    "ssh": 20,
+    "http": 20,
+    "snmp": 20,
+    "ntlm": 40,
+    "nmap_os": 50,
+}
+RTT_SAMPLES_PER_DEVICE_DEFAULT = 200
 
 
 @dataclass
@@ -138,7 +150,8 @@ class _Applier:
         self.db, self.scan, self.outcome, self.cfg, self.now = db, scan, outcome, cfg, now
         self.correlate = correlate
         self.result = ApplyResult()
-        self.networks = [(n, AddressSet.from_specs(n.cidr)) for n in db.scalars(select(Network)).all()]
+        self.networks = [(n, AddressSet.from_specs(n.cidr))
+                         for n in db.scalars(select(Network).where(Network.archived_at.is_(None))).all()]
         self._scope_cache: dict[int, PortScope | None] = {}
         self.scope = PortScope(outcome.port_scope) if outcome.port_scope else None
 
@@ -183,6 +196,27 @@ class _Applier:
             return self.scope
         text = merge_port_scope(self.outcome.port_scope, host.extra_tcp_ports)
         return PortScope(text) if text else self.scope
+
+    def _trim_rtt_samples(self, device_id: int) -> None:
+        """Keep only the newest N samples per device (retention also ages them out by days)."""
+        try:
+            cap = get_section(self.db, RetentionSettings).rtt_samples_per_device
+        except Exception:
+            cap = RTT_SAMPLES_PER_DEVICE_DEFAULT
+        keep_ids = list(self.db.scalars(
+            select(DeviceRttSample.id).where(DeviceRttSample.device_id == device_id)
+            .order_by(DeviceRttSample.sampled_at.desc()).limit(cap)
+        ).all())
+        if not keep_ids:
+            return
+        stale = self.db.scalars(
+            select(DeviceRttSample).where(
+                DeviceRttSample.device_id == device_id,
+                DeviceRttSample.id.not_in(keep_ids),
+            )
+        ).all()
+        for row in stale:
+            self.db.delete(row)
 
     def emit(self, device: Device, etype: str, mode: str, message: str, *, ip: str | None = None,
              protocol: str | None = None, port: int | None = None, old: str | None = None,
@@ -275,12 +309,13 @@ class _Applier:
             if dev is None:
                 dev = Device(
                     current_ip=h.ip, mac=mac, vendor=h.vendor if mac else None, hostname=hostname,
-                    dns_name=hostname, os_name=h.os_name, status=DEVICE_ACTIVE, first_seen=now,
+                    dns_name=hostname, status=DEVICE_ACTIVE, first_seen=now,
                     last_seen=now, missed_scans=0, network_id=net.id if net else None,
-                    port_scan_failed=False,
+                    port_scan_failed=False, continuous_since=now,
                 )
                 dev.ports = []
                 dev.ips = [DeviceIP(ip=h.ip, first_seen=now, last_seen=now)]
+                self._apply_os(dev, h, mode, device_label(dev))
                 self.db.add(dev)
             else:
                 label = device_label(dev)
@@ -291,6 +326,7 @@ class _Applier:
                 if dev.status == DEVICE_NOT_DETECTED:
                     self.emit(dev, EV_DEVICE_REAPPEARED, mode, f"{label} ({h.ip}) is detected again", ip=h.ip,
                               quiet=self.correlate and not dev.absence_alerted)
+                    dev.continuous_since = now
                 if mac and not dev.mac:
                     dev.mac = mac
                 if mac and h.vendor:
@@ -298,9 +334,11 @@ class _Applier:
                 if hostname:
                     dev.hostname = hostname
                     dev.dns_name = hostname
-                if h.os_name:
-                    dev.os_name = h.os_name
+                self._apply_os(dev, h, mode, label)
                 dev.status = DEVICE_ACTIVE
+                if dev.continuous_since is None:
+                    # Upgraded from a version without this field: best estimate, not a real streak start.
+                    dev.continuous_since = dev.first_seen or now
                 dev.missed_scans = 0
                 dev.absence_days, dev.absence_counted_on, dev.absence_alerted = 0, None, False
                 dev.last_seen = now
@@ -353,6 +391,10 @@ class _Applier:
                 status="port_scan_failed" if h.port_scan_failed else "up",
                 open_ports=len(h.ports) if h.ports is not None else None,
             ))
+            if h.rtt_ms is not None:
+                dev.last_rtt_ms = h.rtt_ms
+                self.db.add(DeviceRttSample(device_id=dev.id, rtt_ms=h.rtt_ms, sampled_at=now))
+                self._trim_rtt_samples(dev.id)
 
         self._maybe_baseline()
         return self.result
@@ -404,6 +446,52 @@ class _Applier:
             if row.is_open and key not in seen and row.protocol == "tcp" and row.port in scope:
                 closures.append((dev, row, mode))
         return closures
+
+    def _apply_os(self, dev: Device, h: HostObservation, mode: str, label: str) -> None:
+        """Commit an OS guess with a flap guard: a name that differs from the current one only
+        replaces it once it has been seen twice in a row, or arrives with accuracy at least ten
+        points above the current guess (spec 3.5) — otherwise it is parked as `os_pending`.
+
+        Sources are ranked: a precise ``nmap_os`` (or script/ntlm) result is never overwritten by a
+        weaker service/banner guess.
+        """
+        name = h.os_name
+        if not name:
+            return
+        accuracy = h.os_accuracy
+        # Parser always sets os_name from <osmatch> for -O; accuracy may be missing. Treat any
+        # osmatch-sourced name (accuracy present OR source hint) as nmap_os; ostype-only falls
+        # through as service. Callers that set os_source on the observation win explicitly.
+        source = getattr(h, "os_source", None) or ("nmap_os" if accuracy is not None else "service")
+        if getattr(h, "os_from_osmatch", False):
+            source = "nmap_os"
+        new_rank = _OS_SOURCE_RANK.get(source, 0)
+        cur_rank = _OS_SOURCE_RANK.get(dev.os_source or "", 0)
+        if dev.os_name is None:
+            dev.os_name, dev.os_accuracy, dev.os_source = name, accuracy, source
+            dev.os_detected_at, dev.os_pending = self.now, None
+            return
+        if _norm(name) == _norm(dev.os_name):
+            # Same name: refresh timestamps; never downgrade source rank.
+            if accuracy is not None:
+                dev.os_accuracy = accuracy
+            if new_rank >= cur_rank:
+                dev.os_source = source
+            dev.os_detected_at, dev.os_pending = self.now, None
+            return
+        if new_rank < cur_rank:
+            return  # weaker source cannot replace a stronger OS guess
+        pending = dev.os_pending or {}
+        seen_before = _norm(pending.get("name") or "") == _norm(name)
+        confident_jump = accuracy is not None and accuracy >= (dev.os_accuracy or 0) + 10
+        if seen_before or confident_jump:
+            old_name = dev.os_name
+            dev.os_name, dev.os_accuracy, dev.os_source = name, accuracy, source
+            dev.os_detected_at, dev.os_pending = self.now, None
+            self.emit(dev, EV_OS_CHANGED, mode, f"OS of {label} changed: {old_name} -> {name}",
+                      old=old_name, new=name)
+        else:
+            dev.os_pending = {"name": name, "accuracy": accuracy, "source": source}
 
     @staticmethod
     def _set_service(row: DevicePort, po: PortObservation, force: bool = False) -> None:

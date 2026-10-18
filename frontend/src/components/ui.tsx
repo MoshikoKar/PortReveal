@@ -2,11 +2,11 @@ import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from 're
 import type { ChangeEvent, DeviceStatus, ScanStatus } from '../types';
 import { EVENT_LABELS, scoreLevel } from '../util';
 
-export function Card({ title, actions, children, flush, className }: {
-  title?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string;
+export function Card({ title, actions, children, flush, className, id }: {
+  title?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string; id?: string;
 }) {
   return (
-    <section className={`card ${className ?? ''}`}>
+    <section id={id} className={`card ${className ?? ''}`}>
       {(title || actions) && (
         <div className="card-head">
           {typeof title === 'string' ? <h2>{title}</h2> : title}
@@ -38,12 +38,16 @@ const DEVICE_STATUS: Record<DeviceStatus, [string, string]> = {
 
 export function DeviceStatusBadge({ status, failed }: { status: DeviceStatus; failed?: boolean }) {
   const [cls, label] = DEVICE_STATUS[status] ?? ['', status];
+  const statusBadge = (
+    <span className={`badge ${cls}`} title={status === 'unknown' ? 'Missed by the latest scan; not yet confirmed gone' : undefined}>
+      <span className="dot" />{label}
+    </span>
+  );
+  if (!failed) return statusBadge;
   return (
-    <span className="row" style={{ gap: 6 }}>
-      <span className={`badge ${cls}`} title={status === 'unknown' ? 'Missed by the latest scan; not yet confirmed gone' : undefined}>
-        <span className="dot" />{label}
-      </span>
-      {failed && <span className="badge medium" title="The last port/service scan of this host failed or timed out">Scan failed</span>}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, lineHeight: 1 }}>
+      {statusBadge}
+      <span className="badge medium" title="The last port/service scan of this host failed or timed out">Scan failed</span>
     </span>
   );
 }
@@ -70,6 +74,44 @@ const SCORE_CLASS = { high: 'high', medium: 'medium', low: 'ok' } as const;
 export function ScoreBadge({ score }: { score: number | null | undefined }) {
   const s = score ?? 0;
   return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`Exposure score ${s} / 100`}>{s}</span>;
+}
+
+/** Risk (CVE-based) or combined score 0-100 — same 60/30 scale as exposure. */
+export function RiskBadge({ score, kind = 'risk' }: { score: number | null | undefined; kind?: 'risk' | 'combined' }) {
+  const s = score ?? 0;
+  const label = kind === 'risk' ? 'Risk score' : 'Combined score';
+  return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`${label} ${s} / 100`}>{s}</span>;
+}
+
+const VULN_JOB_STATUS: Record<string, [string, string]> = {
+  queued: ['outline', 'Vulnerability check queued'],
+  running: ['accent', 'Vulnerability check running'],
+  completed: ['ok', 'Vulnerability check completed'],
+  partial: ['medium', 'Vulnerability check partially completed'],
+  failed: ['high', 'Vulnerability check failed'],
+  cancelled: ['outline', 'Vulnerability check cancelled'],
+};
+
+export function VulnJobBadge({ status }: { status: string | null | undefined }) {
+  if (!status) return null;
+  const [cls, label] = VULN_JOB_STATUS[status] ?? ['outline', status];
+  return (
+    <span className={`badge ${cls} ${status === 'running' ? 'pulse' : ''}`} title={label}>
+      {status === 'running' && <span className="dot" />}{label}
+    </span>
+  );
+}
+
+const IP_ASSIGNMENT: Record<string, [string, string, string]> = {
+  static: ['ok', 'Static', 'This IP has stayed on this device for a while'],
+  dynamic: ['medium', 'Dynamic', 'This device has recently used more than one IP (DHCP-style)'],
+  unknown: ['outline', 'Unknown', 'Not enough address history yet to tell'],
+};
+
+export function IpAssignmentBadge({ value }: { value: string | null | undefined }) {
+  if (!value) return null;
+  const [cls, label, title] = IP_ASSIGNMENT[value] ?? ['outline', value, undefined as unknown as string];
+  return <span className={`badge ${cls}`} title={title}>{label}</span>;
 }
 
 export function MockBadge({ mode }: { mode: string | null }) {
@@ -222,12 +264,20 @@ export function Progress({ value }: { value: number }) {
   return <div className="progress"><div style={{ width: `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%` }} /></div>;
 }
 
-export function PortChips({ ports, max = 8 }: { ports: { port: number; protocol: string; service: string | null }[]; max?: number }) {
+type ChipPort = { port: number; protocol: string; service: string | null; product?: string | null; version?: string | null };
+
+function chipTitle(p: ChipPort): string | undefined {
+  const productVersion = [p.product, p.version].filter(Boolean).join(' ');
+  if (productVersion) return p.service ? `${productVersion} (${p.service})` : productVersion;
+  return p.service ?? undefined;
+}
+
+export function PortChips({ ports, max = 8 }: { ports: ChipPort[]; max?: number }) {
   if (!ports.length) return <span className="muted">—</span>;
   return (
     <span>
       {ports.slice(0, max).map((p) => (
-        <span className="chip" key={`${p.protocol}${p.port}`} title={p.service ?? undefined}>{p.port}</span>
+        <span className="chip" key={`${p.protocol}${p.port}`} title={chipTitle(p)}>{p.port}</span>
       ))}
       {ports.length > max && <span className="muted small">+{ports.length - max}</span>}
     </span>

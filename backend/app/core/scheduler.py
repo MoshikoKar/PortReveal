@@ -27,6 +27,7 @@ from ..settings_store import (
     RetentionSettings,
     ScanSettings,
     ScheduleSettings,
+    VulnSettings,
     get_section,
     get_value,
     set_value,
@@ -35,6 +36,7 @@ from .manager import create_scan, manager, network_has_active_scan
 from .notify import send_daily_digest
 from .presence import evaluate_absence, presence_scan_active
 from .retention import cleanup_files, live_capture_uuids, purge_expired
+from .vuln.sync import sync_due, sync_running, trigger_background_sync
 
 log = logging.getLogger(__name__)
 
@@ -209,10 +211,15 @@ def tick(now: datetime | None = None) -> None:
         rt = now.replace(hour=RETENTION_TIME[0], minute=RETENTION_TIME[1], second=0, microsecond=0)
         if now >= rt and state.get("last_retention_date") != today:
             ret = get_section(db, RetentionSettings)
-            ret_counts, stale_captures = purge_expired(db, ret.days)
+            ret_counts, stale_captures = purge_expired(db, ret.days, rtt_days=ret.rtt_sample_days)
             retention_files = (ret.days, get_section(db, ScanSettings).raw_retention_days)
             state["last_retention_date"] = today
             changed = True
+
+        vuln_cfg = get_section(db, VulnSettings)
+        if sync_due(db, vuln_cfg, now=now) and not sync_running():
+            log.info("vulnerability feed sync is due: starting in the background")
+            trigger_background_sync(vuln_cfg)
 
         notify_cfg = get_section(db, NotificationSettings)
         if notify_cfg.enabled and state.get("last_notification_date") != today:

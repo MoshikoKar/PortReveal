@@ -189,8 +189,9 @@ class MockScanner:
                 continue
             host, net_id = entry
             obs = self._observation(ip, host, net_id)
-            if profile.os_detection:
+            if profile.os_detection and host.os:
                 obs.os_name = host.os
+                obs.os_accuracy = 95  # simulated -O fingerprint confidence
             is_truenas = (
                 ip in known_truenas
                 or looks_like_truenas(hostname=obs.hostname, vendor=host.vendor, os_name=host.os)

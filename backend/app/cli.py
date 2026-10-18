@@ -11,6 +11,7 @@
     python -m app.cli search "port:22 -tag:lab"
     python -m app.cli export-data [PATH]
     python -m app.cli import-data PATH --yes
+    python -m app.cli vuln-import PATH   # offline NVD JSON snapshot into the local cache
 """
 from __future__ import annotations
 
@@ -88,6 +89,9 @@ def cmd_scan(args) -> int:
             if net is None:
                 print(f"network not found: {args.network}")
                 return 1
+            if net.archived_at is not None:
+                print(f"network is archived: {net.name} (restore it in Settings > Networks first)")
+                return 1
             scan = create_scan(db, args.type, network=net, requested_by="cli")
         elif args.targets:
             scan = create_scan(db, args.type, targets=AddressSet.from_specs(args.targets, allow_hostname=True),
@@ -126,7 +130,9 @@ def cmd_retention(_args) -> int:
     from .settings_store import RetentionSettings, ScanSettings, get_section
 
     with session_scope() as db:
-        counts = run_retention(db, get_section(db, RetentionSettings).days, get_section(db, ScanSettings).raw_retention_days)
+        ret = get_section(db, RetentionSettings)
+        counts = run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days,
+                               rtt_days=ret.rtt_sample_days)
     print(json.dumps(counts))
     return 0
 
@@ -202,6 +208,32 @@ def cmd_import_data(args) -> int:
     return 0
 
 
+def cmd_vuln_import(args) -> int:
+    """Load NVD 2.0 JSON (optionally .gz) from a file or directory into the local cache."""
+    _boot()
+    from .core.vuln.match import match_all
+    from .core.vuln.score import apply_risk_scores
+    from .core.vuln.sync import import_nvd_json
+    from .db import session_scope
+    from .models import Device
+
+    try:
+        with session_scope() as db:
+            result = import_nvd_json(db, args.path)
+            result["match"] = match_all(db)
+            ids = list(db.scalars(select(Device.id)))
+            from .db import utcnow
+            apply_risk_scores(db, ids, now=utcnow())
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"vuln-import failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m app.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -231,6 +263,9 @@ def main(argv: list[str] | None = None) -> int:
     im.add_argument("path", help="input zip path")
     im.add_argument("--yes", action="store_true", help="required confirmation to replace inventory")
     im.set_defaults(fn=cmd_import_data)
+    vi = sub.add_parser("vuln-import", help="import NVD JSON snapshot(s) into the local vulnerability cache")
+    vi.add_argument("path", help="JSON/.json.gz file or directory of NVD 2.0 feeds")
+    vi.set_defaults(fn=cmd_vuln_import)
     args = p.parse_args(argv)
     return args.fn(args)
 

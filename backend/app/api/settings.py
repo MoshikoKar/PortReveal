@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import client_ip, require_admin
@@ -14,15 +15,17 @@ from ..core.notify import format_sample_digest, send_email, smtp_failure_reason
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
 from ..db import get_db
-from ..models import EVENT_TYPES, User
+from ..models import EVENT_TYPES, User, Vulnerability, VulnFeedState
 from ..security import encrypt_secret
 from ..settings_store import (
+    DiscoverySettings,
     LdapSettings,
     NotificationSettings,
     PresenceSettings,
     RetentionSettings,
     ScanSettings,
     ScheduleSettings,
+    VulnSettings,
     WebCaptureSettings,
     get_section,
     put_section,
@@ -103,6 +106,105 @@ def put_web_capture_settings(body: WebCaptureSettings, request: Request, db: Ses
                              user: User = Depends(require_admin)):
     put_section(db, body)
     audit(db, user.username, "settings.web_capture", None, body.model_dump(), _ip(request))
+    db.commit()
+    return body.model_dump()
+
+
+# --- vulnerability feed (risk scoring) ---------------------------------------------
+def vuln_out(cfg: VulnSettings) -> dict:
+    data = cfg.model_dump(exclude={"nvd_api_key_enc"})
+    data["nvd_api_key_set"] = bool(cfg.nvd_api_key_enc)
+    return data
+
+
+@router.get("/vuln")
+def get_vuln_settings(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return vuln_out(get_section(db, VulnSettings))
+
+
+class VulnIn(BaseModel):
+    enabled: bool = False
+    sources: list[str] = Field(default_factory=lambda: ["nvd", "kev", "epss"])
+    sync_interval_hours: int = Field(168, ge=24, le=720)
+    sync_time: str = Field("04:00", max_length=5)
+    offline_mode: bool = False
+    nvd_api_key: str | None = Field(None, max_length=200, description="omit to keep the stored key")
+    include_potential: bool = True
+    min_cvss_display: float = Field(0.0, ge=0.0, le=10.0)
+    scripts_enabled: bool = True
+
+
+@router.put("/vuln")
+def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_db),
+                      user: User = Depends(require_admin)):
+    current = get_section(db, VulnSettings)
+    data = body.model_dump(exclude={"nvd_api_key"})
+    data["nvd_api_key_enc"] = encrypt_secret(body.nvd_api_key) if body.nvd_api_key is not None else current.nvd_api_key_enc
+    try:
+        cfg = VulnSettings.model_validate(data)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    put_section(db, cfg)
+    audit(db, user.username, "settings.vuln", None,
+          {k: v for k, v in data.items() if k != "nvd_api_key_enc"} | {"api_key_changed": body.nvd_api_key is not None},
+          _ip(request))
+    db.commit()
+    if cfg.enabled and not cfg.offline_mode:
+        from ..core.vuln.sync import sync_due, sync_running, trigger_background_sync
+        if sync_due(db, cfg) and not sync_running():
+            trigger_background_sync(cfg)
+    return vuln_out(cfg)
+
+
+@router.get("/vuln/status")
+def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Local CVE cache state: per-feed bookkeeping, cache size and whether a sync is running."""
+    from ..core.vuln.sync import NVD_MIRROR_START_YEAR, sync_running
+
+    feeds = [
+        {"source": f.source, "last_synced_at": f.last_synced_at, "record_count": f.record_count or 0,
+         "last_error": f.last_error,
+         "mirror_complete": f.mirror_complete if f.source == "nvd" else None,
+         "mirror_next_year": (f.mirror_next_year or NVD_MIRROR_START_YEAR)
+         if f.source == "nvd" and not f.mirror_complete else None}
+        for f in db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
+    ]
+    return {
+        "sync_running": sync_running(),
+        "cve_count": db.scalar(select(func.count(Vulnerability.cve_id))) or 0,
+        "mirror_start_year": NVD_MIRROR_START_YEAR,
+        "feeds": feeds,
+    }
+
+
+@router.post("/vuln/sync")
+def sync_vuln_now(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    from ..core.vuln.sync import sync_running, trigger_background_sync
+
+    cfg = get_section(db, VulnSettings)
+    if not cfg.enabled:
+        raise HTTPException(409, "Vulnerability scoring is disabled in settings")
+    if cfg.offline_mode:
+        raise HTTPException(409, "Offline mode is on; use the CLI import for a local snapshot instead")
+    if sync_running():
+        return {"ok": True, "message": "A sync is already running"}
+    started = trigger_background_sync(cfg)
+    audit(db, user.username, "settings.vuln_sync", None, {"started": started}, _ip(request))
+    db.commit()
+    return {"ok": True, "message": "Sync started in the background" if started else "A sync is already running"}
+
+
+# --- local discovery channel (mDNS/SSDP/NetBIOS device names, spec section 9.2) -----------------
+@router.get("/discovery")
+def get_discovery_settings(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return get_section(db, DiscoverySettings).model_dump()
+
+
+@router.put("/discovery")
+def put_discovery_settings(body: DiscoverySettings, request: Request, db: Session = Depends(get_db),
+                           user: User = Depends(require_admin)):
+    put_section(db, body)
+    audit(db, user.username, "settings.discovery", None, body.model_dump(), _ip(request))
     db.commit()
     return body.model_dump()
 
@@ -264,7 +366,8 @@ def put_retention(body: RetentionSettings, request: Request, db: Session = Depen
 
 @router.post("/retention/run")
 def run_retention_now(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    counts = run_retention(db, get_section(db, RetentionSettings).days, get_section(db, ScanSettings).raw_retention_days)
+    ret = get_section(db, RetentionSettings)
+    counts = run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days, rtt_days=ret.rtt_sample_days)
     audit(db, user.username, "retention.run", None, counts, _ip(request))
     db.commit()
     return {"ok": True, "deleted": counts}

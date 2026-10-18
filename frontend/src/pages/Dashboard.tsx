@@ -13,7 +13,7 @@ const TYPE_COLORS: Record<EventType, string> = {
   device_disappeared: 'var(--medium)', port_closed: 'var(--medium)', ip_changed: 'var(--low)',
   version_changed: 'var(--low)', device_reappeared: 'var(--low)', service_detected: 'var(--info)',
   tag_added: 'var(--info)', tag_removed: 'var(--info)', watch_match: 'var(--medium)', policy_violation: 'var(--high)',
-  banner_changed: 'var(--info)',
+  banner_changed: 'var(--info)', os_changed: 'var(--medium)', monitor_change: 'var(--medium)',
 };
 
 const LEVEL_COLORS = { high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)' } as const;
@@ -99,7 +99,7 @@ export default function Dashboard() {
         <Kpi label="Service changes (24h)" value={d1.service_changes} sub={`${d7.service_changes} in last 7d`} color={d1.service_changes ? 'var(--medium)' : undefined} onClick={() => nav('/changes?type=service_changed,version_changed&range=24h')} />
         <Kpi label="Open ports" value={data.open_ports_total} sub={`${d1.closed_ports} closed in 24h`} color="var(--low)" onClick={() => nav('/ports')} />
         <Kpi label="High exposure" value={data.exposure.high} sub={`score ≥ ${SCORE_HIGH} · ${data.exposure.medium} medium`} color={data.exposure.high ? 'var(--high)' : undefined} onClick={() => nav(searchLink(LEVEL_QUERIES.high))} />
-        <Kpi label="Alerts (7d)" value={data.watch_alerts.last_7d} sub="watch matches and policy violations" color={data.watch_alerts.last_7d ? 'var(--medium)' : undefined} onClick={() => nav('/changes?type=watch_match,policy_violation&range=7d')} />
+        <Kpi label="Alerts (7d)" value={data.watch_alerts.last_7d} sub="watch matches, policy violations, and monitored changes" color={data.watch_alerts.last_7d ? 'var(--medium)' : undefined} onClick={() => nav('/changes?type=watch_match,policy_violation,monitor_change&range=7d')} />
       </div>
 
       <div className="grid two">

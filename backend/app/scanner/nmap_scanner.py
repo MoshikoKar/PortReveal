@@ -26,7 +26,8 @@ from .known_ports import (
     merge_port_scope,
 )
 from .nmap_iface import BindChoice, bind_args, resolve_bind
-from .nmap_parser import parse_nmap_xml
+from .nmap_parser import ParsedRun, parse_nmap_xml
+from .script_allowlist import DEFAULT_SCRIPT_TIMEOUT_S, MAX_SCRIPT_TIMEOUT_S, MIN_SCRIPT_TIMEOUT_S, SCRIPT_NAMES
 from .types import (
     HostObservation,
     PortObservation,
@@ -72,8 +73,10 @@ _DISCOVERY_RTT_MS_REMOTE = {"polite": (200, 800), "normal": (100, 400), "fast": 
 _DISCOVERY_RETRIES = 1
 _DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
-# No scan stage sends UDP: unanswered UDP dominates scan time, and fragile embedded UDP
-# services (SNMP/IPMI/CoAP/SSDP/TFTP) can misbehave when probed.
+# No scan stage sends UDP, with one narrow exception: OS detection (-O) fires a single U1
+# probe at a closed port as part of its fingerprint. Every other UDP form (-sU, -PU, -sY,
+# -PY, a general UDP scan) stays forbidden — unanswered UDP dominates scan time, and fragile
+# embedded UDP services (SNMP/IPMI/CoAP/SSDP/TFTP) can misbehave when probed.
 # Telephony signaling ports are never probed (see known_ports.NEVER_PROBE_TCP_PORTS).
 _NEVER_PROBE_TCP_PORTS = ",".join(str(p) for p in NEVER_PROBE_TCP_PORTS)
 # Without a MAC, only these nmap "up" reasons count as a real device. TCP "reset" /
@@ -240,6 +243,32 @@ def _max_rate_args(profile: PortProfile) -> list[str]:
     return ["--max-rate", str(int(profile.max_rate))]
 
 
+def build_script_args(privileged: bool, script_names: list[str], ports: tuple[int, ...] | list[int],
+                      timing: str, *, timeout_s: int = DEFAULT_SCRIPT_TIMEOUT_S) -> list[str]:
+    """Phase 4 background vulnerability stage (spec 8.4.3): explicit allow-listed script names only,
+    on their justifying ports, with a bounded --script-timeout. Never --script-args, never a whole
+    category (--script=vuln / --script=safe), never any UDP option.
+
+    Raises ValueError for any name outside SCRIPT_ALLOWLIST -- this is the only place script names
+    reach an nmap command line, so a bad name must fail loudly rather than be silently dropped.
+    """
+    if not script_names:
+        raise ValueError("build_script_args requires at least one script name")
+    bad = sorted(set(script_names) - SCRIPT_NAMES)
+    if bad:
+        raise ValueError(f"script(s) not in SCRIPT_ALLOWLIST: {bad}")
+    if not MIN_SCRIPT_TIMEOUT_S <= int(timeout_s) <= MAX_SCRIPT_TIMEOUT_S:
+        raise ValueError(f"script timeout must be {MIN_SCRIPT_TIMEOUT_S}-{MAX_SCRIPT_TIMEOUT_S}s")
+    spec = PortScope.from_ports(ports)
+    if not spec:
+        raise ValueError("build_script_args requires at least one port")
+    names = ",".join(sorted(set(script_names)))
+    args = ["-Pn", "-n", "--script", names, "--script-timeout", f"{int(timeout_s)}s", "-p", spec]
+    args += ["--privileged"] if privileged else ["--unprivileged"]
+    args += [_TIMING.get(timing, "-T3")]
+    return args
+
+
 def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     """Union open ports from a follow-up scan into the primary host observation.
 
@@ -259,7 +288,14 @@ def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     base.mac = base.mac or extra.mac
     base.vendor = base.vendor or extra.vendor
     base.hostname = base.hostname or extra.hostname
-    base.os_name = extra.os_name or base.os_name
+    if extra.os_name:
+        # Keep HostObservation.merge ranking: do not let a follow-up service guess replace -O.
+        base.merge(HostObservation(
+            ip=base.ip, os_name=extra.os_name, os_accuracy=extra.os_accuracy,
+            os_source=extra.os_source, os_from_osmatch=extra.os_from_osmatch,
+        ))
+    if extra.rtt_ms is not None:
+        base.rtt_ms = extra.rtt_ms
 
 
 class NmapScanner:
@@ -363,6 +399,13 @@ class NmapScanner:
         # nmap soft-matches (e.g. "rtsp" from an echoed status line) look like real fingerprints.
         verify_hosts(hosts, ctx)
         return StageResult(hosts=hosts, port_scope=port_scope)
+
+    def run_scripts(self, ips: list[str], script_names: list[str], ports: tuple[int, ...] | list[int],
+                    ctx: ScanContext, timeout: float) -> ParsedRun:
+        """Phase 4 background vulnerability stage: allow-listed scripts only (build_script_args)."""
+        bind = resolve_bind(self.exe, ips, self.privileged)
+        args = build_script_args(bind.privileged, script_names, ports, self.timing)
+        return self._run(args, ips, timeout, ctx, "scripts", bind=bind)
 
     def _run(self, args: list[str], targets: list[str], timeout: float, ctx: ScanContext, label: str,
              bind: BindChoice | None = None):

@@ -115,6 +115,7 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
         "vpn_s2s": bool(n.vpn_s2s),
         "baseline_scan_id": n.baseline_scan_id,
         "baseline_at": n.baseline_at,
+        "archived_at": n.archived_at,
         "created_at": n.created_at,
         "device_count": device_count,
         "active_count": active_count,
@@ -148,6 +149,18 @@ def device_summary(d: Device, open_ports: list[DevicePort] | None = None, networ
         "vendor": d.vendor,
         "hostname": d.hostname,
         "os_name": d.os_name,
+        "os_accuracy": d.os_accuracy,
+        "os_detected_at": d.os_detected_at,
+        "os_source": d.os_source,
+        "ip_assignment": d.ip_assignment,
+        "last_rtt_ms": d.last_rtt_ms,
+        "continuous_since": d.continuous_since,
+        "discovery_name": d.discovery_name,
+        "discovery_source": d.discovery_source,
+        "score": d.exposure_score or 0,
+        "risk_score": d.risk_score,
+        "combined_score": d.combined_score,
+        "risk_scored_at": d.risk_scored_at,
         "status": d.status,
         "network_id": d.network_id,
         "network_name": network_name,
@@ -156,7 +169,8 @@ def device_summary(d: Device, open_ports: list[DevicePort] | None = None, networ
         "port_scan_failed": d.port_scan_failed,
         "open_port_count": len(ports),
         "open_ports": [
-            {"port": p.port, "protocol": p.protocol, "service": p.service} for p in sorted(ports, key=lambda x: x.port)
+            {"port": p.port, "protocol": p.protocol, "service": p.service, "product": p.product, "version": p.version}
+            for p in sorted(ports, key=lambda x: x.port)
         ],
     }
 

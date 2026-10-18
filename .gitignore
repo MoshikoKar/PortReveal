@@ -1,5 +1,6 @@
 node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
 backend/.venv/
 __pycache__/
 *.pyc

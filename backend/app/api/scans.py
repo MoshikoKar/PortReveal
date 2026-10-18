@@ -99,6 +99,8 @@ def start_scan(body: ScanRequest, request: Request, db: Session = Depends(get_db
             net = db.get(Network, nid)
             if net is None:
                 raise HTTPException(404, f"Network {nid} not found")
+            if net.archived_at is not None:
+                raise HTTPException(409, f"Network {net.name} is archived; restore it before scanning")
             if network_has_active_scan(db, net.id, body.scan_type):
                 raise HTTPException(409, f"A {body.scan_type} scan of {net.name} is already queued or running")
             created.append(create_scan(db, body.scan_type, network=net, requested_by=user.username,

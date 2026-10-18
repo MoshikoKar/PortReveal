@@ -23,7 +23,14 @@ from ...models import (
 )
 from ..mockdata import device_visible
 from .compile import (
-    Ctx, compile_host, compile_row, has_port_terms, join_flags, needs_http, service_from, validate,
+    Ctx,
+    compile_host,
+    compile_row,
+    has_port_terms,
+    join_flags,
+    needs_http,
+    service_from,
+    validate,
 )
 from .parser import And, Node, QueryError, parse, quote_value, terms
 from .sqlfn import ipv4_int_expr
@@ -37,7 +44,8 @@ HOST_SORTS = ("score", "ip", "last_seen", "first_seen", "hostname")
 
 def extract_before(node: Node | None) -> tuple[Node | None, object | None]:
     """Pull `before:` out of the AST. Returns (remaining node, date|None for historical search)."""
-    from datetime import date as date_cls, timedelta
+    from datetime import date as date_cls
+    from datetime import timedelta
 
     if node is None:
         return None, None
@@ -85,8 +93,8 @@ def _rows_from(node: Node | None = None):
     """Open services joined with their device and enrichment metadata (the row context)."""
     if node is None:
         return service_from(True, True, True, False).join(Device.__table__, Device.id == DevicePort.device_id)
-    http, tls, snmp, shot = join_flags(node)
-    return service_from(True, tls, snmp, shot).join(Device.__table__, Device.id == DevicePort.device_id)
+    http, tls, snmp, shot, vuln = join_flags(node)
+    return service_from(True, tls, snmp, shot, vuln).join(Device.__table__, Device.id == DevicePort.device_id)
 
 
 def _host_order(db: Session, sort: str, desc: bool) -> list:

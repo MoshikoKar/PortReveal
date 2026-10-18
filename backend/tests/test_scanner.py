@@ -28,8 +28,55 @@ def test_parse_standard_scan_xml():
     assert (ssh.service, ssh.product, ssh.version, ssh.method, ssh.confidence) == (
         "ssh", "OpenSSH", "8.9p1 Ubuntu 3ubuntu0.10", "probed", 10)
     assert h.ports[0].reliable and not h.ports[2].reliable
+    # No <os> element in this fixture: os_name falls back to the ssh service's ostype attribute,
+    # and os_accuracy stays None (fallback guesses are never a numeric nmap -O accuracy).
+    assert h.os_name == "Linux" and h.os_accuracy is None
+    assert h.rtt_ms == pytest.approx(0.25)  # <times srtt="250"/> is in microseconds
     timed_out = run.hosts[1]
     assert timed_out.port_scan_failed and timed_out.ports is None
+
+
+def test_parse_rtt_missing_or_invalid_srtt_leaves_rtt_none():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.6" addrtype="ipv4"/>
+    <times srtt="-1" rttvar="0" to="100000"/>
+    </host>
+    <host><status state="up"/>
+    <address addr="10.0.0.7" addrtype="ipv4"/>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    assert run.hosts[0].rtt_ms is None  # negative srtt is not a real measurement
+    assert run.hosts[1].rtt_ms is None  # no <times> element at all
+
+
+def test_parse_os_detection_picks_the_highest_accuracy_osmatch():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.5" addrtype="ipv4"/>
+    <os>
+      <osmatch name="Linux 5.0 - 5.14" accuracy="92"/>
+      <osmatch name="Windows Server 2019" accuracy="98"/>
+      <osmatch name="Linux 4.15 - 5.6" accuracy="90"/>
+    </os>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    h = run.hosts[0]
+    assert h.os_name == "Windows Server 2019" and h.os_accuracy == 98
+
+
+def test_parse_os_detection_missing_accuracy_is_not_a_crash():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.6" addrtype="ipv4"/>
+    <os><osmatch name="Mystery OS"/></os>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    h = run.hosts[0]
+    assert h.os_name == "Mystery OS" and h.os_accuracy is None
 
 
 def test_parse_timed_out_host_keeps_partial_ports():
@@ -48,6 +95,41 @@ def test_parse_timed_out_host_keeps_partial_ports():
     run = parse_nmap_xml(xml)
     h = run.hosts[0]
     assert h.port_scan_failed and [p.port for p in h.ports] == [22, 80]
+
+
+def test_parse_host_and_port_scripts():
+    """Phase 4 vulnerability-script stage: <hostscript> and per-port <script> output."""
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.6" addrtype="ipv4"/>
+    <hostscript>
+      <script id="smb-os-discovery" output="OS: Windows Server 2019"/>
+    </hostscript>
+    <ports>
+      <port protocol="tcp" portid="445"><state state="open"/>
+        <service name="microsoft-ds" method="probed" conf="10"/>
+        <script id="smb-vuln-ms17-010" output="VULNERABLE: Remote Code Execution"/>
+      </port>
+    </ports>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    h = run.hosts[0]
+    assert h.host_scripts == {"smb-os-discovery": "OS: Windows Server 2019"}
+    assert h.ports[0].scripts == {"smb-vuln-ms17-010": "VULNERABLE: Remote Code Execution"}
+
+
+def test_parse_ports_without_scripts_have_an_empty_dict():
+    xml = '''<?xml version="1.0"?>
+    <nmaprun><host><status state="up"/>
+    <address addr="10.0.0.7" addrtype="ipv4"/>
+    <ports><port protocol="tcp" portid="22"><state state="open"/>
+      <service name="ssh" method="probed" conf="10"/></port></ports>
+    </host>
+    <runstats><finished exit="success"/></runstats></nmaprun>'''
+    run = parse_nmap_xml(xml)
+    assert run.hosts[0].ports[0].scripts == {}
+    assert run.hosts[0].host_scripts == {}
 
 
 def test_parse_rejects_garbage_and_incomplete_output():

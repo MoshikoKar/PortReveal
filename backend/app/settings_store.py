@@ -99,7 +99,14 @@ class ScanSettings(BaseModel):
     port_batch_size: int = Field(32, ge=1, le=256)
     host_timeout_minutes: int = Field(15, ge=1, le=240)
     full_host_timeout_minutes: int = Field(120, ge=5, le=720)
-    os_detection: bool = False
+    os_detection: bool = True
+    # Re-run -O only when the last OS guess is older than this many days (or ports changed).
+    os_refresh_days: int = Field(7, ge=1, le=90)
+    # Below this accuracy the UI labels the OS guess as uncertain (spec 3.5).
+    os_min_accuracy_display: int = Field(85, ge=0, le=100)
+    # Set by migration 0018 when OS detection is flipped on for an existing install; Settings
+    # shows a one-time admin notice until dismissed (cleared by saving scan settings).
+    os_detection_enabled_notice: bool = False
     disappear_after_missed: int = Field(2, ge=1, le=30)
     mass_change_guard_percent: int = Field(50, ge=10, le=100)
     keep_raw_xml: bool = False
@@ -189,6 +196,11 @@ class LdapSettings(BaseModel):
 
 class RetentionSettings(BaseModel):
     days: int = Field(365, ge=7, le=3650)
+    # RTT samples (device_rtt_samples) churn far faster than everything else here (one row per
+    # scan per device), so they get their own, shorter window instead of riding on `days`.
+    rtt_sample_days: int = Field(90, ge=7, le=365)
+    # Hard cap per device (newest kept); graph API also limits to this many points.
+    rtt_samples_per_device: int = Field(200, ge=50, le=2000)
 
 
 class WebCaptureSettings(BaseModel):
@@ -226,6 +238,58 @@ class WebCaptureSettings(BaseModel):
     force_mock: bool = False  # tests / DEV without network
 
 
+class VulnSettings(BaseModel):
+    """Vulnerability risk scoring (spec section 5). Off until an admin enables it: the first enable
+    (or any start with an empty local cache) triggers an automatic background full sync."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    sources: list[str] = Field(default_factory=lambda: ["nvd", "kev", "epss"])
+    sync_interval_hours: int = Field(168, ge=24, le=720)  # default: weekly
+    sync_time: str = "04:00"  # local time HH:MM, best-effort slot for the weekly sync
+    offline_mode: bool = False  # only offline snapshot imports; no outbound feed requests at all
+    nvd_api_key_enc: str = ""  # optional: raises the NVD API rate limit, never required
+    include_potential: bool = True  # show `potential` (imprecise-version) matches, not just `confirmed`
+    min_cvss_display: float = Field(0.0, ge=0.0, le=10.0)
+    # Phase 4: safe/discovery NSE scripts from the fixed SCRIPT_ALLOWLIST, on when vulnerabilities are.
+    scripts_enabled: bool = True
+
+    @field_validator("sources")
+    @classmethod
+    def _sources(cls, v: list[str]) -> list[str]:
+        allowed = {"nvd", "kev", "epss"}
+        bad = [s for s in v if s not in allowed]
+        if bad:
+            raise ValueError(f"unknown vulnerability source(s): {bad}")
+        out = sorted(set(v))
+        if not out:
+            raise ValueError("at least one vulnerability source is required")
+        return out
+
+    @field_validator("sync_time")
+    @classmethod
+    def _sync_time(cls, v: str) -> str:
+        return _hhmm(v, "sync_time")
+
+
+class DiscoverySettings(BaseModel):
+    """Local-only mDNS/SSDP/NetBIOS device-naming channel (spec section 9.2).
+
+    Spec: default on only when cheap — passive listening without an active network probe.
+    mDNS (passive multicast listen) is on by default; SSDP M-SEARCH and NetBIOS unicast queries
+    are opt-in. Never runs an nmap UDP scan (-sU stays banned everywhere else).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    mdns: bool = True
+    ssdp: bool = False
+    netbios: bool = False
+    timeout_seconds: float = Field(2.0, ge=0.5, le=15.0)
+
+
 SECTIONS: dict[str, type[BaseModel]] = {
     "schedule": ScheduleSettings,
     "presence": PresenceSettings,
@@ -234,6 +298,8 @@ SECTIONS: dict[str, type[BaseModel]] = {
     "ldap": LdapSettings,
     "retention": RetentionSettings,
     "web_capture": WebCaptureSettings,
+    "vuln": VulnSettings,
+    "discovery": DiscoverySettings,
 }
 
 T = TypeVar("T", bound=BaseModel)

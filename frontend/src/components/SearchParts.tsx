@@ -89,7 +89,7 @@ export function HostResult({ h }: { h: SearchHost }) {
   );
 }
 
-type Draft = { name: string; description: string; kind: 'watch' | 'policy'; alert: boolean };
+type Draft = { name: string; description: string; kind: 'watch' | 'policy' | 'monitor'; alert: boolean };
 
 export function SaveWatchDialog({ query, onClose, onSaved }: {
   query: string; onClose: () => void; onSaved: (s: SavedSearch) => void;
@@ -128,9 +128,10 @@ export function SaveWatchDialog({ query, onClose, onSaved }: {
         <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as Draft['kind'] })}>
           <option value="watch">Watch: alert when a new host starts matching</option>
           <option value="policy">Policy: every new match is a violation</option>
+          <option value="monitor">Monitor: alert when a matching host changes</option>
         </select>
       </label>
-      <label className="check"><input type="checkbox" checked={draft.alert} onChange={(e) => setDraft({ ...draft, alert: e.target.checked })} />Send notifications for new matches</label>
+      <label className="check"><input type="checkbox" checked={draft.alert} onChange={(e) => setDraft({ ...draft, alert: e.target.checked })} />Send notifications for watch matches, policy violations, and monitored changes</label>
       <div className="muted small">Hosts matching now are recorded as the baseline and do not alert.</div>
       <ErrorBox error={error} />
     </Modal>

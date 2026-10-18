@@ -51,7 +51,8 @@ def _viewer(c: TestClient) -> TestClient:
 def test_device_detail_tags_and_profile(admin):
     uuid = _uuid(admin, "10.0.0.1")
     d = admin.get(f"/api/devices/{uuid}").json()
-    assert d["type"] == "web-server" and d["score"] == 35 and d["score_level"] == "medium"
+    # "web-server" alone (priority 10) is below the confidence threshold: reported as "unknown".
+    assert d["type"] == "unknown" and d["score"] == 35 and d["score_level"] == "medium"
     assert {t["tag"] for t in d["tags"]} == {"remote-access", "web-server"}
     assert {f["factor"] for f in d["profile"]["exposure_factors"]} == {"rdp", "new_host"}
     assert all("http" in p and "cpe" in p for p in d["ports"])
@@ -69,7 +70,7 @@ def test_device_detail_tags_and_profile(admin):
     assert admin.delete(f"/api/devices/{uuid}/tags/web-server", headers=csrf(admin)).status_code == 204
     d = admin.get(f"/api/devices/{uuid}").json()
     assert any(t["tag"] == "web-server" and t["source"] == "rule" for t in d["tags"])
-    assert d["type"] == "web-server"
+    assert d["type"] == "unknown"
     assert admin.get("/api/search", params={"q": "tag:pci-zone"}).json()["total"] == 1
     assert admin.delete(f"/api/devices/{uuid}/tags/pci-zone", headers=csrf(admin)).status_code == 204
 
@@ -88,7 +89,30 @@ def test_device_detail_tags_and_profile(admin):
                        headers={"X-CSRF-Token": viewer.cookies.get("nf_csrf", "")}).status_code == 403
 
 
-def test_device_detail_eager_loads_related_data_in_three_queries(admin, db):
+def test_device_list_and_detail_expose_os_and_port_product_version(client, db):
+    net = make_network(db)
+    scan(ScriptedScanner([
+        host("10.0.0.50", [port(443, "https", "nginx", "1.24.0")], mac="02:00:00:00:00:50",
+             hostname="web50", os_name="Linux 5.x", os_accuracy=94),
+    ]), network_id=net.id)
+    assert client.post("/api/setup/admin", json={"username": "admin2", "password": "correct-horse-1"}).status_code == 200
+    uuid = _uuid(client, "10.0.0.50")
+
+    listed = client.get("/api/devices", params={"q": "ip:10.0.0.50"}).json()["items"][0]
+    assert (listed["os_name"], listed["os_accuracy"], listed["os_source"]) == ("Linux 5.x", 94, "nmap_os")
+    assert listed["os_detected_at"] is not None
+    chip = listed["open_ports"][0]
+    assert (chip["product"], chip["version"]) == ("nginx", "1.24.0")
+
+    detail = client.get(f"/api/devices/{uuid}").json()
+    assert (detail["os_name"], detail["os_accuracy"], detail["os_source"]) == ("Linux 5.x", 94, "nmap_os")
+
+
+def test_device_detail_eager_loads_related_data_in_seven_queries(admin, db):
+    # 3 for the device + ports/http + ips (unchanged eager-load shape), 3 for latency/uptime (spec
+    # section 6: expected scans on the network, matching scan_hosts, device_rtt_samples), and one
+    # bounded scan of recent vuln_jobs (spec section 8) for this device's job status.
+    # None of these loop per-port or per-tag.
     uuid = _uuid(admin, "10.0.0.1")
     db.expunge_all()
     selects: list[str] = []
@@ -104,7 +128,7 @@ def test_device_detail_eager_loads_related_data_in_three_queries(admin, db):
     finally:
         sa_event.remove(bind, "before_cursor_execute", record_select)
 
-    assert len(selects) == 3
+    assert len(selects) == 7
     assert detail["tags"] and detail["profile"]["exposure_factors"]
     assert all("http" in port_data for port_data in detail["ports"])
 
@@ -119,6 +143,10 @@ def test_saved_searches_crud_and_ownership(admin):
     r = admin.put(f"/api/saved-searches/{s['id']}", json={"name": "SSH", "query": "port:22", "kind": "policy"},
                   headers=csrf(admin))
     assert r.json()["last_count"] == 1 and r.json()["kind"] == "policy"
+    mon = admin.post("/api/saved-searches",
+                     json={"name": "DC", "query": "ip:10.0.0.1", "kind": "monitor"}, headers=csrf(admin))
+    assert mon.status_code == 201 and mon.json()["kind"] == "monitor"
+    assert admin.delete(f"/api/saved-searches/{mon.json()['id']}", headers=csrf(admin)).status_code == 204
 
     viewer = _viewer(admin)
     vh = {"X-CSRF-Token": viewer.cookies.get("nf_csrf", "")}
@@ -148,7 +176,7 @@ def test_reports_dashboard_and_zone(admin):
 
     dash = admin.get("/api/dashboard").json()
     assert dash["exposure"]["medium"] == 1 and dash["exposure"]["top"][0]["score"] == 35
-    assert {t["type"] for t in dash["device_types"]} == {"web-server"}
+    assert {t["type"] for t in dash["device_types"]} == {"unknown"}
     assert dash["new_hosts_7d"] == 2 and dash["watch_alerts"]["last_7d"] == 0
 
     body = {"name": "Test Net", "cidr": "10.0.0.0/24", "zone": "users"}

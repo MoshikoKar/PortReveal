@@ -58,8 +58,13 @@ export default function RemoteHosts() {
   const { isAdmin } = useApp();
   const [sp, setSp] = useSearchParams();
   const page = Math.max(1, Number(sp.get('page')) || 1);
-  const { data, error, reload } = useApi<WebHostPage>('/web-hosts', { kind: 'remote', page, page_size: WEB_HOSTS_PAGE_SIZE }, 15000);
-  const active = useApi<{ running: WebCapture[]; queued: WebCapture[] }>('/web-captures/active', undefined, 4000);
+  const showArchived = sp.get('archived') === '1';
+  const { data, error, reload } = useApi<WebHostPage>('/web-hosts', {
+    kind: 'remote', page, page_size: WEB_HOSTS_PAGE_SIZE,
+    include_archived: showArchived ? 'true' : undefined,
+  }, 15000);
+  const active = useApi<{ running: WebCapture[]; queued: WebCapture[] }>(
+    '/web-captures/active', { include_archived: showArchived ? 'true' : undefined }, 4000);
   const q = sp.get('q') ?? '';
   const view = (sp.get('view') as ViewFilter) || 'all';
   const [busy, setBusy] = useState(false);
@@ -128,6 +133,9 @@ export default function RemoteHosts() {
               {capturing ? 'Capturing remotes…' : busy ? 'Starting…' : 'Recapture remotes'}
             </button>
           )}
+          <label className="check small" title="Hosts of networks archived in Settings > Networks are hidden by default">
+            <input type="checkbox" checked={showArchived} onChange={(e) => update({ archived: e.target.checked ? '1' : null, page: null })} />Show archived networks
+          </label>
           <input
             type="search"
             placeholder="Filter by host, IP, RDP/VNC…"

@@ -5,7 +5,7 @@ import { useApp } from '../context';
 import { AuditSettings, HealthPanel, UsersSettings } from './settings/Admin';
 import { DataTransferPanel } from './settings/DataTransfer';
 import { ExclusionsSettings } from './settings/Exclusions';
-import { LdapForm, NotificationsForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, WebCaptureForm } from './settings/Forms';
+import { DiscoveryForm, LdapForm, NotificationsForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, VulnForm, WebCaptureForm } from './settings/Forms';
 import { NetworksSettings } from './settings/Networks';
 import { TokensSettings } from './settings/Tokens';
 
@@ -15,6 +15,8 @@ const TABS = [
   { id: 'schedule', label: 'Schedule', viewer: false },
   { id: 'scan-profiles', label: 'Scan profiles', viewer: false },
   { id: 'web-capture', label: 'Web capture', viewer: false },
+  { id: 'vulnerabilities', label: 'Vulnerabilities', viewer: false },
+  { id: 'discovery', label: 'Local discovery', viewer: false },
   { id: 'notifications', label: 'Notifications', viewer: false },
   { id: 'authentication', label: 'Authentication', viewer: false },
   { id: 'users', label: 'Users', viewer: false },
@@ -114,6 +116,8 @@ export default function Settings() {
       {tab === 'schedule' && <><ScheduleForm onDirtyChange={setFormDirty} /><PresenceForm onDirtyChange={setPresenceDirty} /></>}
       {tab === 'scan-profiles' && <ScanProfileForm onDirtyChange={setFormDirty} />}
       {tab === 'web-capture' && <WebCaptureForm onDirtyChange={setFormDirty} />}
+      {tab === 'vulnerabilities' && <VulnForm onDirtyChange={setFormDirty} />}
+      {tab === 'discovery' && <DiscoveryForm onDirtyChange={setFormDirty} />}
       {tab === 'notifications' && <NotificationsForm onDirtyChange={setFormDirty} />}
       {tab === 'authentication' && <LdapForm onDirtyChange={setFormDirty} />}
       {tab === 'users' && <UsersSettings />}

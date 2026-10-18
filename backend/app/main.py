@@ -32,6 +32,7 @@ from .api import (
     system,
     tokens,
     users,
+    vuln_jobs,
     watches,
     web_captures,
     webhooks,
@@ -41,6 +42,7 @@ from .config import check_production_config, get_settings
 from .core.manager import manager
 from .core.query import QueryError
 from .core.scheduler import scheduler
+from .core.vuln.manager import vuln_job_manager
 from .core.web_capture import web_capture_manager
 from .db import init_engine
 from .logging_setup import setup_logging
@@ -78,6 +80,7 @@ async def lifespan(app: FastAPI):
     if s.background_jobs:
         manager.start()
         web_capture_manager.start()
+        vuln_job_manager.start()
         scheduler.start()
     stop_watcher = watcher_from_env()  # set by scripts/run.ps1 (Windows production)
     if stop_watcher:
@@ -87,6 +90,7 @@ async def lifespan(app: FastAPI):
         stop_watcher.stop()
     scheduler.stop()
     web_capture_manager.stop()
+    vuln_job_manager.stop()
     manager.stop()
     log.info("PortReveal stopped")
 
@@ -119,7 +123,7 @@ app = FastAPI(
 )
 
 for r in (auth, setup, system, dashboard, devices, events, scans, networks, exclusions, settings, users, misc,
-          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks):
+          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks, vuln_jobs):
     app.include_router(r.router)
 
 

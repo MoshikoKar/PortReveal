@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .screenshot import ScreenshotResult, _to_webp
+from .screenshot import _to_webp
 
 log = logging.getLogger(__name__)
 

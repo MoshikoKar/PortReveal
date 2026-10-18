@@ -86,7 +86,11 @@ export default function WebHosts() {
   // Filter state lives in the URL (q, noapp=1, hide=kind,kind, page) so reload, Back and shared links keep it.
   const [sp, setSp] = useSearchParams();
   const page = Math.max(1, Number(sp.get('page')) || 1);
-  const { data, error } = useApi<WebHostPage>('/web-hosts', { kind: 'web', page, page_size: WEB_HOSTS_PAGE_SIZE }, 15000);
+  const showArchived = sp.get('archived') === '1';
+  const { data, error } = useApi<WebHostPage>('/web-hosts', {
+    kind: 'web', page, page_size: WEB_HOSTS_PAGE_SIZE,
+    include_archived: showArchived ? 'true' : undefined,
+  }, 15000);
   const q = sp.get('q') ?? '';
   // Hidden by default: default server pages, errors, blank shells, redirects, no-response
   const showNoApp = sp.get('noapp') === '1';
@@ -142,7 +146,12 @@ export default function WebHosts() {
           <h1>Web interfaces</h1>
           <p>HTTP(S) and RTSP services from the latest Web Capture — one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Services without a screenshot, default server pages, errors, blank pages and redirects are set aside below.</p>
         </div>
-        <input type="search" placeholder="Filter by host, IP, title, port…" value={q} onChange={(e) => update({ q: e.target.value || null }, true)} style={{ width: 260 }} />
+        <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
+          <label className="check small" title="Hosts of networks archived in Settings > Networks are hidden by default">
+            <input type="checkbox" checked={showArchived} onChange={(e) => update({ archived: e.target.checked ? '1' : null, page: null })} />Show archived networks
+          </label>
+          <input type="search" placeholder="Filter by host, IP, title, port…" value={q} onChange={(e) => update({ q: e.target.value || null }, true)} style={{ width: 260 }} />
+        </div>
       </div>
       <ErrorBox error={error} />
       {!data ? <Loading /> : !data.hosts.length ? (

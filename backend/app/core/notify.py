@@ -21,6 +21,7 @@ from ..models import (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_REAPPEARED,
     EV_IP_CHANGED,
+    EV_MONITOR_CHANGE,
     EV_POLICY_VIOLATION,
     EV_PORT_CLOSED,
     EV_PORT_OPENED,
@@ -58,11 +59,12 @@ TITLES = {
     EV_TAG_REMOVED: "Tags removed",
     EV_WATCH_MATCH: "Watch matches",
     EV_POLICY_VIOLATION: "Policy violations",
+    EV_MONITOR_CHANGE: "Monitored changes",
 }
 
 # Ordered categories for the daily summary email.
 CATEGORIES: list[tuple[str, list[str]]] = [
-    ("Watches", [EV_POLICY_VIOLATION, EV_WATCH_MATCH]),
+    ("Watches", [EV_POLICY_VIOLATION, EV_WATCH_MATCH, EV_MONITOR_CHANGE]),
     ("Devices", [EV_DEVICE_DISCOVERED, EV_DEVICE_DISAPPEARED, EV_DEVICE_REAPPEARED, EV_IP_CHANGED]),
     ("Ports", [EV_PORT_OPENED, EV_PORT_CLOSED]),
     ("Services", [EV_SERVICE_DETECTED, EV_SERVICE_CHANGED, EV_VERSION_CHANGED]),
@@ -129,7 +131,7 @@ def _line_for(ev: Event) -> str:
         return f"{who} — {port} {_short(ev.new_value, 28)}".rstrip()
     if ev.event_type in (EV_SERVICE_CHANGED, EV_VERSION_CHANGED):
         return f"{who} — {port}: {_short(ev.old_value, 22)} → {_short(ev.new_value, 22)}"
-    if ev.event_type in (EV_WATCH_MATCH, EV_POLICY_VIOLATION):
+    if ev.event_type in (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE):
         return f"{who} — {_short(ev.new_value, 40)}"
     if ev.event_type in (EV_TAG_ADDED, EV_TAG_REMOVED):
         return f"{who} — {_short(ev.new_value or ev.old_value, 30)}"

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading } from '../../components/ui';
-import type { EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, WebCaptureSettings } from '../../types';
+import type { DiscoverySettings, EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
 import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
 
 function useForm<T>(path: string) {
@@ -172,9 +172,25 @@ export function ScanProfileForm({ onDirtyChange }: { onDirtyChange?: (dirty: boo
           <Num label="Missed scans before 'not detected'" value={s.disappear_after_missed} min={1} max={30} onChange={(v) => set({ disappear_after_missed: v })} hint="Consecutive complete scans; avoids false 'disappeared' alerts" />
           <Num label="Mass-change guard (%)" value={s.mass_change_guard_percent} min={10} max={100} onChange={(v) => set({ mass_change_guard_percent: v })} hint="Skip removals when more than this share would vanish at once" />
           <Num label="Keep raw XML (days)" value={s.raw_retention_days} min={1} max={90} onChange={(v) => set({ raw_retention_days: v })} />
+          <Num label="OS refresh interval (days)" value={s.os_refresh_days} min={1} max={90} onChange={(v) => set({ os_refresh_days: v })} hint="Re-run -O only when the last guess is older than this" />
+          <Num label="OS min accuracy to display as certain" value={s.os_min_accuracy_display} min={0} max={100} onChange={(v) => set({ os_min_accuracy_display: v })} hint="Below this the UI labels the guess uncertain (default 85)" />
         </div>
+        {s.os_detection_enabled_notice && (
+          <div className="alert ok">
+            OS detection was turned on for this install (one-time migration). Full fingerprinting needs
+            privileged nmap (raw sockets / NET_RAW / Npcap). You can turn it off below.
+            <div style={{ marginTop: 8 }}>
+              <button type="button" className="btn sm" onClick={() => f.save({ ...s, os_detection_enabled_notice: false })}>
+                Dismiss notice
+              </button>
+            </div>
+          </div>
+        )}
         <div className="row wrap">
-          <label className="check"><input type="checkbox" checked={s.os_detection} onChange={(e) => set({ os_detection: e.target.checked })} />Basic OS detection (-O, requires privileged nmap)</label>
+          <label className="check" title="Requires a privileged nmap (raw sockets) and sends one UDP probe to a closed port as part of the fingerprint; without privileges this is skipped automatically and the OS is guessed from service/banner data instead.">
+            <input type="checkbox" checked={s.os_detection} onChange={(e) => set({ os_detection: e.target.checked })} />
+            OS detection (-O, requires privileged nmap; sends one UDP probe to a closed port)
+          </label>
           <label className="check"><input type="checkbox" checked={s.keep_raw_xml} onChange={(e) => set({ keep_raw_xml: e.target.checked })} />Keep raw nmap XML temporarily for troubleshooting</label>
         </div>
         <Msg msg={f.msg} />
@@ -400,6 +416,178 @@ export function LdapForm({ onSaved, onDirtyChange }: { onSaved?: () => void; onD
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <Msg msg={f.msg} />
         <div><button className="btn primary" disabled={f.saving} onClick={async () => { if (await f.save(body())) { setPassword(null); onSaved?.(); } }}>Save LDAP settings</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- vulnerability feed (risk scoring)
+const VULN_SOURCES: { id: 'nvd' | 'kev' | 'epss'; label: string; hint: string }[] = [
+  { id: 'nvd', label: 'NVD', hint: 'CVE records, CVSS and CPE matches (core source)' },
+  { id: 'kev', label: 'CISA KEV', hint: 'Flags CVEs known to be exploited in the wild' },
+  { id: 'epss', label: 'FIRST EPSS', hint: 'Exploitation-probability score, used to weight risk' },
+];
+
+const VULN_STATUS_POLL_RUNNING_MS = 5000;
+const VULN_STATUS_POLL_IDLE_MS = 60000;
+
+function VulnFeedStatusPanel({ status }: { status: VulnStatus | null }) {
+  if (!status) return null;
+  const label = (id: string) => VULN_SOURCES.find((s) => s.id === id)?.label ?? id;
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <div className="row wrap small" style={{ gap: 12 }}>
+        <span><strong>Local CVE cache:</strong> {status.cve_count.toLocaleString()} CVEs</span>
+        {status.sync_running ? <span className="badge medium">sync running</span> : <span className="badge outline">idle</span>}
+      </div>
+      {!status.feeds.length ? (
+        <div className="muted small">No feed has been synced yet.</div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Feed</th><th>Last successful sync</th><th className="right">Records</th><th>Status</th></tr></thead>
+            <tbody>
+              {status.feeds.map((fd) => (
+                <tr key={fd.source}>
+                  <td>{label(fd.source)}</td>
+                  <td title={fd.last_synced_at ? fmtTime(fd.last_synced_at) : undefined}>
+                    {fd.last_synced_at ? relTime(fd.last_synced_at) : <span className="muted">never</span>}
+                  </td>
+                  <td className="right">{fd.record_count.toLocaleString()}</td>
+                  <td className="small">
+                    {fd.source === 'nvd' && fd.mirror_complete === false && (
+                      <div>Yearly mirror in progress: next year {fd.mirror_next_year ?? status.mirror_start_year}</div>
+                    )}
+                    {fd.last_error ? <><span className="badge high">error</span> <span className="muted">{fd.last_error}</span></> : <span className="badge ok">ok</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const f = useForm<VulnSettings>('/settings/vuln');
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  useReportDirty(f.dirty || apiKey !== null, onDirtyChange);
+  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [statusPoll, setStatusPoll] = useState(VULN_STATUS_POLL_IDLE_MS);
+  const status = useApi<VulnStatus>('/settings/vuln/status', undefined, statusPoll);
+  const running = !!status.data?.sync_running;
+  useEffect(() => {
+    setStatusPoll(running ? VULN_STATUS_POLL_RUNNING_MS : VULN_STATUS_POLL_IDLE_MS);
+  }, [running]);
+  if (!f.form) return <Card title="Vulnerability scoring"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<VulnSettings>) => f.setForm({ ...s, ...patch });
+  const body = () => {
+    const { nvd_api_key_set: _ignored, ...rest } = s;
+    void _ignored;
+    return { ...rest, ...(apiKey !== null ? { nvd_api_key: apiKey } : {}) };
+  };
+  const save = async () => {
+    if (await f.save(body())) setApiKey(null);
+  };
+  const syncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await post<{ ok: boolean; message: string }>('/settings/vuln/sync');
+      setSyncMsg({ ok: r.ok, text: r.message });
+      status.reload();
+    } catch (e: any) {
+      setSyncMsg({ ok: false, text: e.message });
+    } finally {
+      setSyncing(false);
+    }
+  };
+  return (
+    <Card title="Vulnerability scoring">
+      <div className="stack">
+        <div className="muted small">
+          Risk scoring matches each device's identified product/version (CPE) against a local cache of known
+          vulnerabilities. Off by default. No information about this network is ever sent out — only a plain
+          HTTP download of public NVD / CISA KEV / FIRST EPSS data files, on a weekly schedule. Works fully
+          without an NVD API key; adding one only raises the request rate limit.
+        </div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable vulnerability risk scoring</label>
+        <div className="field"><span>Sources</span>
+          <div className="row wrap" style={{ gap: 14 }}>
+            {VULN_SOURCES.map((src) => (
+              <label key={src.id} className="check small" title={src.hint}>
+                <input type="checkbox" checked={s.sources.includes(src.id)} disabled={!s.enabled}
+                  onChange={(e) => set({ sources: e.target.checked ? [...s.sources, src.id] : s.sources.filter((x) => x !== src.id) })} />
+                {src.label}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="form-grid">
+          <Num label="Sync interval (hours)" value={s.sync_interval_hours} min={24} max={720} onChange={(v) => set({ sync_interval_hours: v })} hint="Default 168 = weekly" />
+          <label className="field">Sync time (HH:MM)<input type="time" value={s.sync_time} onChange={(e) => set({ sync_time: e.target.value })} /></label>
+          <label className="field">NVD API key (optional)
+            <input type="password" value={apiKey ?? ''} placeholder={s.nvd_api_key_set ? '•••••• (unchanged)' : 'not set — public rate limit applies'}
+              onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" />
+          </label>
+          <Num label="Min CVSS to display" value={s.min_cvss_display} min={0} max={10} onChange={(v) => set({ min_cvss_display: v })} />
+        </div>
+        <div className="row wrap">
+          <label className="check"><input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />Offline mode (no feed downloads; import with <code>npm run cli -- vuln-import PATH</code>)</label>
+          <label className="check"><input type="checkbox" checked={s.include_potential} onChange={(e) => set({ include_potential: e.target.checked })} />Show "potential" matches (imprecise version), not just confirmed</label>
+          <label className="check" title="Safe/discovery nmap scripts only (SCRIPT_ALLOWLIST) — never vulners, never intrusive categories">
+            <input type="checkbox" checked={s.scripts_enabled} onChange={(e) => set({ scripts_enabled: e.target.checked })} />
+            Run allow-listed nmap scripts as a secondary signal
+          </label>
+        </div>
+        <Msg msg={f.msg} />
+        <VulnFeedStatusPanel status={status.data} />
+        {syncMsg && <div className={`alert ${syncMsg.ok ? 'ok' : 'error'}`}>{syncMsg.text}</div>}
+        <div className="row">
+          <button className="btn primary" disabled={f.saving} onClick={save}>Save</button>
+          <button className="btn" onClick={syncNow} disabled={!s.enabled || s.offline_mode || syncing || running}
+            title="Download the public NVD / CISA KEV / FIRST EPSS feeds into the local cache now">
+            {syncing ? 'Starting…' : running ? 'Sync running…' : 'Sync feeds now'}
+          </button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- local discovery (mDNS/SSDP/NetBIOS)
+export function DiscoveryForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const f = useForm<DiscoverySettings>('/settings/discovery');
+  useReportDirty(f.dirty, onDirtyChange);
+  if (!f.form) return <Card title="Local device-name discovery"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<DiscoverySettings>) => f.setForm({ ...s, ...patch });
+  return (
+    <Card title="Local device-name discovery">
+      <div className="stack">
+        <div className="muted small">
+          A local-only, LAN-bound channel that strengthens device-type classification with names
+          devices already announce. Default on is only the cheap passive path: mDNS/Bonjour listen.
+          SSDP/UPnP (one multicast M-SEARCH) and NetBIOS (short unicast queries, rotated across
+          large inventories) are opt-in. Nothing ever leaves the LAN, and this never runs an nmap
+          UDP scan (<code>-sU</code> stays banned everywhere else). Heard names persist and age
+          out instead of being cleared when a single pass misses a host.
+        </div>
+        <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Enable local discovery</label>
+        <div className="row wrap">
+          <label className="check small"><input type="checkbox" checked={s.mdns} disabled={!s.enabled} onChange={(e) => set({ mdns: e.target.checked })} />mDNS / Bonjour (passive)</label>
+          <label className="check small"><input type="checkbox" checked={s.ssdp} disabled={!s.enabled} onChange={(e) => set({ ssdp: e.target.checked })} />SSDP / UPnP (active M-SEARCH)</label>
+          <label className="check small"><input type="checkbox" checked={s.netbios} disabled={!s.enabled} onChange={(e) => set({ netbios: e.target.checked })} />NetBIOS (active queries)</label>
+        </div>
+        <Num label="Timeout per source (seconds)" value={s.timeout_seconds} min={0.5} max={15}
+          onChange={(v) => set({ timeout_seconds: v })} hint="mDNS/SSDP listen window; NetBIOS uses a shorter fixed window" />
+        <Msg msg={f.msg} />
+        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save(s)}>Save</button></div>
       </div>
     </Card>
   );

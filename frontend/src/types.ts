@@ -83,7 +83,8 @@ export interface SystemStatus {
 export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
   | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
-  | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed';
+  | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed'
+  | 'os_changed' | 'monitor_change';
 
 export interface ChangeEvent {
   id: number;
@@ -112,6 +113,18 @@ export interface DeviceSummary {
   vendor: string | null;
   hostname: string | null;
   os_name: string | null;
+  os_accuracy: number | null;
+  os_detected_at: string | null;
+  os_source: string | null;
+  ip_assignment: 'static' | 'dynamic' | 'unknown' | null;
+  last_rtt_ms: number | null;
+  continuous_since: string | null;
+  score?: number | null;
+  risk_score: number;
+  combined_score: number;
+  risk_scored_at: string | null;
+  discovery_name: string | null;
+  discovery_source: 'mdns' | 'ssdp' | 'netbios' | null;
   status: DeviceStatus;
   network_id: number | null;
   network_name: string | null;
@@ -119,7 +132,7 @@ export interface DeviceSummary {
   last_seen: string;
   port_scan_failed: boolean;
   open_port_count: number;
-  open_ports: { port: number; protocol: string; service: string | null }[];
+  open_ports: { port: number; protocol: string; service: string | null; product: string | null; version: string | null }[];
 }
 
 export interface DevicePort {
@@ -175,6 +188,8 @@ export interface DeviceProfile {
   criticality: Criticality | null;
   notes: string | null;
   exposure_factors: ExposureFactor[];
+  risk_factors: ExposureFactor[];
+  type_evidence: ExposureFactor[];
   updated_at: string | null;
 }
 
@@ -183,6 +198,13 @@ export interface DeviceDetail extends DeviceSummary {
   missed_scans: number;
   last_port_scan_at: string | null;
   full_scanned_at: string | null;
+  availability_pct: number | null;
+  availability_window_days: number;
+  rtt_samples: { rtt_ms: number; sampled_at: string }[];
+  risk_level: ScoreLevel;
+  combined_level: ScoreLevel;
+  type_confidence: number | null;
+  vuln_job: VulnJobSummary | null;
   ports: DevicePort[];
   ips: { ip: string; first_seen: string; last_seen: string }[];
   previous_ips: string[];
@@ -261,7 +283,7 @@ export interface SavedSearch {
   name: string;
   query: string;
   description: string | null;
-  kind: 'watch' | 'policy';
+  kind: 'watch' | 'policy' | 'monitor';
   alert: boolean;
   created_by: string | null;
   created_at: string;
@@ -437,6 +459,7 @@ export interface Network {
   vpn_s2s: boolean;
   baseline_scan_id: number | null;
   baseline_at: string | null;
+  archived_at: string | null;
   created_at: string;
   device_count: number | null;
   active_count: number | null;
@@ -513,6 +536,9 @@ export interface ScanSettings {
   host_timeout_minutes: number;
   full_host_timeout_minutes: number;
   os_detection: boolean;
+  os_refresh_days: number;
+  os_min_accuracy_display: number;
+  os_detection_enabled_notice: boolean;
   disappear_after_missed: number;
   mass_change_guard_percent: number;
   keep_raw_xml: boolean;
@@ -545,6 +571,93 @@ export interface LdapSettings {
   admin_group_dn: string;
   viewer_group_dn: string;
   timeout_seconds: number;
+}
+
+export interface VulnSettings {
+  enabled: boolean;
+  sources: ('nvd' | 'kev' | 'epss')[];
+  sync_interval_hours: number;
+  sync_time: string;
+  offline_mode: boolean;
+  nvd_api_key_set: boolean;
+  nvd_api_key?: string | null;
+  include_potential: boolean;
+  min_cvss_display: number;
+  scripts_enabled: boolean;
+}
+
+export interface VulnFeedStatus {
+  source: 'nvd' | 'kev' | 'epss';
+  last_synced_at: string | null;
+  record_count: number;
+  last_error: string | null;
+  mirror_complete: boolean | null;
+  mirror_next_year: number | null;
+}
+
+export interface VulnStatus {
+  sync_running: boolean;
+  cve_count: number;
+  mirror_start_year: number;
+  feeds: VulnFeedStatus[];
+}
+
+export interface DiscoverySettings {
+  enabled: boolean;
+  mdns: boolean;
+  ssdp: boolean;
+  netbios: boolean;
+  timeout_seconds: number;
+}
+
+export type VulnMatchState = 'confirmed' | 'potential' | 'dismissed';
+
+export interface DeviceVuln {
+  cve_id: string;
+  port: number;
+  protocol: string;
+  service: string | null;
+  product: string | null;
+  version: string | null;
+  matched_cpe: string | null;
+  state: VulnMatchState;
+  source: 'cache' | 'nmap_script';
+  cvss_base: number | null;
+  cvss_vector: string | null;
+  severity: string | null;
+  kev: boolean;
+  epss: number | null;
+  epss_percentile: number | null;
+  summary: string | null;
+  matched_at: string;
+}
+
+export type VulnJobStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+
+export interface VulnJobSummary {
+  id: number;
+  status: VulnJobStatus;
+  stage: string | null;
+  finished_at: string | null;
+}
+
+export interface VulnJob {
+  id: number;
+  uuid: string;
+  status: VulnJobStatus;
+  trigger: 'after_scan' | 'manual';
+  scan_id: number | null;
+  network_id: number | null;
+  device_count: number;
+  requested_by: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  stage: string | null;
+  progress: number;
+  error: string | null;
+  stats: Record<string, number> | null;
+  notes: string | null;
 }
 
 export interface AuditEntry {

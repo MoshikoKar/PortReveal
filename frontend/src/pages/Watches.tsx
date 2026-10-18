@@ -5,7 +5,7 @@ import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard } from '../c
 import type { SavedSearch } from '../types';
 import { fmtTime, relTime, useApi, useInFlight } from '../util';
 
-type Draft = { id?: number; name: string; query: string; description: string; kind: 'watch' | 'policy'; alert: boolean };
+type Draft = { id?: number; name: string; query: string; description: string; kind: 'watch' | 'policy' | 'monitor'; alert: boolean };
 
 const EMPTY: Draft = { name: '', query: '', description: '', kind: 'watch', alert: true };
 
@@ -58,7 +58,7 @@ export default function Watches() {
       <div className="page-head">
         <div>
           <h1>Watches</h1>
-          <p>Saved searches re-run after every scan and web capture. A host that newly matches raises a watch match or policy violation.</p>
+          <p>Saved searches re-run after every scan and web capture. Watches and policies alert when a host newly matches; monitors alert when a matching host itself changes.</p>
         </div>
         <button className="btn primary" onClick={() => open(EMPTY)}>New watch</button>
       </div>
@@ -76,7 +76,7 @@ export default function Watches() {
                     <td><strong>{s.name}</strong>{s.description && <div className="muted small">{s.description}</div>}</td>
                     <td className="mono small"><Link to={`/search?q=${encodeURIComponent(s.query)}`}>{s.query}</Link></td>
                     <td>
-                      <span className={`badge ${s.kind === 'policy' ? 'high' : 'accent'}`}>{s.kind}</span>
+                      <span className={`badge ${s.kind === 'policy' ? 'high' : s.kind === 'monitor' ? 'medium' : 'accent'}`}>{s.kind}</span>
                       {!s.alert && <span className="badge outline" style={{ marginLeft: 6 }} title="Matches are recorded without notifications">silent</span>}
                     </td>
                     <td className="right">{s.initialized ? s.last_count : <span className="muted">—</span>}</td>
@@ -115,9 +115,10 @@ export default function Watches() {
             <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as Draft['kind'] })}>
               <option value="watch">Watch: alert when a new host starts matching</option>
               <option value="policy">Policy: every new match is a violation</option>
+              <option value="monitor">Monitor: alert when a matching host changes</option>
             </select>
           </label>
-          <label className="check"><input type="checkbox" checked={draft.alert} onChange={(e) => setDraft({ ...draft, alert: e.target.checked })} />Send notifications for new matches</label>
+          <label className="check"><input type="checkbox" checked={draft.alert} onChange={(e) => setDraft({ ...draft, alert: e.target.checked })} />Send notifications for watch matches, policy violations, and monitored changes</label>
           <ErrorBox error={saveError} />
         </Modal>
       )}
