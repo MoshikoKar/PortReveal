@@ -201,10 +201,12 @@ def _weekly_series(db: Session, now: datetime, weeks: int = WEEKS) -> list[dict]
 
 
 def _top_lists(db: Session) -> dict:
-    """Top CVEs by device count / top devices by combined score -- same shape as the existing
-    `/api/reports/vulnerabilities`, just top 10 instead of top 20, so the dashboard and the
-    Reports page vuln cards (decision 5) can share one computation without diverging."""
+    """Top CVEs by device count / top devices by combined score -- a superset of the existing
+    `/api/reports/vulnerabilities` shape (adds device_type/network_name), just top 10 instead of
+    top 20, so the dashboard and the Reports page vuln cards (decision 5) can share one
+    computation without diverging."""
     ok = device_visible(db)
+    names = {n.id: n.name for n in db.scalars(select(Network)).all()}
     top_devices = db.scalars(
         select(Device).where(ok, Device.risk_score > 0)
         .order_by(Device.combined_score.desc(), Device.risk_score.desc(), Device.id).limit(TOP_N)
@@ -222,8 +224,9 @@ def _top_lists(db: Session) -> dict:
     ).all()
     return {
         "top_devices": [
-            {"uuid": d.uuid, "ip": d.current_ip, "hostname": d.hostname, "risk_score": d.risk_score or 0,
-             "combined_score": d.combined_score or 0, "exposure_score": d.exposure_score or 0}
+            {"uuid": d.uuid, "ip": d.current_ip, "hostname": d.hostname, "device_type": d.device_type,
+             "network_name": names.get(d.network_id), "exposure_score": d.exposure_score or 0,
+             "risk_score": d.risk_score or 0, "combined_score": d.combined_score or 0}
             for d in top_devices
         ],
         "top_cves": [
