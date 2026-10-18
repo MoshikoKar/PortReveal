@@ -494,6 +494,7 @@ def sync_and_rescore(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = 
     from ...models import Device
     from .match import match_all
     from .score import apply_risk_scores
+    from .summary import refresh_after_scan_or_sync
 
     now = now or datetime.now(timezone.utc)
     results = sync_all(db, cfg, fetch=fetch, now=now)
@@ -501,6 +502,8 @@ def sync_and_rescore(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = 
     db.commit()
     device_ids = list(db.scalars(select(Device.id)))
     apply_risk_scores(db, device_ids, now=now)
+    db.commit()
+    refresh_after_scan_or_sync(db, now=now)
     return results
 
 

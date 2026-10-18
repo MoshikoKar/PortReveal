@@ -8,14 +8,17 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.core.vuln import match, score, sync
+from app.core.vuln import summary as vuln_summary
 from app.models import (
     VULN_STATE_CONFIRMED,
     VULN_STATE_DISMISSED,
     VULN_STATE_POTENTIAL,
     DevicePortVuln,
     VulnCpeMatch,
+    VulnDailySnapshot,
     Vulnerability,
     VulnFeedState,
+    VulnFindingLifecycle,
 )
 from app.settings_store import VulnSettings
 
@@ -446,6 +449,12 @@ def test_sync_and_rescore_matches_and_scores_after_sync(db):
     assert db.query(DevicePortVuln).filter_by(device_port_id=p.id, cve_id="CVE-2024-1111").one().state == \
         VULN_STATE_CONFIRMED
     assert d.risk_score > 0 and d.risk_scored_at is not None
+
+    # Sync completion also maintains the finding lifecycle and the dashboard summary/snapshot.
+    assert db.query(VulnFindingLifecycle).filter_by(cve_id="CVE-2024-1111").count() == 1
+    assert db.query(VulnDailySnapshot).filter_by(network_id=None, snapshot_date=T.date()).count() == 1
+    summary = vuln_summary.get_vuln_summary(db, now=T)
+    assert summary["confirmed_count"] == 1
 
 
 def _mirror_year_payload(year: int, cve_id: str) -> bytes:
