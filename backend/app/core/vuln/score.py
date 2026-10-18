@@ -36,6 +36,17 @@ RISK_CHUNK = 500
 # HIGH_THRESHOLD/MEDIUM_THRESHOLD, since combined_score shares that 0-100 scale.
 RISK_HIGH_THRESHOLD = 60
 RISK_MEDIUM_THRESHOLD = 30
+RISK_BANDS = ("high", "medium", "low")
+
+
+def risk_band_for_score(score: int | float | None) -> str:
+    """Combined-score band used by the summary's high-risk device card and GET /api/vulns?risk_band=."""
+    s = int(score or 0)
+    if s >= RISK_HIGH_THRESHOLD:
+        return "high"
+    if s >= RISK_MEDIUM_THRESHOLD:
+        return "medium"
+    return "low"
 
 
 @dataclass(frozen=True)

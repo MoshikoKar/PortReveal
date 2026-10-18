@@ -18,7 +18,7 @@ const SEVERITY_COLOR: Record<string, string> = {
 const FILTER_LABELS: Record<VulnFilterKey, string> = {
   severity: 'severity', kev: 'KEV', epss_min: 'EPSS ≥', network_id: 'network', service: 'service',
   port: 'port', os_name: 'OS', device_type: 'device type', state: 'state', cve_age: 'CVE age',
-  exposure_duration: 'exposure duration',
+  exposure_duration: 'exposure duration', risk_band: 'risk band',
 };
 
 export default function Vulnerabilities() {
@@ -112,7 +112,7 @@ export default function Vulnerabilities() {
             <Kpi label={`High exploit probability (EPSS ≥ ${epssPct}%)`} value={data.epss_high_count}
               sub="FIRST.org exploitation-probability score" onClick={() => set('epss_min', String(data.epss_threshold))} />
             <Kpi label="High-risk devices" value={risk.high} sub={`${risk.medium} medium · ${risk.low} low`}
-              color={risk.high ? 'var(--high)' : undefined} />
+              color={risk.high ? 'var(--high)' : undefined} onClick={() => toggle('risk_band', 'high')} />
             <Kpi label="Confirmed findings" value={data.confirmed_count} onClick={() => toggle('state', 'confirmed')} />
             <Kpi label="Potential findings" value={data.potential_count} onClick={() => toggle('state', 'potential')} />
           </div>

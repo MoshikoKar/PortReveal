@@ -84,3 +84,13 @@ describe('vulnFilterLink', () => {
     expect(vulnFilterLink({})).toBe('/vulnerabilities');
   });
 });
+
+describe('risk_band filter', () => {
+  it('round-trips through parse / toggle / clear', () => {
+    const set = toggleVulnFilter(new URLSearchParams(), 'risk_band', 'high');
+    expect(parseVulnFilters(set)).toEqual({ risk_band: 'high' });
+    expect(vulnFilterLink({ risk_band: 'high' })).toBe('/vulnerabilities?risk_band=high');
+    expect(toggleVulnFilter(set, 'risk_band', 'high').get('risk_band')).toBeNull();
+    expect(clearVulnFilters(set).get('risk_band')).toBeNull();
+  });
+});

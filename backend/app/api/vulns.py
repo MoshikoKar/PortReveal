@@ -19,7 +19,7 @@ from ..auth.deps import current_user
 from ..core.mockdata import device_visible
 from ..core.vuln.buckets import severity_bucket, severity_bucket_expr
 from ..core.vuln.display import is_visible
-from ..core.vuln.score import DEFAULT_CVSS
+from ..core.vuln.score import DEFAULT_CVSS, RISK_BANDS, RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 from ..core.vuln.summary import get_vuln_summary
 from ..db import SessionLocal, get_db, utcnow
 from ..models import (
@@ -42,6 +42,7 @@ router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 AGE_BUCKETS = ("under_30d", "30_90d", "90_365d", "over_365d", "unknown")
 AGE_BUCKET_PATTERN = "^(" + "|".join(AGE_BUCKETS) + ")$"
 SEVERITY_PATTERN = "^(critical|high|medium|low)$"
+RISK_BAND_PATTERN = "^(" + "|".join(RISK_BANDS) + ")$"
 STATE_PATTERN = "^(" + "|".join(VULN_STATES) + ")$"
 
 
@@ -67,6 +68,7 @@ class FindingFilters:
     state: str | None = None
     cve_age: str | None = None
     exposure_duration: str | None = None
+    risk_band: str | None = None
 
 
 def _lifecycle_join_cond():
@@ -143,7 +145,41 @@ def _apply_filters(q, db: Session, cfg: VulnSettings, f: FindingFilters, now: da
         q = q.where(_age_bucket_cond(Vulnerability.published_at, f.cve_age, now))
     if f.exposure_duration is not None:
         q = q.where(_age_bucket_cond(VulnFindingLifecycle.first_seen_at, f.exposure_duration, now))
+    if f.risk_band is not None:
+        # Same combined-score bands as summary._risk_device_levels / score.RISK_*_THRESHOLD.
+        if f.risk_band == "high":
+            q = q.where(Device.combined_score >= RISK_HIGH_THRESHOLD)
+        elif f.risk_band == "medium":
+            q = q.where(
+                Device.combined_score >= RISK_MEDIUM_THRESHOLD,
+                Device.combined_score < RISK_HIGH_THRESHOLD,
+            )
+        else:  # low
+            q = q.where(Device.combined_score < RISK_MEDIUM_THRESHOLD)
     return q
+
+
+def _filters_from_query(
+    *,
+    severity: str | None,
+    kev: bool | None,
+    epss_min: float | None,
+    network_id: int | None,
+    service: str | None,
+    port: int | None,
+    os_name: str | None,
+    device_type: str | None,
+    state: str | None,
+    cve_age: str | None,
+    exposure_duration: str | None,
+    risk_band: str | None,
+) -> FindingFilters:
+    return FindingFilters(
+        severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
+        service=service, port=port, os_name=os_name, device_type=device_type,
+        state=state, cve_age=cve_age, exposure_duration=exposure_duration,
+        risk_band=risk_band,
+    )
 
 
 @router.get("")
@@ -159,6 +195,7 @@ def list_vulns(
     state: str | None = Query(None, pattern=STATE_PATTERN),
     cve_age: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
     exposure_duration: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
+    risk_band: str | None = Query(None, pattern=RISK_BAND_PATTERN),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
@@ -167,9 +204,11 @@ def list_vulns(
     links here with matching query params, so the URL is shareable (spec UX)."""
     cfg = get_section(db, VulnSettings)
     now = utcnow()
-    filters = FindingFilters(severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
-                             service=service, port=port, os_name=os_name, device_type=device_type,
-                             state=state, cve_age=cve_age, exposure_duration=exposure_duration)
+    filters = _filters_from_query(
+        severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
+        service=service, port=port, os_name=os_name, device_type=device_type,
+        state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
+    )
     total = db.scalar(_apply_filters(_count_base(), db, cfg, filters, now)) or 0
     rows = db.execute(
         _apply_filters(_rows_base(), db, cfg, filters, now)
@@ -236,12 +275,15 @@ def export_vulns(
     state: str | None = Query(None, pattern=STATE_PATTERN),
     cve_age: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
     exposure_duration: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
+    risk_band: str | None = Query(None, pattern=RISK_BAND_PATTERN),
     user: User = Depends(current_user),
 ):
     """Same filters as GET /api/vulns, no pagination: every matching row, streamed as CSV."""
-    filters = FindingFilters(severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
-                             service=service, port=port, os_name=os_name, device_type=device_type,
-                             state=state, cve_age=cve_age, exposure_duration=exposure_duration)
+    filters = _filters_from_query(
+        severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
+        service=service, port=port, os_name=os_name, device_type=device_type,
+        state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
+    )
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     return StreamingResponse(
         _export_lines(filters, utcnow()),

@@ -5,7 +5,7 @@
 
 export const VULN_FILTER_KEYS = [
   'severity', 'kev', 'epss_min', 'network_id', 'service', 'port', 'os_name', 'device_type',
-  'state', 'cve_age', 'exposure_duration',
+  'state', 'cve_age', 'exposure_duration', 'risk_band',
 ] as const;
 
 export type VulnFilterKey = typeof VULN_FILTER_KEYS[number];

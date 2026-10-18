@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.auth import limiter
 from app.core.vuln.lifecycle import sync_finding_lifecycle
+from app.core.vuln.score import RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 from app.db import utcnow
 from app.main import app
 from app.models import VULN_STATE_CONFIRMED, VULN_STATE_DISMISSED, VULN_STATE_POTENTIAL, DevicePortVuln, Vulnerability
@@ -111,6 +112,38 @@ def test_list_vulns_exposure_duration_and_cve_age_buckets(admin, db):
     assert admin.get("/api/vulns", params={"exposure_duration": "under_30d"}).json()["total"] == 2
     assert admin.get("/api/vulns", params={"exposure_duration": "over_365d"}).json()["total"] == 0
     assert admin.get("/api/vulns", params={"cve_age": "unknown"}).json()["total"] == 2  # no published_at seeded
+
+
+def test_list_vulns_filters_by_risk_band_using_combined_score_thresholds(admin, db):
+    """risk_band uses the same combined-score cut points as the summary's high-risk device card."""
+    _net, da, db_ = _seed_two_devices(db)
+    da.combined_score = RISK_HIGH_THRESHOLD
+    db_.combined_score = RISK_MEDIUM_THRESHOLD
+    db.commit()
+
+    high = admin.get("/api/vulns", params={"risk_band": "high"}).json()
+    assert high["total"] == 1 and high["items"][0]["cve_id"] == "CVE-2024-CRIT"
+    medium = admin.get("/api/vulns", params={"risk_band": "medium"}).json()
+    assert medium["total"] == 1 and medium["items"][0]["cve_id"] == "CVE-2024-MED"
+    assert admin.get("/api/vulns", params={"risk_band": "low"}).json()["total"] == 0
+
+    # Boundary: just below high is medium; just below medium is low.
+    da.combined_score = RISK_HIGH_THRESHOLD - 1
+    db_.combined_score = RISK_MEDIUM_THRESHOLD - 1
+    db.commit()
+    assert admin.get("/api/vulns", params={"risk_band": "high"}).json()["total"] == 0
+    assert admin.get("/api/vulns", params={"risk_band": "medium"}).json()["total"] == 1
+    assert admin.get("/api/vulns", params={"risk_band": "low"}).json()["total"] == 1
+
+
+def test_export_vulns_respects_risk_band(admin, db):
+    _net, da, db_ = _seed_two_devices(db)
+    da.combined_score = RISK_HIGH_THRESHOLD
+    db_.combined_score = 0
+    db.commit()
+    r = admin.get("/api/vulns/export", params={"risk_band": "high"})
+    body = r.text
+    assert "CVE-2024-CRIT" in body and "CVE-2024-MED" not in body
 
 
 def test_list_vulns_respects_min_cvss_display_like_device_endpoint(admin, db):
