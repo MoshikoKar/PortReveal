@@ -65,7 +65,20 @@ export function VulnFindingsTable({
     }>
       <ErrorBox error={error} />
       {!data ? (!error && <SkeletonRows cols={isAdmin ? 8 : 7} rows={5} />) : !items.length ? (
-        <Empty>{showingDismissed ? 'No dismissed findings.' : 'No findings match the current filters.'}</Empty>
+        <Empty>
+          {showingDismissed
+            ? 'No dismissed findings.'
+            : (
+              <>
+                No findings match the current filters.
+                <div className="muted small" style={{ marginTop: 8 }}>
+                  Matching needs product/version (CPE) from a <strong>standard</strong> or{' '}
+                  <strong>full</strong> port scan. Discovery-only scans find hosts but collect no
+                  service data, so they never produce vulnerability findings.
+                </div>
+              </>
+            )}
+        </Empty>
       ) : (
         <>
           <div className="table-wrap">

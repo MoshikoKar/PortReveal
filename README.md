@@ -516,6 +516,12 @@ for production).
 | Standard | Discovery, then `-Pn -sV --top-ports N` (default 3000) on live hosts |
 | Full port | Discovery, then `-Pn -sV -p 1-65535` on live hosts (manual) |
 
+Vulnerability matching uses CPE strings from service detection (`-sV`). A
+**discovery** scan only finds live hosts — it does not collect product/version
+data — so the Vulnerabilities page stays empty until a **standard** or **full**
+scan (or Mock Lab baseline) has run against those hosts and the local CVE cache
+is populated.
+
 Daily schedule (optional discovery then standard), daytime presence scans, and
 correlated absence thresholds are configured under **Settings → Schedule**.
 The daily schedule is deferred (within its catch-up window) while any scan is
