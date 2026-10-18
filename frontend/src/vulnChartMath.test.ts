@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  barFillStyle, barWidthPct, cellFillStyle, cellIntensity, linePath, maxOf, SEVERITY_COLOR_VAR,
-  trendHasData, xScale, yScale,
+  barFillStyle, barWidthPct, cellFillLightness, cellFillStyle, cellIntensity, contrastRatio,
+  linePath, maxOf, readableTextColor, relativeLuminance, trendHasData, xScale, yScale,
 } from './vulnChartMath';
 
 describe('maxOf', () => {
@@ -100,27 +100,35 @@ describe('cellIntensity', () => {
   });
 });
 
-describe('cellFillStyle', () => {
-  it('uses distinct severity hues so Low < Medium < High < Critical stays obvious', () => {
-    const low = cellFillStyle('low', 100, 100);
-    const medium = cellFillStyle('medium', 1, 100);
-    const high = cellFillStyle('high', 1, 100);
-    const critical = cellFillStyle('critical', 1, 100);
-    expect(low.background).toContain(SEVERITY_COLOR_VAR.low);
-    expect(medium.background).toContain(SEVERITY_COLOR_VAR.medium);
-    expect(high.background).toContain(SEVERITY_COLOR_VAR.high);
-    expect(critical.background).toContain(SEVERITY_COLOR_VAR.critical);
-    // Even a max-count Low cell mixes less of its hue than a min-count Medium cell.
-    const lowPct = Number(low.background.match(/ (\d+)%/)?.[1]);
-    const mediumPct = Number(medium.background.match(/ (\d+)%/)?.[1]);
-    const highPct = Number(high.background.match(/ (\d+)%/)?.[1]);
-    const criticalPct = Number(critical.background.match(/ (\d+)%/)?.[1]);
-    expect(lowPct).toBeLessThan(mediumPct);
-    expect(mediumPct).toBeLessThan(highPct);
-    expect(highPct).toBeLessThan(criticalPct);
+describe('cellFillStyle / severity ramp', () => {
+  it('lightness is strictly decreasing Low > Medium > High > Critical even at band edges', () => {
+    // Darkest Low (max count) must still be lighter than lightest Medium (min count), etc.
+    const low = cellFillLightness('low', 100, 100);
+    const mediumLo = cellFillLightness('medium', 1, 100);
+    const mediumHi = cellFillLightness('medium', 100, 100);
+    const highLo = cellFillLightness('high', 1, 100);
+    const highHi = cellFillLightness('high', 100, 100);
+    const critical = cellFillLightness('critical', 1, 100);
+    expect(low).toBeGreaterThan(mediumLo);
+    expect(mediumHi).toBeGreaterThan(highLo);
+    expect(highHi).toBeGreaterThan(critical);
+    expect(cellFillLightness('low', 1, 100)).toBeGreaterThan(low);
+    expect(cellFillLightness('critical', 100, 100)).toBeLessThan(critical);
+  });
+
+  it('uses a warm hsl fill and flips text for WCAG AA contrast', () => {
+    const pale = cellFillStyle('low', 1, 100);
+    const deep = cellFillStyle('critical', 100, 100);
+    expect(pale.background.startsWith('hsl(')).toBe(true);
+    expect(deep.background.startsWith('hsl(')).toBe(true);
+    expect(pale.color).toBe('#141210');
+    expect(deep.color).toBe('#ffffff');
+    // Spot-check AA on the resolved RGB of the pale yellow / deep crimson endpoints.
+    expect(contrastRatio(relativeLuminance(0xf5, 0xd0, 0x4a), relativeLuminance(0x14, 0x12, 0x10))).toBeGreaterThanOrEqual(4.5);
+    expect(readableTextColor(0x7a, 0x14, 0x14)).toBe('#ffffff');
   });
 
   it('returns the empty panel color for zero-count cells', () => {
-    expect(cellFillStyle('critical', 0, 10).background).toBe('var(--panel-3)');
+    expect(cellFillStyle('critical', 0, 10)).toEqual({ background: 'var(--panel-3)', color: 'var(--muted)' });
   });
 });

@@ -60,41 +60,90 @@ export function trendHasData(totals: number[]): boolean {
   return totals.some((v) => v > 0);
 }
 
-/** 0-1 color-mix intensity for a severity-by-network matrix cell, relative to the matrix's max count. */
+/** 0-1 intensity for count relative to the matrix max (used only within a severity band). */
 export function cellIntensity(count: number, max: number): number {
   if (max <= 0 || count <= 0) return 0;
   return Math.min(1, count / max);
 }
 
-/** CSS color variables aligned with the rest of the app (KPI / badge severity tones). */
-export const SEVERITY_COLOR_VAR: Record<'critical' | 'high' | 'medium' | 'low', string> = {
-  critical: 'var(--high)',
-  high: 'var(--high)',
-  medium: 'var(--medium)',
-  low: 'var(--ok)',
+export type SeverityKey = 'critical' | 'high' | 'medium' | 'low';
+
+/**
+ * Warm single-hue-family ramp (pale yellow → orange → red → deep crimson).
+ * Lightness bands are disjoint so count modulation never lets a Low cell look darker than Medium
+ * (or Medium darker than High, etc.). Higher severity = lower lightness = darker/more intense.
+ */
+const SEVERITY_HSL: Record<SeverityKey, { h: number; s: number; lMax: number; lMin: number }> = {
+  low: { h: 48, s: 88, lMax: 78, lMin: 68 },
+  medium: { h: 32, s: 90, lMax: 58, lMin: 50 },
+  high: { h: 10, s: 82, lMax: 46, lMin: 38 },
+  critical: { h: 0, s: 78, lMax: 32, lMin: 24 },
 };
 
-/** Per-severity mix floors/spans so Low < Medium < High < Critical stays obvious even when a
- * Low cell has a higher count than a High cell (count only modulates within the severity band). */
-const SEVERITY_MIX: Record<'critical' | 'high' | 'medium' | 'low', { floor: number; span: number }> = {
-  low: { floor: 28, span: 18 },
-  medium: { floor: 48, span: 18 },
-  high: { floor: 68, span: 16 },
-  critical: { floor: 86, span: 14 },
-};
+/** Resolved HSL lightness (0-100) for a cell -- exported for ramp unit tests. */
+export function cellFillLightness(severity: SeverityKey, count: number, max: number): number {
+  const { lMax, lMin } = SEVERITY_HSL[severity];
+  const t = cellIntensity(count, max);
+  return lMax - t * (lMax - lMin);
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  // s,l in [0,1]; h in degrees
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = ((h % 360) + 360) % 360 / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r1 = 0, g1 = 0, b1 = 0;
+  if (hp < 1) [r1, g1, b1] = [c, x, 0];
+  else if (hp < 2) [r1, g1, b1] = [x, c, 0];
+  else if (hp < 3) [r1, g1, b1] = [0, c, x];
+  else if (hp < 4) [r1, g1, b1] = [0, x, c];
+  else if (hp < 5) [r1, g1, b1] = [x, 0, c];
+  else [r1, g1, b1] = [c, 0, x];
+  const m = l - c / 2;
+  return [Math.round((r1 + m) * 255), Math.round((g1 + m) * 255), Math.round((b1 + m) * 255)];
+}
+
+function srgbChannelToLinear(c: number): number {
+  const v = c / 255;
+  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
+/** Relative luminance (WCAG 2.x), 0 = black, 1 = white. */
+export function relativeLuminance(r: number, g: number, b: number): number {
+  return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) + 0.0722 * srgbChannelToLinear(b);
+}
+
+export function contrastRatio(l1: number, l2: number): number {
+  const a = Math.max(l1, l2);
+  const b = Math.min(l1, l2);
+  return (a + 0.05) / (b + 0.05);
+}
+
+const TEXT_LIGHT = '#ffffff';
+const TEXT_DARK = '#141210';
+
+/** Pick white or near-black text for WCAG AA (≥4.5:1) against the fill. */
+export function readableTextColor(r: number, g: number, b: number): string {
+  const bg = relativeLuminance(r, g, b);
+  const white = contrastRatio(bg, 1);
+  const black = contrastRatio(bg, relativeLuminance(0x14, 0x12, 0x10));
+  if (white >= 4.5 && white >= black) return TEXT_LIGHT;
+  if (black >= 4.5) return TEXT_DARK;
+  return white >= black ? TEXT_LIGHT : TEXT_DARK;
+}
 
 /** Background + readable text for a severity-by-network heatmap cell. */
 export function cellFillStyle(
-  severity: 'critical' | 'high' | 'medium' | 'low',
+  severity: SeverityKey,
   count: number,
   max: number,
 ): { background: string; color: string } {
   if (count <= 0) return { background: 'var(--panel-3)', color: 'var(--muted)' };
-  const intensity = cellIntensity(count, max);
-  const { floor, span } = SEVERITY_MIX[severity];
-  const pct = floor + Math.round(intensity * span);
+  const { h, s } = SEVERITY_HSL[severity];
+  const l = cellFillLightness(severity, count, max);
+  const [r, g, b] = hslToRgb(h, s / 100, l / 100);
   return {
-    background: `color-mix(in srgb, ${SEVERITY_COLOR_VAR[severity]} ${pct}%, var(--panel-3))`,
-    color: 'var(--text)',
+    background: `hsl(${h} ${s}% ${l.toFixed(1)}%)`,
+    color: readableTextColor(r, g, b),
   };
 }

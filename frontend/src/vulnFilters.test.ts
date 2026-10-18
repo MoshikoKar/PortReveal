@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildVulnQuery, clearVulnFilters, parseVulnFilters, setVulnFilter, splitVendorProductKey,
-  toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter, vendorProductFacetActive,
-  vulnFilterLink,
+  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, formatVulnFilterValue, parseVulnFilters,
+  setVulnFilter, splitVendorProductKey, toggleHeatmapCell, toggleVulnFilter,
+  toggleVendorProductFilter, vendorProductFacetActive, vulnFilterLink,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -157,5 +157,23 @@ describe('toggleHeatmapCell', () => {
     const set = toggleHeatmapCell(new URLSearchParams(), null, 'low');
     expect(set.get('network_id')).toBe('unassigned');
     expect(set.get('severity')).toBe('low');
+  });
+});
+
+describe('formatVulnFilterChip', () => {
+  it('uses human labels for age buckets, state, risk band, and network names', () => {
+    expect(formatVulnFilterChip('exposure_duration', 'under_30d'))
+      .toBe('exposure duration: < 30 days');
+    expect(formatVulnFilterChip('cve_age', '30_90d')).toBe('CVE age: 30-90 days');
+    expect(formatVulnFilterChip('state', 'confirmed')).toBe('state: Confirmed');
+    expect(formatVulnFilterChip('risk_band', 'high')).toBe('risk band: High');
+    expect(formatVulnFilterChip('severity', 'critical')).toBe('severity: Critical');
+    expect(formatVulnFilterChip('network_id', '1', { networkNames: { '1': 'Mock Lab' } }))
+      .toBe('network: Mock Lab');
+    expect(formatVulnFilterChip('network_id', 'unassigned')).toBe('network: Unassigned');
+    expect(formatVulnFilterValue('epss_min', '0.1')).toBe('10%');
+    expect(formatVulnFilterChip('new_since', 'scan')).toBe('new since: last scan');
+    expect(formatVulnFilterChip('device_uuid', 'abc', { deviceLabels: { abc: '10.0.0.1' } }))
+      .toBe('device: 10.0.0.1');
   });
 });
