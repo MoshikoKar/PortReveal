@@ -18,6 +18,7 @@ from ..core.tagging import normalize_tag, reclassify_device
 from ..db import get_db, utcnow
 from ..models import (
     CRITICALITY_LEVELS,
+    DEVICE_ACTIVE,
     SCREENSHOT_CAPTURED,
     TAG_SOURCE_MANUAL,
     TAG_SOURCE_RULE,
@@ -41,6 +42,7 @@ from ..models import (
     WebCapture,
     WebPage,
 )
+from ..scanner import scanner_host_ips
 from .common import FULL_REPLACE, Paging, device_summary, event_out, paged, port_out
 
 router = APIRouter(prefix="/api/devices", tags=["devices"])
@@ -88,6 +90,28 @@ def _open_port_count_expr():
         .correlate(Device)
         .scalar_subquery()
     )
+
+
+def _presence_context(db: Session, devices: list[Device]) -> dict[int, dict]:
+    """Why a device may look absent: it is the scanner host itself, or a stale record whose IP an
+    active device (a different identity) now holds."""
+    stale = [d for d in devices if d.status != DEVICE_ACTIVE]
+    holders: dict[str, list[Device]] = {}
+    if stale:
+        for a in db.scalars(select(Device).where(
+            Device.status == DEVICE_ACTIVE, Device.current_ip.in_({d.current_ip for d in stale}),
+        )).all():
+            holders.setdefault(a.current_ip, []).append(a)
+    own = scanner_host_ips()
+    out: dict[int, dict] = {}
+    for d in devices:
+        newer = [a for a in holders.get(d.current_ip, []) if a.id != d.id and a.last_seen >= d.last_seen]
+        a = max(newer, key=lambda x: x.last_seen) if newer else None
+        out[d.id] = {
+            "scanner_host": d.current_ip in own,
+            "superseded_by": {"uuid": a.uuid, "label": a.hostname or a.current_ip} if a else None,
+        }
+    return out
 
 
 def _device_order_by(db: Session, sort: str, order: str) -> list:
@@ -142,7 +166,9 @@ def list_devices(
         .options(selectinload(Device.ports))
     ).unique().all())
     names = {n.id: n.name for n in db.scalars(select(Network)).all()}
-    return paged([device_summary(d, network_name=names.get(d.network_id)) for d in devices], total, paging)
+    presence = _presence_context(db, devices)
+    return paged([{**device_summary(d, network_name=names.get(d.network_id)), **presence[d.id]} for d in devices],
+                 total, paging)
 
 
 @router.get("/uuids")
@@ -238,6 +264,7 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         .order_by(DeviceRttSample.sampled_at.desc()).limit(200)
     ).all()
     out = device_summary(d, network_name=net.name if net else None)
+    out.update(_presence_context(db, [d])[d.id])
     out.update({
         "dns_name": d.dns_name,
         "missed_scans": d.missed_scans,

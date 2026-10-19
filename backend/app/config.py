@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     scanner_mode: Literal["auto", "nmap", "mock"] = "auto"
     nmap_path: str = "nmap"
     nmap_privileged: Literal["auto", "true", "false"] = "auto"
+    # Comma-separated IPv4 addresses of the machine PortReveal runs on, for setups where nmap cannot see
+    # them as local interfaces (bridged Docker container: the host's LAN IP). Local interface addresses
+    # are detected automatically; these are only added to them.
+    scanner_host_ips: str = ""
     mock_scan_delay: float = 0.4
 
     app_secret_key: str = ""

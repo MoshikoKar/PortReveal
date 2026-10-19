@@ -45,18 +45,31 @@ const DEVICE_STATUS: Record<DeviceStatus, [string, string]> = {
   not_detected: ['high', 'Not detected'],
 };
 
-export function DeviceStatusBadge({ status, failed }: { status: DeviceStatus; failed?: boolean }) {
+const DEVICE_STATUS_TIP: Partial<Record<DeviceStatus, string>> = {
+  unknown: 'Missed by the latest scan; not yet confirmed gone',
+  not_detected: 'Missed by consecutive complete scans of its IP. Offline, or not answering probes from the scanner (firewall, NAT), or a stale record.',
+};
+
+export function DeviceStatusBadge({ status, failed, scannerHost, supersededBy }: {
+  status: DeviceStatus; failed?: boolean; scannerHost?: boolean; supersededBy?: { label: string } | null;
+}) {
   const [cls, label] = DEVICE_STATUS[status] ?? ['', status];
   const statusBadge = (
-    <span className={`badge ${cls}`} title={status === 'unknown' ? 'Missed by the latest scan; not yet confirmed gone' : undefined}>
+    <span className={`badge ${cls}`} title={DEVICE_STATUS_TIP[status]}>
       <span className="dot" />{label}
     </span>
   );
-  if (!failed) return statusBadge;
+  if (!failed && !scannerHost && !supersededBy) return statusBadge;
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, lineHeight: 1 }}>
       {statusBadge}
-      <span className="badge medium" title="The last port/service scan of this host failed or timed out">Scan failed</span>
+      {supersededBy && (
+        <span className="badge outline" title={`Stale record: ${supersededBy.label} is now active at this IP`}>Superseded</span>
+      )}
+      {scannerHost && (
+        <span className="badge outline" title="The machine PortReveal scans from. A host often cannot probe itself; scans that miss it do not count toward Not detected.">Scanner host</span>
+      )}
+      {failed && <span className="badge medium" title="The last port/service scan of this host failed or timed out">Scan failed</span>}
     </span>
   );
 }

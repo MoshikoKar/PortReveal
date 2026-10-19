@@ -133,6 +133,10 @@ export interface DeviceSummary {
   first_seen: string;
   last_seen: string;
   port_scan_failed: boolean;
+  /** Current IP is an address of the machine PortReveal scans from (list + detail only). */
+  scanner_host?: boolean;
+  /** Not active, and an active device seen more recently now holds this IP (list + detail only). */
+  superseded_by?: { uuid: string; label: string } | null;
   open_port_count: number;
   open_ports: { port: number; protocol: string; service: string | null; product: string | null; version: string | null }[];
 }

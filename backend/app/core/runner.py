@@ -34,7 +34,7 @@ from ..models import (
     Scan,
 )
 from ..netutils import MAX_SCAN_ADDRESSES, AddressSet, TargetError, ip_sort_key
-from ..scanner import scanner_status
+from ..scanner import scanner_host_ips, scanner_status
 from ..scanner.identify_truenas import looks_like_truenas
 from ..scanner.mock_scanner import LAST_STEP, MockScanner
 from ..scanner.nmap_scanner import NmapScanner, nmap_is_privileged
@@ -97,6 +97,22 @@ def scan_targets(db, scan: Scan) -> tuple[AddressSet, int]:
     excluded = exclusion_set(db)
     targets = base.subtract(excluded)
     return targets, len(base) - len(targets)
+
+
+def discovery_notes(live: dict[str, HostObservation], self_ips: frozenset[str], filtered: int,
+                    complete: bool) -> list[str]:
+    """Scan notes that explain hosts missing from discovery (shown in scan history)."""
+    notes: list[str] = []
+    for ip in sorted(self_ips - live.keys(), key=ip_sort_key):
+        notes.append(f"{ip} is the PortReveal scanner host and did not answer probes sent from itself; "
+                     "this scan does not count against it (its inventory may not refresh).")
+    if filtered:
+        notes.append(f"{filtered} address(es) answered only with a TCP reset / connection refused and no MAC; "
+                     "ignored as NAT/firewall false positives.")
+    if complete and not live:
+        notes.append("No target answered discovery probes (ICMP/ARP/TCP). A host that drops every probe "
+                     "looks the same as one that is offline.")
+    return notes
 
 
 def mock_step_key(network_id: int) -> str:
@@ -258,6 +274,9 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
         if disc.failures and not disc.results:
             raise ScanStageError("discovery failed: " + disc.failures[0])
         discovery_complete = not disc.failures
+        self_ips = frozenset(ip for ip in scanner_host_ips() if ip in targets)
+        scan_notes = discovery_notes(live, self_ips, sum(r.filtered for r in disc.results),
+                                     discovery_complete)
 
         # ---- Stage 2: port / service scan ---------------------------------------
         port_scope: str | None = None
@@ -350,6 +369,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             port_scope=port_scope,
             discovery_complete=discovery_complete,
             port_stage_complete=port_stage_complete,
+            scanner_host_ips=self_ips,
         )
 
         # ---- Compare, store, snapshot -----------------------------------------
@@ -362,7 +382,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             tag_events = after_scan(db, scan, res.events)
             event_ids = [e.id for e in res.events]
             status = SCAN_COMPLETED if outcome.complete and not res.guard_tripped else SCAN_PARTIAL
-            notes = list(res.notes) + arp_notes
+            notes = scan_notes + list(res.notes) + arp_notes
             if failures:
                 notes.append(f"{len(failures)} scan task(s) failed: " + "; ".join(failures[:3]))
             scan.status = status

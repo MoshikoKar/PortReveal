@@ -249,3 +249,31 @@ def test_exposed_ports_cap_and_uuid_cap(client, monkeypatch):
     monkeypatch.setattr(devices_api, "MAX_UUIDS", listed["total"] - 1)
     r = client.get("/api/devices/uuids")
     assert r.status_code == 422 and f"({listed['total']})" in r.json()["detail"]
+
+
+def test_device_list_flags_stale_identity_and_scanner_host(client, monkeypatch):
+    from app.config import reset_settings_cache
+
+    from .helpers import ScriptedScanner, host, scan
+
+    setup_admin(client)
+    h = csrf(client)
+    net = client.post("/api/networks", json={"name": "Lab", "cidr": "10.98.0.0/24"}, headers=h).json()
+    scan(ScriptedScanner([host("10.98.0.22", [], mac="00:11:22:33:44:02", hostname="old-b.corp")]),
+         network_id=net["id"])
+    for _ in range(2):  # a different machine (new MAC) now holds the IP; the old record goes stale
+        scan(ScriptedScanner([host("10.98.0.22", [], mac="00:11:22:33:44:01", hostname="ws-a.corp")]),
+             network_id=net["id"])
+    monkeypatch.setenv("SCANNER_HOST_IPS", "10.98.0.22")
+    reset_settings_cache()
+
+    items = {d["hostname"]: d for d in client.get("/api/devices", params={"q": "10.98.0.22"}).json()["items"]}
+    stale, live = items["old-b.corp"], items["ws-a.corp"]
+    assert stale["status"] == "not_detected" and live["status"] == "active"
+    assert stale["superseded_by"] == {"uuid": live["uuid"], "label": "ws-a.corp"}
+    assert live["superseded_by"] is None
+    assert stale["scanner_host"] is True and live["scanner_host"] is True
+
+    detail = client.get(f"/api/devices/{stale['uuid']}").json()
+    assert detail["superseded_by"]["uuid"] == live["uuid"] and detail["scanner_host"] is True
+    reset_settings_cache()

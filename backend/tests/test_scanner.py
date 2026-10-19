@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import pytest
@@ -268,3 +269,97 @@ def test_mock_scanner_attaches_cpe_on_known_products():
     by_port = {p.port: p for p in result.hosts[0].ports}
     assert by_port[22].cpe == "cpe:/a:openbsd:openssh:8.9p1"
     assert by_port[443].cpe == "cpe:/a:f5:nginx:1.24.0"
+
+
+# --- scanner host (self-scan) -------------------------------------------------------------------------
+_SELF_IFLIST = """
+************************INTERFACES************************
+DEV  (SHORT) IP/MASK            TYPE     UP   MTU  MAC
+eth0 (eth0)  192.0.2.10/24      ethernet up   1500 00:00:5E:00:53:01
+lo0  (lo0)   127.0.0.1/8        loopback up   -1
+"""
+
+
+def test_discovery_trust_for_scanner_host_addresses_only():
+    local = frozenset({"192.0.2.10"})
+    # The scanner's own address: a refused connect comes from the local stack, never from a NAT.
+    assert discovery_host_is_live(HostObservation(ip="192.0.2.10", reason="conn-refused"), local)
+    assert discovery_host_is_live(HostObservation(ip="192.0.2.10", reason="localhost-response"))
+    # Any other address keeps the Docker NAT false-positive filter.
+    assert not discovery_host_is_live(HostObservation(ip="192.0.2.11", reason="conn-refused"), local)
+    assert not discovery_host_is_live(HostObservation(ip="192.0.2.11", reason="reset"), local)
+    assert discovery_host_is_live(HostObservation(ip="192.0.2.11", reason="syn-ack"), local)
+    assert discovery_host_is_live(HostObservation(ip="192.0.2.11", reason="reset", mac="00:00:5E:00:53:09"))
+
+
+@pytest.fixture
+def self_scanner(tmp_path, monkeypatch):
+    from app.scanner import nmap_scanner
+    from app.scanner.nmap_iface import choose_bind, parse_nmap_iflist
+    from app.scanner.nmap_parser import ParsedRun
+
+    ifaces = parse_nmap_iflist(_SELF_IFLIST)
+    monkeypatch.setattr(nmap_scanner.shutil, "which", lambda _p: "/usr/bin/nmap")
+    monkeypatch.setattr(nmap_scanner, "resolve_bind", lambda _exe, t, privileged: choose_bind(t, ifaces, privileged))
+    scanner = nmap_scanner.NmapScanner("nmap", privileged=True, timing="normal", tmp_dir=tmp_path)
+    scanner.calls = []
+    scanner.answers = {}
+
+    def fake_run(args, targets, timeout, ctx, label, bind=None):
+        scanner.calls.append({"args": args, "targets": list(targets), "label": label, "bind": bind})
+        hosts = scanner.answers.get(label)
+        if hosts is None:  # port stages: every target answers with no open ports
+            hosts = [HostObservation(ip=ip, ports=[]) for ip in targets]
+        return ParsedRun(hosts=[copy.deepcopy(h) for h in hosts], port_scope="1-1000")
+
+    scanner._run = fake_run
+    return scanner
+
+
+def test_discover_probes_unanswered_scanner_host_through_local_stack(self_scanner):
+    from app.scanner.types import ScanContext
+
+    self_scanner.answers = {
+        "discovery": [HostObservation(ip="192.0.2.9", reason="reset"),  # NAT-style false positive
+                      HostObservation(ip="192.0.2.11", reason="arp-response", mac="00:00:5E:00:53:02")],
+        "discovery-self": [HostObservation(ip="192.0.2.10", reason="conn-refused")],
+    }
+    result = self_scanner.discover(["192.0.2.8/30"], ScanContext(1))
+    assert sorted(h.ip for h in result.hosts) == ["192.0.2.10", "192.0.2.11"]
+    assert result.filtered == 1
+    main, again = self_scanner.calls
+    assert main["bind"].device == "eth0" and main["targets"] == ["192.0.2.8/30"]
+    assert again["label"] == "discovery-self" and again["targets"] == ["192.0.2.10"]
+    assert again["bind"].device is None and "--unprivileged" in again["args"]
+
+
+def test_discover_skips_self_probe_when_scanner_host_already_answered(self_scanner):
+    from app.scanner.types import ScanContext
+
+    self_scanner.answers = {"discovery": [HostObservation(ip="192.0.2.10", reason="localhost-response")]}
+    result = self_scanner.discover(["192.0.2.8/30"], ScanContext(1))
+    assert [h.ip for h in result.hosts] == ["192.0.2.10"]
+    assert [c["label"] for c in self_scanner.calls] == ["discovery"]
+
+
+def test_discover_self_only_target_runs_once_unprivileged(self_scanner):
+    from app.scanner.types import ScanContext
+
+    self_scanner.answers = {"discovery": [HostObservation(ip="192.0.2.10", reason="conn-refused")]}
+    result = self_scanner.discover(["192.0.2.10"], ScanContext(1))
+    assert [h.ip for h in result.hosts] == ["192.0.2.10"] and result.filtered == 0
+    (call,) = self_scanner.calls
+    assert call["bind"].device is None and "--unprivileged" in call["args"]
+
+
+def test_scan_ports_splits_scanner_host_into_connect_scan(self_scanner):
+    from app.scanner.types import ScanContext
+
+    profile = PortProfile(full=False, top_ports=1000, os_detection=True)
+    result = self_scanner.scan_ports(["192.0.2.10", "192.0.2.11"], profile, ScanContext(1))
+    assert [h.ip for h in result.hosts] == ["192.0.2.10", "192.0.2.11"]
+    assert not any(h.port_scan_failed for h in result.hosts)
+    main = {c["targets"][0]: c for c in self_scanner.calls if c["label"] == "ports"}
+    own, other = main["192.0.2.10"]["args"], main["192.0.2.11"]["args"]
+    assert "-sT" in own and "-O" not in own and main["192.0.2.10"]["bind"].device is None
+    assert "-sS" in other and "-O" in other and main["192.0.2.11"]["bind"].device == "eth0"

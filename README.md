@@ -103,6 +103,21 @@ For real scans in development: install nmap, set `SCANNER_MODE=nmap`, restart
 `npm run dev`. Without raw-socket privileges, nmap uses TCP connect probes (no
 ARP/ICMP, no MACs). `NMAP_PRIVILEGED=true` (or root) enables full discovery.
 
+**Scanning the PortReveal host itself.** A machine often cannot probe its own
+address with raw packets (Windows/Npcap never loops them back; a bridged Docker
+container has no L2 path to the host). When a target is one of the scanner's own
+interface addresses, PortReveal probes it with TCP connect through the OS stack
+instead (no OS detection for that host). If it still does not answer, the scan
+notes say so and the miss does not count toward *Not detected*; the device shows
+a *Scanner host* badge. Local interfaces are detected automatically. In a bridged
+Docker container (Docker Desktop override) the host's LAN address is invisible,
+so set `SCANNER_HOST_IPS` (comma-separated IPv4) to declare it.
+
+Container reverse-DNS aliases (`host.docker.internal`, `*.containers.internal`)
+are not stored as hostnames. A *Not detected* device whose IP is now held by a
+more recently seen active device shows a *Superseded* badge with a link to that
+device; such leftover records can be deleted from the device page.
+
 **Mock scenario.** Mock results use the same orchestration and change pipeline as
 real scans. Each completed network scan advances a fixed scenario (baseline →
 port/service/IP/absence changes → quiet steps). Reset with `npm run mock:reset`.

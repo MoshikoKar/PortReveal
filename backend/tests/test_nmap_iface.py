@@ -1,4 +1,4 @@
-from app.scanner.nmap_iface import choose_bind, parse_nmap_iflist
+from app.scanner.nmap_iface import choose_bind, local_target_ips, parse_nmap_iflist
 
 _SAMPLE_IFLIST = """
 Starting Nmap 7.95 ( https://nmap.org )
@@ -56,3 +56,27 @@ def test_choose_bind_ignores_down_and_link_local_when_better_exists():
     ifaces = parse_nmap_iflist(_SAMPLE_IFLIST)
     choice = choose_bind(["198.51.96.0/20"], ifaces, privileged=False)
     assert choice.device == "eth5" and choice.source is None
+
+
+def test_local_target_ips_lists_own_addresses_inside_targets():
+    ifaces = parse_nmap_iflist(_SAMPLE_IFLIST)
+    assert local_target_ips(["192.0.2.0/24"], ifaces) == {"192.0.2.10"}
+    assert local_target_ips(["192.0.2.10", "127.0.0.1"], ifaces) == {"192.0.2.10", "127.0.0.1"}
+    assert local_target_ips(["192.0.2.50"], ifaces) == frozenset()
+    assert local_target_ips(["169.254.1.1"], ifaces) == frozenset()  # interface is down
+
+
+def test_choose_bind_self_only_targets_use_unbound_connect_probes():
+    ifaces = parse_nmap_iflist(_SAMPLE_IFLIST)
+    # A /32 of the scanner's own LAN address: raw packets bound to eth0 never loop back.
+    choice = choose_bind(["192.0.2.10"], ifaces, privileged=True)
+    assert choice.device is None and choice.privileged is False and choice.source is None
+    assert choice.local_ips == {"192.0.2.10"}
+
+
+def test_choose_bind_range_containing_self_keeps_bound_privileged_scan():
+    ifaces = parse_nmap_iflist(_SAMPLE_IFLIST)
+    choice = choose_bind(["192.0.2.0/24"], ifaces, privileged=True)
+    assert choice.device == "eth0" and choice.privileged is True
+    assert choice.local_ips == {"192.0.2.10"}  # the scanner probes those separately
+    assert choose_bind(["192.0.2.50"], ifaces, privileged=True).local_ips == frozenset()

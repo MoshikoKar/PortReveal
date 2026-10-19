@@ -96,6 +96,8 @@ class HostObservation:
 class StageResult:
     hosts: list[HostObservation] = field(default_factory=list)
     port_scope: str | None = None
+    # Discovery answers dropped as NAT/firewall false positives (see discovery_host_is_live).
+    filtered: int = 0
 
 
 @dataclass

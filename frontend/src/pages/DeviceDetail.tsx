@@ -111,7 +111,7 @@ export default function DeviceDetail() {
           <div className="muted small"><Link to="/devices">Devices</Link> /</div>
           <h1 className="row" style={{ gap: 12 }}>
             {d.hostname ?? d.discovery_name ?? d.current_ip}
-            <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} />
+            <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} scannerHost={d.scanner_host} supersededBy={d.superseded_by} />
             <span title="Exposure score"><ScoreBadge score={d.score} /></span>
             {d.risk_scored_at && <span title="Risk score"><RiskBadge score={d.risk_score} kind="risk" /></span>}
             {d.risk_scored_at && <span title="Combined score"><RiskBadge score={d.combined_score} kind="combined" /></span>}
@@ -143,6 +143,18 @@ export default function DeviceDetail() {
         )}
       </div>
       <ErrorBox error={removeError} />
+      {d.superseded_by && (
+        <div className="alert" role="status">
+          Stale record: <Link to={`/devices/${d.superseded_by.uuid}`}>{d.superseded_by.label}</Link> is now active at {d.current_ip} and was seen more recently.
+          This entry is probably an old identity for the same address{isAdmin ? ' and can be deleted' : ''}.
+        </div>
+      )}
+      {d.scanner_host && (
+        <div className="alert" role="status">
+          {d.current_ip} is an address of the machine PortReveal scans from. A host often cannot probe itself
+          (no ARP, raw packets do not loop back), so scans that miss it are not counted as missed; see the scan's notes.
+        </div>
+      )}
       <ErrorBox error={vulnError} />
 
       <div className="grid two">

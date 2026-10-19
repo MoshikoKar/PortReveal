@@ -56,6 +56,8 @@ class BindChoice:
     # Raw-packet source address (nmap -S). With -e alone nmap still takes the source IP
     # from the OS route (e.g. a Tailscale 100.x address), so LAN replies never come back.
     source: str | None = None
+    # Targets that are this machine's own interface addresses (the scanner host itself).
+    local_ips: frozenset[str] = frozenset()
 
 
 def parse_nmap_iflist(text: str) -> list[NmapIface]:
@@ -156,29 +158,39 @@ def bind_args(bind: BindChoice | None) -> list[str]:
     return args
 
 
+def local_target_ips(targets: list[str], ifaces: list[NmapIface]) -> frozenset[str]:
+    """This machine's own interface addresses that fall inside the targets."""
+    wanted = _target_networks(targets)
+    return frozenset(str(i.address) for i in ifaces if i.up and any(i.address in t for t in wanted))
+
+
 def choose_bind(targets: list[str], ifaces: list[NmapIface], privileged: bool) -> BindChoice:
     """Select nmap -e device and whether privileged mode is safe for these targets."""
     wanted = _target_networks(targets)
     if not wanted or not ifaces:
         return BindChoice(device=None, privileged=privileged)
+    local = local_target_ips(targets, ifaces)
+    if local and all(t.num_addresses == 1 and str(t.network_address) in local for t in wanted):
+        # Only the scanner's own addresses: raw packets bound to the NIC never loop back to this
+        # host (Windows/Npcap answers nothing), so use connect() probes through the OS stack.
+        return BindChoice(device=None, privileged=False, local_ips=local)
 
     overlapping = [i for i in ifaces if i.up and not i.is_loopback and _overlaps(i, wanted)]
     if not overlapping:
-        return BindChoice(device=None, privileged=privileged)
+        return BindChoice(device=None, privileged=privileged, local_ips=local)
 
     overlapping.sort(key=_score, reverse=True)
     best = overlapping[0]
     if best.is_ethernet:
         source = str(best.address) if privileged else None
-        return BindChoice(device=best.dev, privileged=privileged, source=source)
+        return BindChoice(device=best.dev, privileged=privileged, source=source, local_ips=local)
     # Overlap only via tunnel/VPN ("other"): ARP/raw ethernet probes cannot work.
     if privileged:
         log.info(
             "targets overlap non-ethernet device %s (%s); using unprivileged nmap",
             best.dev, best.network,
         )
-        return BindChoice(device=None, privileged=False)
-    return BindChoice(device=None, privileged=False)
+    return BindChoice(device=None, privileged=False, local_ips=local)
 
 
 def list_nmap_interfaces(nmap_exe: str, refresh: bool = False) -> list[NmapIface]:

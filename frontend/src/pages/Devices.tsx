@@ -283,7 +283,7 @@ export default function Devices() {
                   <Fragment key={d.uuid}>
                   <tr className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
-                    <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} /></td>
+                    <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} scannerHost={d.scanner_host} supersededBy={d.superseded_by} /></td>
                     <td className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></td>
                     <td>
                       {d.hostname ?? d.discovery_name ?? <span className="muted" title={vpn ? NO_NAME_VPN_TIP : NO_NAME_TIP}>-</span>}

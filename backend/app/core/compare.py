@@ -89,6 +89,9 @@ class ScanOutcome:
     port_scope: str | None = None  # None when the scan had no port stage
     discovery_complete: bool = True
     port_stage_complete: bool = True
+    # The scanner host's own addresses inside the targets. A host often cannot probe itself, so
+    # not seeing one of these is never counted as a missed scan.
+    scanner_host_ips: frozenset[str] = frozenset()
 
     @property
     def complete(self) -> bool:
@@ -580,7 +583,7 @@ class _Applier:
             return
         targets = self.outcome.targets
         in_scope = [d for d in devices if d.status in (DEVICE_ACTIVE, DEVICE_UNKNOWN) and d.current_ip in targets]
-        missing = [d for d in in_scope if id(d) not in seen_ids]
+        missing = [d for d in in_scope if id(d) not in seen_ids and d.current_ip not in self.outcome.scanner_host_ips]
         if not missing:
             return
         pct = self.cfg.mass_change_guard_percent

@@ -1,6 +1,8 @@
 """Critical change-detection rules, driven through the real scan pipeline."""
 from __future__ import annotations
 
+import pytest
+
 from app.models import (
     DEVICE_ACTIVE,
     DEVICE_NOT_DETECTED,
@@ -376,3 +378,72 @@ def test_device_load_is_scoped_but_identity_matching_sees_all_devices(db):
     s = scan(ScriptedScanner([*baseline_hosts(), moved]), network_id=net_a.id)
     assert event_types(db, s.id) == ["ip_changed"]
     assert len(devices(db)) == 4
+
+
+# --- scanner host, discovery notes, stale identities -------------------------------------------------
+@pytest.fixture
+def scanner_host(monkeypatch):
+    from app.config import reset_settings_cache
+
+    monkeypatch.setenv("SCANNER_HOST_IPS", "10.0.0.2")
+    reset_settings_cache()
+    yield "10.0.0.2"
+    reset_settings_cache()
+
+
+def test_scanner_host_missed_by_its_own_scans_is_not_counted(db, scanner_host):
+    net = make_network(db)
+    scan(ScriptedScanner(baseline_hosts()), network_id=net.id)
+    only_a = [baseline_hosts()[0]]
+    for _ in range(3):
+        s = scan(ScriptedScanner(only_a), network_id=net.id)
+    assert s.status == SCAN_COMPLETED
+    me = device_by_ip(db, scanner_host)
+    assert me.status == DEVICE_ACTIVE and me.missed_scans == 0
+    assert "10.0.0.2 is the PortReveal scanner host" in s.notes
+    assert "device_disappeared" not in event_types(db)
+
+
+def test_scanner_host_seen_gets_no_note(db, scanner_host):
+    net = make_network(db)
+    s = scan(ScriptedScanner(baseline_hosts()), network_id=net.id)
+    assert "scanner host" not in (s.notes or "")
+
+
+class FilteringScanner(ScriptedScanner):
+    """Discovery that dropped NAT-style false positives (no MAC, TCP reset only)."""
+
+    def discover(self, targets, ctx):
+        result = super().discover(targets, ctx)
+        result.filtered = 3
+        return result
+
+
+def test_filtered_false_positives_and_empty_result_are_explained(db):
+    s = scan(FilteringScanner([]), targets="10.0.0.5/32")
+    assert s.status == SCAN_COMPLETED and s.hosts_discovered == 0
+    assert "3 address(es) answered only with a TCP reset" in s.notes
+    assert "No target answered discovery probes" in s.notes
+
+
+def test_container_reverse_dns_name_is_not_an_identity(db):
+    net = make_network(db)
+    # Scanner in a Docker Desktop container: no MAC, reverse DNS answers the runtime's host alias.
+    scan(ScriptedScanner([host("10.0.0.22", [], hostname="host.docker.internal")]), network_id=net.id)
+    assert device_by_ip(db, "10.0.0.22").hostname is None
+    # The same machine scanned with L2 access later: one device, not a new one plus a ghost.
+    scan(ScriptedScanner([host("10.0.0.22", [], mac=MAC_A, hostname="ws-a.corp")]), network_id=net.id)
+    (d,) = devices(db)
+    assert d.hostname == "ws-a.corp" and d.mac == MAC_A and d.status == DEVICE_ACTIVE
+
+
+def test_stale_identity_at_reused_ip_goes_not_detected_and_live_one_stays_active(db):
+    net = make_network(db)
+    scan(ScriptedScanner([host("10.0.0.22", [], mac=MAC_B, hostname="old-b.corp")]), network_id=net.id)
+    new = [host("10.0.0.22", [], mac=MAC_A, hostname="ws-a.corp")]
+    for _ in range(2):
+        scan(ScriptedScanner(new), network_id=net.id)
+    by_name = {d.hostname: d for d in devices(db)}
+    assert by_name["ws-a.corp"].status == DEVICE_ACTIVE
+    assert by_name["old-b.corp"].status == DEVICE_NOT_DETECTED
+    assert by_name["old-b.corp"].current_ip == "10.0.0.22"  # legitimate IP reuse keeps both records

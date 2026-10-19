@@ -168,9 +168,13 @@ def discovery_rtt_ms(timing: str, *, local_l2: bool = False, vpn_s2s: bool = Fal
     return initial, maximum
 
 
-def discovery_host_is_live(host: HostObservation) -> bool:
-    """True when discovery evidence is a real host, not a NAT/firewall false positive."""
-    if host.mac:
+def discovery_host_is_live(host: HostObservation, local_ips: frozenset[str] = frozenset()) -> bool:
+    """True when discovery evidence is a real host, not a NAT/firewall false positive.
+
+    ``local_ips`` are this machine's own interface addresses: any answer for them (including a
+    connection refused) comes from the local network stack, never from a NAT in between.
+    """
+    if host.mac or host.ip in local_ips:
         return True
     if not host.reason:
         return True  # mock scanner / fixtures without nmap reason codes
@@ -323,7 +327,7 @@ class NmapScanner:
                 discovery_max_rate(self.timing, vpn_s2s=True),
                 discovery_rtt_ms(self.timing, vpn_s2s=True),
             )
-        elif not local_l2:
+        elif not local_l2 and not bind.local_ips:  # the scanner's own address is not a NAT/remote path
             log.warning(
                 "scan %s: no local ethernet overlaps targets - ARP/MAC unavailable "
                 "(typical on Docker Desktop / remote VPS). Using remote discovery "
@@ -336,15 +340,41 @@ class NmapScanner:
             args, targets, discovery_timeout(targets, self.timing, local_l2=local_l2, vpn_s2s=vpn),
             ctx, "discovery", bind=bind,
         )
-        hosts = [h for h in run.hosts if discovery_host_is_live(h)]
-        dropped = len(run.hosts) - len(hosts)
+        found = run.hosts
+        seen = {h.ip for h in found}
+        unanswered_self = sorted(ip for ip in bind.local_ips if ip not in seen)
+        if unanswered_self and (bind.device or bind.privileged):
+            # The scanner's own address inside a larger range: the bound raw probes above cannot
+            # reach this host, so ask again through the OS stack (choose_bind: connect probes).
+            self_bind = resolve_bind(self.exe, unanswered_self, self.privileged)
+            log.info("scan %s: probing scanner host address(es) %s through the local stack",
+                     ctx.scan_id, ", ".join(unanswered_self))
+            self_args = build_discovery_args(self_bind.privileged, self.timing)
+            found = found + self._run(self_args, unanswered_self, discovery_timeout(unanswered_self, self.timing),
+                                      ctx, "discovery-self", bind=self_bind).hosts
+        hosts = [h for h in found if discovery_host_is_live(h, bind.local_ips)]
+        dropped = len(found) - len(hosts)
         if dropped:
             log.info("scan %s: dropped %d discovery false positive(s) (no MAC / untrusted reason)",
                      ctx.scan_id, dropped)
-        return StageResult(hosts=hosts)
+        return StageResult(hosts=hosts, filtered=dropped)
 
     def scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext) -> StageResult:
         bind = resolve_bind(self.exe, ips, self.privileged)
+        local = [ip for ip in ips if ip in bind.local_ips]
+        if not local or not (bind.device or bind.privileged):
+            return self._scan_ports(ips, profile, ctx, bind)
+        # The scanner's own address(es) get their own unprivileged connect scan (see choose_bind);
+        # the rest of the batch keeps the bound privileged scan.
+        others = [ip for ip in ips if ip not in bind.local_ips]
+        results = [self._scan_ports(local, profile, ctx, resolve_bind(self.exe, local, self.privileged))]
+        if others:
+            results.append(self._scan_ports(others, profile, ctx, resolve_bind(self.exe, others, self.privileged)))
+        by_ip = {h.ip: h for r in results for h in r.hosts}
+        return StageResult(hosts=[by_ip[ip] for ip in ips],
+                           port_scope=results[-1].port_scope or results[0].port_scope)
+
+    def _scan_ports(self, ips: list[str], profile: PortProfile, ctx: ScanContext, bind: BindChoice) -> StageResult:
         args = build_port_args(bind.privileged, profile)
         timeout = profile.host_timeout_minutes * 60 + 15 * 60
         run = self._run(args, ips, timeout, ctx, "full" if profile.full else "ports",

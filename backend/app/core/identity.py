@@ -39,10 +39,18 @@ def normalize_mac(mac: str | None) -> str | None:
     return ":".join(hexchars[i:i + 2] for i in range(0, 12, 2)).upper()
 
 
+# Reverse-DNS answers invented by the container runtime the scanner runs in (Docker Desktop
+# answers "host.docker.internal" for the host's address). They name the scanner's view, not the
+# device, so they are never stored or used as identity.
+_SYNTHETIC_HOST_SUFFIXES = (".docker.internal", ".containers.internal")
+
+
 def normalize_hostname(name: str | None) -> str | None:
     if not name:
         return None
     name = name.strip().rstrip(".").lower()
+    if name == "localhost" or name.endswith(_SYNTHETIC_HOST_SUFFIXES):
+        return None
     return _collapse_repeated_suffix(name) or None
 
 
