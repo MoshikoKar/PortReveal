@@ -89,7 +89,7 @@ def build_rtsp_url(scheme: str, host: str, port: int, path: str = "/") -> str:
     sch = "rtsps" if scheme == "rtsps" else "rtsp"
     if not path.startswith("/"):
         path = "/" + path
-    # Default RTSP port is 554 — omit when standard
+    # Default RTSP port is 554 - omit when standard
     if port == 554:
         return f"{sch}://{host}{path}"
     return f"{sch}://{host}:{port}{path}"

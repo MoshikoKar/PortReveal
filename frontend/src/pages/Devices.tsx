@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, macSourceTitle, NO_NAME_TIP, NO_NAME_VPN_TIP, NoMac, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -64,6 +64,7 @@ export default function Devices() {
   };
   const { data, error, loading } = useApi<Paged<DeviceSummary>>('/devices', params, 15000);
   const networks = useApi<Network[]>('/networks', { include_archived: showArchived ? 'true' : undefined });
+  const vpnNetworks = new Set(networks.data?.filter((n) => n.vpn_s2s).map((n) => n.id));
 
   const update = (patch: Record<string, string | undefined>, { replace = false }: { replace?: boolean } = {}) => {
     const next = new URLSearchParams(sp);
@@ -168,7 +169,7 @@ export default function Devices() {
       <div className="page-head">
         <div>
           <h1>Devices</h1>
-          <p>Inventory of every device ever detected, identified by MAC, hostname and history — not by IP alone.</p>
+          <p>Inventory of every device ever detected, identified by MAC, hostname and history - not by IP alone.</p>
         </div>
       </div>
 
@@ -246,7 +247,7 @@ export default function Devices() {
             </button>
           </div>
         )}
-        {loading && !data ? <SkeletonRows cols={isAdmin ? 12 : 11} /> : !items.length ? <Empty>No devices match.</Empty> : (
+        {loading && !data ? <SkeletonRows cols={isAdmin ? 13 : 12} /> : !items.length ? <Empty>No devices match.</Empty> : (
           <div className="table-wrap">
             <table>
               <thead>
@@ -259,6 +260,7 @@ export default function Devices() {
                   {sortTh('status', 'Status')}
                   {sortTh('ip', 'IP address')}
                   {sortTh('hostname', 'Hostname')}
+                  <th>Services</th>
                   <th>MAC / vendor</th>
                   {sortTh('open_ports', 'Open ports')}
                   {showOs && sortTh('os', 'OS')}
@@ -272,38 +274,42 @@ export default function Devices() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((d) => (
+                {items.map((d) => {
+                  const vpn = d.network_id != null && vpnNetworks.has(d.network_id);
+                  return (
                   <Fragment key={d.uuid}>
                   <tr className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
                     <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} /></td>
                     <td className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></td>
                     <td>
-                      {d.hostname ?? d.discovery_name ?? <span className="muted">—</span>}
+                      {d.hostname ?? d.discovery_name ?? <span className="muted" title={vpn ? NO_NAME_VPN_TIP : NO_NAME_TIP}>-</span>}
                       {!d.hostname && d.discovery_name && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
+                    </td>
+                    <td className="nowrap">
                       {d.open_ports.length > 0 && (
-                        <button type="button" className="btn sm ghost" style={{ marginLeft: 6 }}
+                        <button type="button" className={`btn sm toggle${expanded.has(d.uuid) ? ' on' : ''}`}
                           onClick={(e) => { e.stopPropagation(); setExpanded((prev) => { const n = new Set(prev); if (n.has(d.uuid)) n.delete(d.uuid); else n.add(d.uuid); return n; }); }}
                           aria-expanded={expanded.has(d.uuid)}>
                           {expanded.has(d.uuid) ? 'Hide services' : 'Services'}
                         </button>
                       )}
                     </td>
-                    <td><span className="mono">{d.mac ?? '—'}</span>{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
+                    <td>{d.mac ? <span className="mono" title={macSourceTitle(d.mac_source)}>{d.mac}</span> : <NoMac vpn={vpn} className="small" />}{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
                     <td><PortChips ports={d.open_ports} /></td>
                     {showOs && (
                       <td className="small" title={d.os_accuracy != null ? `${d.os_accuracy}% confidence` : undefined}>
-                        {d.os_name ?? <span className="muted">—</span>}
+                        {d.os_name ?? <span className="muted">-</span>}
                         {d.os_name && d.os_accuracy != null && d.os_accuracy < 85 && <span className="badge outline" style={{ marginLeft: 4 }}>uncertain</span>}
                       </td>
                     )}
                     {showRtt && (
-                      <td className="mono small">{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">—</span>}</td>
+                      <td className="mono small">{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">-</span>}</td>
                     )}
-                    <td className="small">{d.network_name ?? <span className="muted">—</span>}</td>
-                    <td>{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">—</span>}</td>
-                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">—</span>}</td>
-                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">—</span>}</td>
+                    <td className="small">{d.network_name ?? <span className="muted">-</span>}</td>
+                    <td>{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">-</span>}</td>
+                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">-</span>}</td>
+                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">-</span>}</td>
                     <td className="nowrap" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>
                     <td className="nowrap muted small">{fmtTime(d.first_seen)}</td>
                   </tr>
@@ -315,7 +321,7 @@ export default function Devices() {
                             <div key={`${p.protocol}-${p.port}`} className="small">
                               <span className="mono">{p.protocol.toUpperCase()}/{p.port}</span>
                               {' '}{p.service ?? 'not identified'}
-                              {(p.product || p.version) && <span className="muted"> — {[p.product, p.version].filter(Boolean).join(' ')}</span>}
+                              {(p.product || p.version) && <span className="muted"> - {[p.product, p.version].filter(Boolean).join(' ')}</span>}
                               {!p.product && !p.version && p.service && <span className="badge outline" style={{ marginLeft: 6 }}>protocol match only</span>}
                             </div>
                           ))}
@@ -324,7 +330,8 @@ export default function Devices() {
                     </tr>
                   )}
                   </Fragment>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

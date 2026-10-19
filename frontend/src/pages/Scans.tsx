@@ -35,7 +35,7 @@ function ScanScope({ s }: { s: Scan }) {
     ? <span>{s.network_name}</span>
     : (() => {
         const t = s.targets ?? '';
-        return <span className="mono small" title={t}>{t.length > 40 ? `${t.slice(0, 40)}…` : t || '—'}</span>;
+        return <span className="mono small" title={t}>{t.length > 40 ? `${t.slice(0, 40)}…` : t || '-'}</span>;
       })();
   return (
     <>
@@ -49,7 +49,7 @@ function CaptureTargets({ c }: { c: WebCapture }) {
   const t = c.targets ?? '';
   return (
     <>
-      <span className="mono small" title={t}>{t.length > 40 ? `${t.slice(0, 40)}…` : t || '—'}</span>
+      <span className="mono small" title={t}>{t.length > 40 ? `${t.slice(0, 40)}…` : t || '-'}</span>
       {c.target_count > 1 && <div className="muted small">{c.target_count.toLocaleString()} addresses</div>}
     </>
   );
@@ -364,7 +364,7 @@ export default function Scans() {
                 <dt>Targets</dt><dd className="mono">{wcDetail.targets}</dd>
                 <dt>Endpoints</dt><dd>{wcDetail.endpoints_found}</dd>
                 <dt>Pages</dt><dd>{wcDetail.pages_captured} · {wcDetail.screenshots_captured} screenshots</dd>
-                <dt>Requested by</dt><dd>{wcDetail.requested_by ?? '—'}</dd>
+                <dt>Requested by</dt><dd>{wcDetail.requested_by ?? '-'}</dd>
               </dl>
               {wcDetail.notes && <div className="alert" style={{ whiteSpace: 'pre-wrap' }}>{wcDetail.notes}</div>}
               {wcDetail.pages && wcDetail.pages.length > 0 && (
@@ -378,7 +378,7 @@ export default function Scans() {
                         <tr key={p.id} className={p.error_reason ? 'dim' : ''}>
                           <td className="mono nowrap">{preview ? <Link to={preview}>{p.ip}:{p.port}</Link> : `${p.ip}:${p.port}`}</td>
                           <td>{KIND_LABELS[p.kind] ?? p.kind}</td>
-                          <td>{p.title ?? '—'} <HttpBadge status={p.http_status} /></td>
+                          <td>{p.title ?? '-'} <HttpBadge status={p.http_status} /></td>
                           <td>
                             {isUsefulShot(p) && preview ? (
                               <Link to={preview}><ShotImg src={shotUrl(p)} alt="" loading="lazy" className="thumb" /></Link>
@@ -448,7 +448,7 @@ export default function Scans() {
           <div className="stack" style={{ gap: 6 }}>
             <div className="muted small">Each completed network scan advances the simulated network one step. Results pass through the same comparison engine as real nmap data.</div>
             {mock.data.networks.map((n) => (
-              <div key={n.id}><strong>{n.name}</strong>: next scan is step {n.step}/{mock.data!.last_step} — <span className="muted">{mock.data!.steps[n.step]}</span></div>
+              <div key={n.id}><strong>{n.name}</strong>: next scan is step {n.step}/{mock.data!.last_step} - <span className="muted">{mock.data!.steps[n.step]}</span></div>
             ))}
           </div>
         </Card>
@@ -468,7 +468,7 @@ export default function Scans() {
                       <td className="nowrap">{SCAN_TYPE_LABELS[s.scan_type]} <MockBadge mode={s.scanner_mode} /></td>
                       <td><ScanScope s={s} /></td>
                       <td className="nowrap"><ScanStatusBadge status={s.status} />{s.is_baseline && <span className="badge accent" style={{ marginLeft: 4 }}>baseline</span>}</td>
-                      <td className="nowrap small" title={fmtTime(s.started_at, true)}>{s.started_at ? relTime(s.started_at) : '—'}</td>
+                      <td className="nowrap small" title={fmtTime(s.started_at, true)}>{s.started_at ? relTime(s.started_at) : '-'}</td>
                       <td className="small">{duration(s.started_at, s.finished_at)}</td>
                       <td className="small">{s.hosts_discovered}{s.hosts_failed > 0 && <span style={{ color: 'var(--medium)' }}> ({s.hosts_failed} failed)</span>}</td>
                       <td>{s.events_count}</td>
@@ -538,12 +538,12 @@ export default function Scans() {
           <dl className="dl">
             <dt>Type</dt><dd>{SCAN_TYPE_LABELS[detail.scan_type]} · {detail.trigger} {detail.is_baseline && <span className="badge accent">baseline</span>}</dd>
             <dt>Status</dt><dd><ScanStatusBadge status={detail.status} /></dd>
-            <dt>Scanner</dt><dd>{detail.scanner_mode ?? '—'} <MockBadge mode={detail.scanner_mode} /></dd>
+            <dt>Scanner</dt><dd>{detail.scanner_mode ?? '-'} <MockBadge mode={detail.scanner_mode} /></dd>
             <dt>Scope</dt><dd><ScanScope s={detail} /> · {detail.target_count.toLocaleString()} addresses (after exclusions)</dd>
             <dt>Started</dt><dd>{fmtTime(detail.started_at, true)}</dd>
             <dt>Finished</dt><dd>{fmtTime(detail.finished_at, true)} ({duration(detail.started_at, detail.finished_at)})</dd>
             <dt>Hosts</dt><dd>{detail.hosts_discovered} discovered · {detail.hosts_scanned} port-scanned · {detail.hosts_failed} failed</dd>
-            <dt>Requested by</dt><dd>{detail.requested_by ?? '—'}</dd>
+            <dt>Requested by</dt><dd>{detail.requested_by ?? '-'}</dd>
           </dl>
           {detail.error && <div className="alert error">{detail.error}</div>}
           {detail.notes && <div className="alert" style={{ whiteSpace: 'pre-wrap' }}>{detail.notes}</div>}

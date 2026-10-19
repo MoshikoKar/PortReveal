@@ -20,7 +20,7 @@ from .classify import (
 from .identify_ai import identify_local_ai
 
 # Fingerprint paths tried on every web endpoint. Identity still comes only from
-# response content (see identify_ai) — never from the port number alone.
+# response content (see identify_ai) - never from the port number alone.
 _AI_API_PATHS = ("/api/tags", "/api/version", "/v1/models")
 
 log = logging.getLogger(__name__)
@@ -230,7 +230,7 @@ def probe_endpoint(
 
         # "/" is an unresolved redirect (e.g. HTTP→HTTPS where TLS then fails), an external
         # redirect, or no response at all: there is no page to render and nothing to discover
-        # here. Keep the single home result so the UI can show what it answered, and stop — this
+        # here. Keep the single home result so the UI can show what it answered, and stop - this
         # avoids a wall of identical "redirect" tiles across every port of such a host.
         hs = home.http_status
         if home.external_redirect or hs is None or 300 <= hs < 400:
@@ -284,7 +284,7 @@ def probe_endpoint(
                 continue
             results[fkey] = pr
 
-    # Keep one page per kind preference: home, login, register, then other — up to max_pages
+    # Keep one page per kind preference: home, login, register, then other - up to max_pages
     preferred_order = [WEB_PAGE_HOME, WEB_PAGE_LOGIN, WEB_PAGE_REGISTER, WEB_PAGE_OTHER]
     chosen: list[ProbeResult] = []
     used_kinds: set[str] = set()
@@ -321,7 +321,7 @@ def probe_endpoint(
         return bool(unusable_page_reason(pr.http_status, pr.title, pr.html, pr.body_text, pr.auth_scheme))
 
     # When a real app was found (e.g. /console/), do not also keep the 404 / JBoss welcome
-    # home probe — it clutters the UI next to the live page.
+    # home probe - it clutters the UI next to the live page.
     usable = [pr for pr in chosen if not _is_unusable(pr)]
     ep.pages = usable if usable else chosen
     return ep

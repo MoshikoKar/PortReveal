@@ -1,4 +1,4 @@
-"""Identify services from raw responses — no extra network traffic.
+"""Identify services from raw responses - no extra network traffic.
 
 When nmap gets data back but no signature matches, it still records every probe's
 reply in the XML ``servicefp`` attribute ("services unrecognized despite returning
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from .types import VERIFIED_METHOD, PortObservation
 
-# r(GetRequest,A0,"HTTP/1\.0\x20200…") — the payload is nmap-escaped.
+# r(GetRequest,A0,"HTTP/1\.0\x20200…") - the payload is nmap-escaped.
 _FP_RESPONSE = re.compile(r'r\((\w+),[0-9A-Fa-f]+,"((?:[^"\\]|\\.)*)"\)', re.S)
 _ESCAPE = re.compile(rb"\\(x[0-9A-Fa-f]{2}|.)", re.S)
 _ESCAPES = {b"0": b"\0", b"r": b"\r", b"n": b"\n", b"t": b"\t"}

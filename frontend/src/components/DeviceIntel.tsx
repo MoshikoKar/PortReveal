@@ -127,10 +127,10 @@ export function ProfileCard({ d, isAdmin, onChange }: { d: DeviceDetail; isAdmin
   return (
     <Card title="Profile" actions={isAdmin && <button className="btn ghost sm" onClick={() => { setDraft(initial); setError(null); }}>Edit</button>}>
       <dl className="dl compact">
-        <dt>Owner</dt><dd>{p.owner ?? '—'}</dd>
-        <dt>Location</dt><dd>{p.location ?? '—'}</dd>
-        <dt>Criticality</dt><dd>{p.criticality ? <span className={`badge ${p.criticality === 'critical' || p.criticality === 'high' ? 'high' : p.criticality === 'medium' ? 'medium' : 'outline'}`}>{p.criticality}</span> : '—'}</dd>
-        <dt>Notes</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{p.notes ?? '—'}</dd>
+        <dt>Owner</dt><dd>{p.owner ?? '-'}</dd>
+        <dt>Location</dt><dd>{p.location ?? '-'}</dd>
+        <dt>Criticality</dt><dd>{p.criticality ? <span className={`badge ${p.criticality === 'critical' || p.criticality === 'high' ? 'high' : p.criticality === 'medium' ? 'medium' : 'outline'}`}>{p.criticality}</span> : '-'}</dd>
+        <dt>Notes</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{p.notes ?? '-'}</dd>
       </dl>
       {draft && (
         <Modal title="Edit profile" onClose={() => setDraft(null)} dirty={dirty} footer={<>
@@ -331,7 +331,7 @@ export function VulnPanel({ d, isAdmin, onReload }: { d: DeviceDetail; isAdmin: 
                     <td className="small">
                       {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
                     </td>
-                    <td className="mono small">{v.cvss_base != null ? v.cvss_base.toFixed(1) : '—'}</td>
+                    <td className="mono small">{v.cvss_base != null ? v.cvss_base.toFixed(1) : '-'}</td>
                     <td>
                       <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}>
                         {v.state}
@@ -406,13 +406,13 @@ export function RttCard({ d }: { d: DeviceDetail }) {
       <dl className="dl">
         <dt>Last RTT</dt>
         <dd>
-          {d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">—</span>}
+          {d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">-</span>}
           <div className="muted small">Unprivileged TCP-connect scans report less accurate RTT than privileged SYN scans.</div>
         </dd>
         <dt>Availability ({d.availability_window_days}d)</dt>
         <dd>{d.availability_pct != null ? `${d.availability_pct}%` : <span className="muted">not enough history</span>}</dd>
         <dt>Continuous since</dt>
-        <dd>{d.continuous_since ? fmtTime(d.continuous_since) : <span className="muted">—</span>}</dd>
+        <dd>{d.continuous_since ? fmtTime(d.continuous_since) : <span className="muted">-</span>}</dd>
       </dl>
       {d.rtt_samples.length >= 2 && (
         <div className="card-body" style={{ paddingTop: 0 }}>

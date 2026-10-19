@@ -133,7 +133,7 @@ class NotificationSettings(BaseModel):
             EV_SERVICE_CHANGED,
         ]
     )
-    digest_time: str = "08:00"  # local time HH:MM — one categorized HTML summary per day
+    digest_time: str = "08:00"  # local time HH:MM - one categorized HTML summary per day
 
     @field_validator("digest_time")
     @classmethod
@@ -277,7 +277,7 @@ class VulnSettings(BaseModel):
 class DiscoverySettings(BaseModel):
     """Local-only mDNS/SSDP/NetBIOS device-naming channel (spec section 9.2).
 
-    Spec: default on only when cheap — passive listening without an active network probe.
+    Spec: default on only when cheap - passive listening without an active network probe.
     mDNS (passive multicast listen) is on by default; SSDP M-SEARCH and NetBIOS unicast queries
     are opt-in. Never runs an nmap UDP scan (-sU stays banned everywhere else).
     """

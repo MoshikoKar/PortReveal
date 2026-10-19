@@ -79,12 +79,12 @@ export default function Watches() {
                       <span className={`badge ${s.kind === 'policy' ? 'high' : s.kind === 'monitor' ? 'medium' : 'accent'}`}>{s.kind}</span>
                       {!s.alert && <span className="badge outline" style={{ marginLeft: 6 }} title="Matches are recorded without notifications">silent</span>}
                     </td>
-                    <td className="right">{s.initialized ? s.last_count : <span className="muted">—</span>}</td>
+                    <td className="right">{s.initialized ? s.last_count : <span className="muted">-</span>}</td>
                     <td className="small nowrap">
                       {s.last_run_at ? <span title={fmtTime(s.last_run_at)}>{relTime(s.last_run_at)}</span> : 'never'}
                       {s.last_error && <div style={{ color: 'var(--high)' }} title={s.last_error}>error: {s.last_error}</div>}
                     </td>
-                    <td className="small">{s.created_by ?? '—'}</td>
+                    <td className="small">{s.created_by ?? '-'}</td>
                     <td className="right nowrap">
                       {s.can_edit && (
                         <>

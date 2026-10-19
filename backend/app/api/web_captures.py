@@ -60,7 +60,7 @@ class WebCaptureRequest(BaseModel):
 
 
 def _is_rtsp_page(p: WebPage) -> bool:
-    # Scheme only — RDP/VNC also use kind=stream but are not live RTSP.
+    # Scheme only - RDP/VNC also use kind=stream but are not live RTSP.
     return (p.scheme or "").lower() in ("rtsp", "rtsps")
 
 
@@ -238,7 +238,7 @@ def _capture_visible(db: Session, *, include_archived: bool = False):
     """Jobs that still have at least one page on a visible device, or no pages yet.
 
     A finished job whose every page belongs to an archived network is hidden unless
-    ``include_archived`` is set — same rule as the Web interfaces gallery.
+    ``include_archived`` is set - same rule as the Web interfaces gallery.
     """
     if include_archived:
         return true()

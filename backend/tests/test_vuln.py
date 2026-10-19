@@ -222,7 +222,7 @@ def test_combine_uses_exposure_headroom_not_multiply_to_ceiling():
 
 
 def test_single_kev_lands_in_medium_band():
-    """A lone KEV should not clear the high band — that needs more findings."""
+    """A lone KEV should not clear the high band - that needs more findings."""
     risk, _ = score.compute_risk([
         score.VulnRow("CVE-KEV", 9.8, None, True, VULN_STATE_CONFIRMED),
     ])
@@ -620,7 +620,7 @@ def test_sync_nvd_mirror_resumes_remaining_years_after_partial_failure(db, monke
     assert state.mirror_next_year == 2025
     assert db.get(Vulnerability, "CVE-2024-MIRROR") is not None
     assert db.get(Vulnerability, "CVE-2025-MIRROR") is None
-    # Cache is non-empty and a cursor may exist — the old bug skipped the mirror here.
+    # Cache is non-empty and a cursor may exist - the old bug skipped the mirror here.
     assert not sync.is_cache_empty(db)
 
     calls.clear()
@@ -726,7 +726,7 @@ def test_parent_clears_summary_cache_when_sync_child_exits(db):
     for source in ("nvd", "kev", "epss"):
         db.get(VulnFeedState, source).last_synced_at = new
     db.commit()
-    # Still cached in this (parent) process — the bug before parent-side reap.
+    # Still cached in this (parent) process - the bug before parent-side reap.
     assert vuln_summary.get_vuln_summary(db, now=T)["feed"]["oldest_synced_at"] == old
 
     class _DeadChild:

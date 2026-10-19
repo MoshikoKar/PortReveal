@@ -136,7 +136,7 @@ CPE_SOURCE_HTTP = "http"
 CPE_SOURCES = (CPE_SOURCE_NMAP, CPE_SOURCE_FAVICON, CPE_SOURCE_SNMP, CPE_SOURCE_SSDP, CPE_SOURCE_HTTP)
 
 # Vulnerability matching (spec section 5): confidence is driven only by version precision, never by
-# backport heuristics. `dismissed` is a manual, learned no — it never reappears for that CVE/port.
+# backport heuristics. `dismissed` is a manual, learned no - it never reappears for that CVE/port.
 VULN_STATE_CONFIRMED = "confirmed"
 VULN_STATE_POTENTIAL = "potential"
 VULN_STATE_DISMISSED = "dismissed"
@@ -246,6 +246,10 @@ class Network(Base):
     zone: Mapped[str | None] = mapped_column(String(20))  # NETWORK_ZONES; weights the exposure score
     # Reached over a site-to-site VPN: scans use a serial, rate-capped profile so the tunnel stays up.
     vpn_s2s: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Remote gateway whose ARP table (read over SNMP) supplies MACs the scanner cannot see across a
+    # routed / VPN path. {"host", "port", "version", "user", "auth_protocol", "priv_protocol",
+    # "community_enc", "auth_key_enc", "priv_key_enc"} (secrets Fernet-encrypted) or None.
+    arp_snmp: Mapped[dict | None] = mapped_column(JSON)
     baseline_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Set when removed from Settings: the row and its findings stay, hidden from default views.
@@ -279,6 +283,7 @@ class Device(Base):
     network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), index=True)
     current_ip: Mapped[str] = mapped_column(String(45), index=True)
     mac: Mapped[str | None] = mapped_column(String(17), index=True)
+    mac_source: Mapped[str | None] = mapped_column(String(20))  # arp | snmp | netbios (None: pre-0026 rows)
     vendor: Mapped[str | None] = mapped_column(String(200))
     hostname: Mapped[str | None] = mapped_column(String(255), index=True)
     dns_name: Mapped[str | None] = mapped_column(String(255))

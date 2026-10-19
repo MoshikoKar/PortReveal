@@ -250,10 +250,10 @@ export default function Search() {
                         {(shown.items as HistoryHost[]).map((h) => (
                           <tr key={`${h.network}-${h.uuid}`} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
                             <td className="mono">{h.ip}</td>
-                            <td>{h.hostname ?? '—'}</td>
-                            <td>{h.network ?? '—'}</td>
-                            <td>{h.type ?? '—'}</td>
-                            <td>{h.score != null ? <ScoreBadge score={h.score} /> : '—'}</td>
+                            <td>{h.hostname ?? '-'}</td>
+                            <td>{h.network ?? '-'}</td>
+                            <td>{h.type ?? '-'}</td>
+                            <td>{h.score != null ? <ScoreBadge score={h.score} /> : '-'}</td>
                             <td>{h.ports.slice(0, 8).map((p) => <span key={`${p.proto}${p.port}`} className="chip" title={p.product ?? p.service ?? undefined}>{p.port}</span>)}</td>
                             <td>{h.tags.map((t) => <span key={t} className="chip">{t}</span>)}</td>
                           </tr>
@@ -272,8 +272,8 @@ export default function Search() {
                           <tr key={`${s.host.uuid}-${s.protocol}${s.port}`} className="clickable" onClick={() => nav(`/devices/${s.host.uuid}`)}>
                             <td><span className="mono">{s.host.ip}</span>{s.host.hostname && <div className="muted small">{s.host.hostname}</div>}</td>
                             <td className="mono nowrap">{s.port}/{s.protocol}</td>
-                            <td>{serviceLabel(s) || <span className="muted">—</span>}{s.extra_info && <div className="muted small">{s.extra_info}</div>}</td>
-                            <td className="small">{s.http ? <>{s.http.status ?? ''} {s.http.title ?? ''}</> : <span className="muted">—</span>}</td>
+                            <td>{serviceLabel(s) || <span className="muted">-</span>}{s.extra_info && <div className="muted small">{s.extra_info}</div>}</td>
+                            <td className="small">{s.http ? <>{s.http.status ?? ''} {s.http.title ?? ''}</> : <span className="muted">-</span>}</td>
                             <td><ScoreBadge score={s.host.score} /></td>
                           </tr>
                         ))}

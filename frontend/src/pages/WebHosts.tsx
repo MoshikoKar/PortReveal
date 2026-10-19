@@ -43,7 +43,7 @@ function noAppLabel(h: WebHost): string {
   const note = shotNote(h.hero);
   const title = h.hero.title?.trim();
   if (title && note && !note.toLowerCase().includes(title.toLowerCase()) && title !== note) {
-    return `${title} — ${note}`;
+    return `${title} - ${note}`;
   }
   return title || note;
 }
@@ -145,7 +145,7 @@ export default function WebHosts() {
       <div className="page-head">
         <div>
           <h1>Web interfaces</h1>
-          <p>HTTP(S) and RTSP services from the latest Web Capture — one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Services without a screenshot, default server pages, errors, blank pages and redirects are set aside below.</p>
+          <p>HTTP(S) and RTSP services from the latest Web Capture - one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Services without a screenshot, default server pages, errors, blank pages and redirects are set aside below.</p>
         </div>
         <div className="row wrap">
           <label className="check small" title="Hosts of networks archived in Settings > Networks are hidden by default">
@@ -171,7 +171,7 @@ export default function WebHosts() {
 
           {noShotCards.length > 0 && (
             <Card
-              title={`No screenshot — ${noShotCards.length} service${noShotCards.length === 1 ? '' : 's'}`}
+              title={`No screenshot - ${noShotCards.length} service${noShotCards.length === 1 ? '' : 's'}`}
               flush
               actions={<button className="btn sm ghost" aria-expanded={showNoShot} onClick={() => update({ noshot: showNoShot ? null : '1' })}>{showNoShot ? 'Hide' : 'Show'}</button>}
             >
@@ -187,7 +187,7 @@ export default function WebHosts() {
                           {h.hostname && <div className="mono muted small">{h.ip}</div>}
                         </td>
                         <td className="mono small">{endpointUrl(s.page)}</td>
-                        <td className="small">{s.page.title ?? <span className="muted">—</span>}</td>
+                        <td className="small">{s.page.title ?? <span className="muted">-</span>}</td>
                         <td className="small muted">{shotNote(s.page)}</td>
                       </tr>
                     ))}
@@ -200,7 +200,7 @@ export default function WebHosts() {
 
           {noApp.length > 0 && (
             <Card
-              title={`No web application — ${noApp.length} host${noApp.length === 1 ? '' : 's'}`}
+              title={`No web application - ${noApp.length} host${noApp.length === 1 ? '' : 's'}`}
               flush
               actions={<button className="btn sm ghost" aria-expanded={showNoApp} onClick={() => update({ noapp: showNoApp ? null : '1' })}>{showNoApp ? 'Hide' : 'Show'}</button>}
             >
@@ -233,7 +233,7 @@ export default function WebHosts() {
                       return (
                         <div key={f.id}>
                           <div className="card-subhead">
-                            {f.label} — {rows.length}
+                            {f.label} - {rows.length}
                           </div>
                           <div className="table-wrap">
                           <table>

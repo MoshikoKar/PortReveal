@@ -98,7 +98,7 @@ class WebCaptureManager:
         while not self._stop.is_set():
             try:
                 if self._scan_busy():
-                    # Nmap has priority — wait and re-check
+                    # Nmap has priority - wait and re-check
                     self._wake.wait(3)
                     self._wake.clear()
                     continue

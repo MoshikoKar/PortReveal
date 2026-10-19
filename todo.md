@@ -8,13 +8,13 @@
 - **Open**: 0
 - **Completed**: 184
 - **Severity distribution:** 🔴 Critical: 5 (0 open), 🟠 High: 45 (0 open), 🟡 Medium: 83 (0 open), 🟢 Low: 51 (0 open)
-- **Audits synced:** prior set + `docs/audit-ui-2026-10-18.md` + `docs/audit-ux-flow-2026-10-18.md` (UI18-L1/L6 absorbed into existing UI09-L1 / UI-L3 archive entries — not re-opened)
+- **Audits synced:** prior set + `docs/audit-ui-2026-10-18.md` + `docs/audit-ux-flow-2026-10-18.md` (UI18-L1/L6 absorbed into existing UI09-L1 / UI-L3 archive entries - not re-opened)
 
 ---
 
 ## ✅ Completed (archived)
 
-Completed findings live in `todo-archive/`. This file keeps an index only — not full history.
+Completed findings live in `todo-archive/`. This file keeps an index only - not full history.
 
 | Archive file | Period | Entries | Link |
 |--------------|--------|---------|------|

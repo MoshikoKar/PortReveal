@@ -334,7 +334,7 @@ def _snapshot_trend(db: Session, now: datetime) -> list[dict]:
 
 
 def _risk_device_levels(db: Session) -> dict[str, int]:
-    """Device counts by combined-score band — same cut points as GET /api/vulns?risk_band=."""
+    """Device counts by combined-score band - same cut points as GET /api/vulns?risk_band=."""
     expr = case(
         (Device.combined_score >= RISK_HIGH_THRESHOLD, "high"),
         (Device.combined_score >= RISK_MEDIUM_THRESHOLD, "medium"),

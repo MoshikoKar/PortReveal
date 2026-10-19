@@ -27,7 +27,7 @@ if new_total > 0:
 "
 ```
 
-Then populate `.graphify_detect.json` so Steps 3A–6 (which read it unconditionally) see the right state for an incremental run. `files` carries the changed subset (drives Step 3A AST + Step 3B0 cache check on only what changed); `all_files` carries the full corpus for any step that needs corpus-wide context:
+Then populate `.graphify_detect.json` so Steps 3A-6 (which read it unconditionally) see the right state for an incremental run. `files` carries the changed subset (drives Step 3A AST + Step 3B0 cache check on only what changed); `all_files` carries the full corpus for any step that needs corpus-wide context:
 
 ```bash
 $(cat graphify-out/.graphify_python) -c "
@@ -61,9 +61,9 @@ print('code_only:', code_only)
 "
 ```
 
-If `code_only` is True: print `[graphify update] Code-only changes detected - skipping semantic extraction (no LLM needed)`, run only Step 3A (AST) on the changed files, skip Step 3B entirely (no subagents), then go straight to merge and Steps 4–8.
+If `code_only` is True: print `[graphify update] Code-only changes detected - skipping semantic extraction (no LLM needed)`, run only Step 3A (AST) on the changed files, skip Step 3B entirely (no subagents), then go straight to merge and Steps 4-8.
 
-If `code_only` is False (any changed file is a doc/paper/image/video): **first, if any changed file is in `new_files['video']`, run `references/transcribe.md` (Step 2.5) on those files, then rewrite `.graphify_detect.json` to move the resulting transcript paths into `files['document']` and drop `files['video']`** — otherwise raw `.mp4/.mp3` paths are fed to semantic subagents as unreadable media (#1392). Then run the full Steps 3A–3C pipeline as normal.
+If `code_only` is False (any changed file is a doc/paper/image/video): **first, if any changed file is in `new_files['video']`, run `references/transcribe.md` (Step 2.5) on those files, then rewrite `.graphify_detect.json` to move the resulting transcript paths into `files['document']` and drop `files['video']`** - otherwise raw `.mp4/.mp3` paths are fed to semantic subagents as unreadable media (#1392). Then run the full Steps 3A-3C pipeline as normal.
 
 
 If no new files exist (only deletions), create an empty extraction so the merge step can prune:
@@ -98,10 +98,10 @@ deleted = list(incremental.get('deleted_files', []))
 # new_chunks is dropped from the base before merge, so old/stale nodes don't survive.
 # Do NOT add `changed` here: with root= passed, prune_set relativizes to the same base
 # as the freshly merged nodes and would DELETE the re-extracted content (#1178 is moot
-# now that replace — not the dedup pass — reconciles changed files).
+# now that replace - not the dedup pass - reconciles changed files).
 prune = list(deleted) or None
 
-# Use build_merge() — reads graph.json directly without NetworkX round-trip
+# Use build_merge() - reads graph.json directly without NetworkX round-trip
 # so edge direction (calls, implements, imports) is always preserved (#801).
 # Pass root= so prune_sources (absolute paths from detect_incremental) are
 # relativized to match the graph's relative source_file values; without it
@@ -140,7 +140,7 @@ print(f'[graphify update] Merged extraction written ({len(merged_out[\"nodes\"])
 # Save manifest so next --update diffs against today's state, not the
 # prior run's baseline (prevents ghost-node reports on subsequent updates).
 # root= matches the build_merge call above so the manifest keys stay relative to
-# the scan root — portable across clones/machines, so --update keeps matching
+# the scan root - portable across clones/machines, so --update keeps matching
 # cached files instead of missing every one after a move (#1417).
 #
 # Only stamp semantic files (docs/papers/images) that ACTUALLY produced output
@@ -165,7 +165,7 @@ print('[graphify update] Manifest saved.')
 "
 ```
 
-Then run Steps 4–8 on the merged graph as normal.
+Then run Steps 4-8 on the merged graph as normal.
 
 After Step 4, show the graph diff:
 
@@ -201,10 +201,10 @@ Clean up after: `rm -f graphify-out/.graphify_old.json`
 
 ## For --cluster-only
 
-Skip Steps 1–3. Re-run clustering on the existing graph:
+Skip Steps 1-3. Re-run clustering on the existing graph:
 
 ```bash
 graphify cluster-only .
 ```
 
-`graphify cluster-only .` is **self-contained**: it re-clusters, names communities, and regenerates `GRAPH_REPORT.md`, `graph.json`, and `graph.html` from the existing graph. **Do not re-run Steps 5–9** — they read intermediate files (`.graphify_extract.json`, `.graphify_detect.json`, `.graphify_analysis.json`) that a prior build's cleanup (Step 9) already deleted, so they raise `FileNotFoundError` (#1392). When it finishes, present the refreshed `GRAPH_REPORT.md` summary as usual.
+`graphify cluster-only .` is **self-contained**: it re-clusters, names communities, and regenerates `GRAPH_REPORT.md`, `graph.json`, and `graph.html` from the existing graph. **Do not re-run Steps 5-9** - they read intermediate files (`.graphify_extract.json`, `.graphify_detect.json`, `.graphify_analysis.json`) that a prior build's cleanup (Step 9) already deleted, so they raise `FileNotFoundError` (#1392). When it finishes, present the refreshed `GRAPH_REPORT.md` summary as usual.

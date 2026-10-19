@@ -127,7 +127,7 @@ export default function Vulnerabilities() {
           <h1>Vulnerabilities</h1>
           <p>
             Matched CVEs across the network. Severity bands come from the cached CVSS base score
-            (9 / 7 / 4 thresholds), preferring CVSS v3.1 → v3.0 → v2 when present — not NVD&apos;s
+            (9 / 7 / 4 thresholds), preferring CVSS v3.1 → v3.0 → v2 when present - not NVD&apos;s
             own severity label. CVEs with no score in the cache are shown as unscored.
           </p>
         </div>
@@ -159,7 +159,7 @@ export default function Vulnerabilities() {
           {/* Same toggle affordance as the KPI row (.kpi.active + aria-pressed); full width as the most urgent figure. */}
           <Kpi label="Actively exploited (CISA KEV)"
             value={<span style={{ color: data.kev_count > 0 ? 'var(--high)' : undefined }}>{data.kev_count}</span>}
-            sub="Known to be exploited in the wild — the most urgent findings on this network."
+            sub="Known to be exploited in the wild - the most urgent findings on this network."
             color={data.kev_count > 0 ? 'var(--high)' : undefined}
             active={filters.kev === 'true'} onClick={() => toggle('kev', 'true')} />
 
@@ -192,7 +192,7 @@ export default function Vulnerabilities() {
           <Card title="Vulnerability feed">
             {data.feed.stale && (
               <div className="badge high" style={{ marginBottom: 'var(--space-3)' }}>
-                Stale — oldest enabled source hasn&apos;t synced in over {data.feed.stale_threshold_hours}h
+                Stale - oldest enabled source hasn&apos;t synced in over {data.feed.stale_threshold_hours}h
               </div>
             )}
             <dl className="dl">

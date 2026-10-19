@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
-# Public NVD JSON 2.0 yearly feeds (inbound GET only — no inventory leaves the host). Used for the
+# Public NVD JSON 2.0 yearly feeds (inbound GET only - no inventory leaves the host). Used for the
 # empty-cache initial load so we do not page ~10 years through the rate-limited API (spec 5.3).
 NVD_JSON_FEED_BASE = "https://nvd.nist.gov/feeds/json/cve/2.0"
 NVD_MIRROR_START_YEAR = 2018  # practical window for CPE-rich CVEs relevant to network services
@@ -197,7 +197,7 @@ def _refresh_nvd_unique_count(db: Session) -> int:
 def _update_feed_state(db: Session, source: str, now: datetime, cursor: datetime | None,
                        count: int, error: str | None, *, previous_count: int = 0) -> None:
     """On success, advance the weekly clock and cursor. On failure, record the error but do NOT
-    advance ``last_synced_at`` / cursor — otherwise a mid-pagination failure postpones retries for
+    advance ``last_synced_at`` / cursor - otherwise a mid-pagination failure postpones retries for
     a full sync interval and permanently skips CVEs from the failed page.
 
     For NVD, ``record_count`` is always the unique ``vulnerabilities`` row count (upserts can

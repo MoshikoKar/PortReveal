@@ -107,7 +107,7 @@ function BaselineStep({ onFinish }: { onFinish: () => Promise<void> }) {
       <ErrorBox error={error} />
       <div className="row">
         {!msg && <button className="btn primary" onClick={start} disabled={busy}>{starting ? 'Queuing…' : 'Run baseline scan now'}</button>}
-        <button className="btn" onClick={finish} disabled={busy}>{finishing ? 'Finishing…' : msg ? 'Finish setup' : 'Skip – finish setup'}</button>
+        <button className="btn" onClick={finish} disabled={busy}>{finishing ? 'Finishing…' : msg ? 'Finish setup' : 'Skip - finish setup'}</button>
       </div>
     </div>
   );
@@ -170,7 +170,7 @@ export default function Setup({ status, startAtAdmin, onUser, onDone }: {
             <div className="spread" style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
               <button className="btn ghost" onClick={() => leave(step - 1)} disabled={step <= 1}>Back</button>
               <div className="row">
-                {step === 1 && netCount === 0 && <span className="muted small">Add at least one network to continue – the schedule and baseline scan need one.</span>}
+                {step === 1 && netCount === 0 && <span className="muted small">Add at least one network to continue - the schedule and baseline scan need one.</span>}
                 {step < LAST_STEP && (
                   <button className="btn" onClick={() => leave(step + 1)} disabled={needsNetwork}>{[2, 4, 5, 6].includes(step) ? 'Skip / next' : 'Next'}</button>
                 )}

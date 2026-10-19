@@ -5,9 +5,9 @@ import type { EventType } from './types';
 const pad = (n: number) => String(n).padStart(2, '0');
 
 export function fmtTime(iso: string | null | undefined, withSeconds = false): string {
-  if (!iso) return '—';
+  if (!iso) return '-';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
+  if (Number.isNaN(d.getTime())) return '-';
   const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return withSeconds ? `${base}:${pad(d.getSeconds())}` : base;
 }
@@ -20,7 +20,7 @@ export function fmtShortTime(iso: string): string {
 }
 
 export function relTime(iso: string | null | undefined): string {
-  if (!iso) return '—';
+  if (!iso) return '-';
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
   const future = diff < 0;
   const s = Math.abs(diff);
@@ -33,7 +33,7 @@ export function relTime(iso: string | null | undefined): string {
 }
 
 export function duration(start: string | null, end: string | null): string {
-  if (!start) return '—';
+  if (!start) return '-';
   const s = Math.max(0, ((end ? new Date(end) : new Date()).getTime() - new Date(start).getTime()) / 1000);
   if (s < 60) return `${Math.round(s)}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;

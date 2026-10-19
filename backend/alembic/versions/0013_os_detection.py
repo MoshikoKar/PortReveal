@@ -7,7 +7,7 @@ Create Date: 2026-10-17 10:00:00.000000
 This migration only adds columns; it does not touch stored settings data. Existing
 installs that already persisted a ``scan`` row in ``app_settings`` with an explicit
 ``"os_detection": false`` keep that value (the pydantic default only fills in a
-*missing* key) — an admin opts back in from Settings. Only fresh installs, which have
+*missing* key) - an admin opts back in from Settings. Only fresh installs, which have
 no stored row yet, pick up the new ``ScanSettings.os_detection = True`` default.
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Remove os_changed rows first — otherwise recreating the CHECK without that value fails.
+    # Remove os_changed rows first - otherwise recreating the CHECK without that value fails.
     op.execute(sa.text("DELETE FROM events WHERE event_type = 'os_changed'"))
     old = (
         "device_discovered", "device_disappeared", "device_reappeared", "ip_changed", "port_opened",

@@ -60,7 +60,7 @@ ERROR_TITLE_RE = re.compile(
 # say something useful like "HAL Management Console" when the console is not actually there).
 # Also bare "Not Found" from a rendered SPA router with no real app behind it.
 SOFT_404_TEXT_RE = re.compile(
-    r"^(?:404\s*[-–—:]?\s*)?(?:not\s+found|file or directory not found|page not found|page missing)\.?$"
+    r"^(?:404\s*[---:]?\s*)?(?:not\s+found|file or directory not found|page not found|page missing)\.?$"
     r"|^404\s*$",
     re.I,
 )
@@ -268,7 +268,7 @@ def default_page_reason(title: str | None, html: str | None = None, body_text: s
 def blank_page_reason(html: str | None) -> str | None:
     """Detect an HTML response that shows nothing, e.g. ``<html><head></head><body></body></html>``.
 
-    ``html`` is None when the content is unknown (not HTML, or not kept) — never blank then;
+    ``html`` is None when the content is unknown (not HTML, or not kept) - never blank then;
     an empty string means a known-empty body.
     """
     if html is None:

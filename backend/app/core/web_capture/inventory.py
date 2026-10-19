@@ -20,7 +20,7 @@ WEB_SERVICE_NAMES = frozenset({
     "webdav", "dav",
 })
 
-# Clear non-HTTP listeners — never promote these to HTTP Playwright capture.
+# Clear non-HTTP listeners - never promote these to HTTP Playwright capture.
 # RDP/VNC use a dedicated capture path (see is_rdp_service / is_vnc_service).
 NON_WEB_SERVICE_NAMES = frozenset({
     "ssh", "domain", "netbios-ssn", "microsoft-ds", "msrpc", "rpcbind",
@@ -40,7 +40,7 @@ COMMON_RTSP_PORTS = frozenset({554, 8554})
 
 
 def is_rtsp_service(service: str | None) -> bool:
-    """True when nmap (or inventory) labelled the port as RTSP — any port number."""
+    """True when nmap (or inventory) labelled the port as RTSP - any port number."""
     if not service:
         return False
     s = service.strip().lower()

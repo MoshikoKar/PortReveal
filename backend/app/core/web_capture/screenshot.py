@@ -216,7 +216,7 @@ def take_screenshot(
 
                 # Every HTTPS request is proxied through the API client (which honours
                 # ignore_https_errors) instead of letting Chromium's TLS stack reject internal
-                # IIS/appliance certs outright (e.g. ERR_SSL_KEY_USAGE_INCOMPATIBLE) — also when an
+                # IIS/appliance certs outright (e.g. ERR_SSL_KEY_USAGE_INCOMPATIBLE) - also when an
                 # http:// start redirects to https later. If the proxy cannot connect either,
                 # Chromium gets a direct try. Redirects are still issued back to the browser, so
                 # the same-target guard below still applies.
@@ -291,7 +291,7 @@ def take_screenshot(
                         auth_scheme=auth_scheme, final_url=current or None,
                     )
                 # Probe-time HTML can look like a real SPA shell; after JS the page may only be
-                # "Not Found" or a stock Tomcat/IIS welcome — treat those as unusable. A page
+                # "Not Found" or a stock Tomcat/IIS welcome - treat those as unusable. A page
                 # behind an auth challenge is a login, whatever its "401 Unauthorized" text says.
                 reason = None if auth_scheme else unusable_page_reason(200, title, body_text=body_text)
                 if reason:

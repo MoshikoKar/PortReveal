@@ -116,7 +116,7 @@ export default function RemoteHosts() {
           <h1>Remote desktops</h1>
           <p>
             RDP and VNC from inventory Web Capture. HTTP and RTSP stay on <Link to="/web">Web</Link>.
-            Empty credentials only — NLA / password hosts stay listed without a frame.
+            Empty credentials only - NLA / password hosts stay listed without a frame.
           </p>
         </div>
         <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
@@ -161,7 +161,7 @@ export default function RemoteHosts() {
         <Card>
           <span className="muted small">
             Remote capture in progress
-            {remoteJobs[0]?.stage ? ` — ${remoteJobs[0].stage}` : ''}
+            {remoteJobs[0]?.stage ? ` - ${remoteJobs[0].stage}` : ''}
             {remoteJobs[0] != null ? ` (${Math.round((remoteJobs[0].progress || 0) * 100)}%)` : ''}.
             {' '}<Link to="/scans?tab=web-captures">View job</Link>
           </span>

@@ -41,7 +41,7 @@ def test_choose_bind_prefers_local_ethernet_over_tunnel():
 
 def test_choose_bind_tunnel_only_drops_privileged():
     ifaces = parse_nmap_iflist(_SAMPLE_IFLIST)
-    # Only overlap is unk0 (CGNAT / other) — ARP cannot bind there.
+    # Only overlap is unk0 (CGNAT / other) - ARP cannot bind there.
     choice = choose_bind(["100.64.0.1"], ifaces, privileged=True)
     assert choice.device is None and choice.privileged is False
 

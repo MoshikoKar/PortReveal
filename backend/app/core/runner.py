@@ -48,6 +48,7 @@ from ..scanner.types import (
     StageResult,
 )
 from ..settings_store import ScanSettings, get_section, get_value, set_value
+from .arp_snmp import enrich_from_arp, load_arp_sources
 from .compare import ScanOutcome, apply_outcome
 from .intel import after_scan, run_watches
 from .snapshots import create_snapshot
@@ -197,6 +198,8 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             if len(targets) > MAX_SCAN_ADDRESSES:
                 raise ScanStageError(f"too many target addresses ({len(targets)} > {MAX_SCAN_ADDRESSES})")
             scanner = scanner or build_scanner(db, cfg)
+            # Remote gateways whose ARP tables supply MACs the scanner cannot see (routed / VPN).
+            arp_sources = load_arp_sources(db) if scanner.mode != "mock" else []
             scan_type, network_id, trigger = scan.scan_type, scan.network_id, scan.trigger
             # Prior inventory: re-scan TrueNAS Apps catalog ports on known TrueNAS hosts.
             ctx.known_truenas_ips = {
@@ -336,6 +339,10 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                     h.ports = None
 
         ctx.check_cancelled()
+        arp_notes: list[str] = []
+        if arp_sources and live:
+            _update(scan_id, stage="router ARP (SNMP)")
+            arp_notes = enrich_from_arp(live, arp_sources)
         outcome = ScanOutcome(
             scan_type=scan_type,
             targets=targets,
@@ -355,7 +362,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             tag_events = after_scan(db, scan, res.events)
             event_ids = [e.id for e in res.events]
             status = SCAN_COMPLETED if outcome.complete and not res.guard_tripped else SCAN_PARTIAL
-            notes = list(res.notes)
+            notes = list(res.notes) + arp_notes
             if failures:
                 notes.append(f"{len(failures)} scan task(s) failed: " + "; ".join(failures[:3]))
             scan.status = status

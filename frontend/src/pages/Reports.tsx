@@ -52,8 +52,8 @@ function HostTable({ hosts, empty }: { hosts: ReportHost[]; empty: string }) {
           {hosts.map((h) => (
             <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
               <td><span className="mono">{h.ip}</span>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
-              <td>{h.type ?? '—'}</td>
-              <td>{h.network ?? '—'}</td>
+              <td>{h.type ?? '-'}</td>
+              <td>{h.network ?? '-'}</td>
               <td className="right"><ScoreBadge score={h.score} /></td>
             </tr>
           ))}
@@ -111,7 +111,7 @@ export default function Reports() {
         <>
           <div className="grid kpis">
             <Kpi label="High exposure" value={e.levels.high} sub={`score ≥ ${e.thresholds.high}`} color="var(--high)" onClick={() => nav(searchLink(`score:>=${e.thresholds.high}`))} />
-            <Kpi label="Medium exposure" value={e.levels.medium} sub={`score ${e.thresholds.medium}–${e.thresholds.high - 1}`} color="var(--medium)" onClick={() => nav(searchLink(`score:${e.thresholds.medium}-${e.thresholds.high - 1}`))} />
+            <Kpi label="Medium exposure" value={e.levels.medium} sub={`score ${e.thresholds.medium}-${e.thresholds.high - 1}`} color="var(--medium)" onClick={() => nav(searchLink(`score:${e.thresholds.medium}-${e.thresholds.high - 1}`))} />
             <Kpi label="Low exposure" value={e.levels.low} sub={`score < ${e.thresholds.medium}`} color="var(--ok)" onClick={() => nav(searchLink(`score:<${e.thresholds.medium}`))} />
           </div>
           <div className="grid halves">
@@ -119,7 +119,7 @@ export default function Reports() {
               <div className="bars">
                 {e.distribution.map((b) => (
                   <Link key={b.from} to={searchLink(`score:${b.from}-${b.to}`)} className="bar-row">
-                    <span className="mono">{b.from}–{b.to}</span>
+                    <span className="mono">{b.from}-{b.to}</span>
                     <span className="bar-track"><span className="bar-fill" style={{ width: `${(b.count / maxBucket) * 100}%`, ['--bar-color' as any]: b.from >= e.thresholds.high ? 'var(--high)' : b.from >= e.thresholds.medium ? 'var(--medium)' : 'var(--ok)' }} /></span>
                     <span className="right">{b.count}</span>
                   </Link>
@@ -147,9 +147,9 @@ export default function Reports() {
                   {preview(rareItems, isOpen('rare')).map((r) => (
                     <tr key={`${r.network}-${r.protocol}${r.port}`} className="clickable" onClick={() => nav(`/devices/${r.host.uuid}`)}>
                       <td className="mono nowrap">{r.port}/{r.protocol}</td>
-                      <td>{[r.product, r.version].filter(Boolean).join(' ') || r.service || '—'}</td>
+                      <td>{[r.product, r.version].filter(Boolean).join(' ') || r.service || '-'}</td>
                       <td><span className="mono">{r.host.ip}</span>{r.host.hostname && <div className="muted small">{r.host.hostname}</div>}</td>
-                      <td>{r.network ?? '—'}</td>
+                      <td>{r.network ?? '-'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -193,7 +193,7 @@ export default function Reports() {
           <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
         }>
           <ReportBlurb>
-            Devices ranked by combined score (risk from matched CVEs, boosted by exposure) — same numbers as
+            Devices ranked by combined score (risk from matched CVEs, boosted by exposure) - same numbers as
             the <Link to="/vulnerabilities">vulnerabilities dashboard</Link>. Requires the vulnerability feed
             to be enabled in Settings.
           </ReportBlurb>
@@ -208,7 +208,7 @@ export default function Reports() {
                   {preview(topDevices, isOpen('risk')).map((h) => (
                     <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
                       <td><span className="mono">{h.ip}</span>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
-                      <td>{h.network ?? '—'}</td>
+                      <td>{h.network ?? '-'}</td>
                       <td className="right"><RiskBadge score={h.risk} kind="risk" /></td>
                       <td className="right"><RiskBadge score={h.combined} kind="combined" /></td>
                     </tr>
@@ -223,7 +223,7 @@ export default function Reports() {
           <Link className="small" to="/vulnerabilities">Open vulnerabilities dashboard →</Link>
         }>
           <ReportBlurb>
-            CVEs matched on the most devices (confirmed or potential, not dismissed) — same computation as the{' '}
+            CVEs matched on the most devices (confirmed or potential, not dismissed) - same computation as the{' '}
             <Link to="/vulnerabilities">vulnerabilities dashboard</Link>.
           </ReportBlurb>
           <ErrorBox error={vuln.error} />
@@ -237,7 +237,7 @@ export default function Reports() {
                   {preview(topCves, isOpen('cves')).map((c) => (
                     <tr key={c.cve_id} className="clickable" onClick={() => nav(searchLink(`cve:${c.cve_id}`))}>
                       <td className="mono">{c.cve_id}</td>
-                      <td className="right mono">{c.cvss_base != null ? c.cvss_base.toFixed(1) : '—'}</td>
+                      <td className="right mono">{c.cvss_base != null ? c.cvss_base.toFixed(1) : '-'}</td>
                       <td>{c.kev && <span className="badge high">KEV</span>}</td>
                       <td className="right">{c.device_count}</td>
                     </tr>
@@ -299,12 +299,12 @@ function VulnJobsCard() {
                   <td><VulnJobBadge status={j.status} /></td>
                   <td className="small">{j.trigger === 'manual' ? 'Manual' : 'After scan'}</td>
                   <td className="right">{j.device_count}</td>
-                  <td className="small">{j.stage ?? '—'}</td>
+                  <td className="small">{j.stage ?? '-'}</td>
                   <td className="nowrap small" title={j.finished_at ? fmtTime(j.finished_at) : undefined}>
-                    {j.finished_at ? relTime(j.finished_at) : '—'}
+                    {j.finished_at ? relTime(j.finished_at) : '-'}
                   </td>
                   <td className="small">
-                    {j.stats ? `${j.stats.matched ?? 0} matched, ${j.stats.cves_found ?? 0} from scripts` : '—'}
+                    {j.stats ? `${j.stats.matched ?? 0} matched, ${j.stats.cves_found ?? 0} from scripts` : '-'}
                     {j.error && <div className="muted small" title={j.error}>{j.error.slice(0, 60)}</div>}
                   </td>
                 </tr>

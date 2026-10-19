@@ -133,7 +133,7 @@ export function VulnFindingsTable({
                         <Link className="mono" to={`/devices/${v.device_uuid}`}>{v.device_ip}</Link>
                         {v.device_hostname && <div className="muted small">{v.device_hostname}</div>}
                       </td>
-                      <td>{v.network ?? '—'}</td>
+                      <td>{v.network ?? '-'}</td>
                       <td className="small">
                         {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
                       </td>

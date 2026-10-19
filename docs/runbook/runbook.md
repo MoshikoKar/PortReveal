@@ -49,7 +49,7 @@ Take a set with `./scripts/backup.sh` (Linux Compose) or `.\scripts\backup.ps1`
 (Windows). Verify `SHA256SUMS` (Linux) or file sizes before off-box copy. Never
 test a restore over the only production copy.
 
-### Linux Docker Compose — restore
+### Linux Docker Compose - restore
 
 1. Enter a maintenance window and stop application writes: `docker compose stop app`.
 2. Take a fresh safety dump before replacing anything:
@@ -81,7 +81,7 @@ For a plain SQL or gzipped SQL dump, use `psql -v ON_ERROR_STOP=1` instead of
 `pg_restore` (for example, `gzip -dc BACKUP.sql.gz | docker compose exec -T db
 psql -v ON_ERROR_STOP=1 -U netfinder -d netfinder`).
 
-### Windows host application — restore
+### Windows host application - restore
 
 1. Stop the host app while leaving Postgres running:
    `.\scripts\run.ps1 -Mode production -Stop`.
@@ -223,7 +223,7 @@ When the database check fails, the endpoint returns **HTTP 503** with
 `HEALTHCHECK` both fail on that status. Optionally still assert the JSON body:
 
 ```bash
-# Linux / Git Bash — fail unless HTTP success and status is ok
+# Linux / Git Bash - fail unless HTTP success and status is ok
 curl -sf "http://HOST:PORT/api/health" | python -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('status')=='ok' else 1)"
 ```
 
@@ -267,7 +267,7 @@ broken scanner, and a busy digest does not look like an outage.
 Practical signals:
 
 - Prometheus: rising `nf_scans_finished_total{status="failed"}` (from `/api/metrics`)
-  while the schedule is enabled — especially after the configured schedule time.
+  while the schedule is enabled - especially after the configured schedule time.
 - Authenticated `GET /api/system/status`: `scans.last_failed` newer than
   `scans.last_successful` / `scans.last_completed` when a run was due
   (`scans.next_scheduled` / schedule settings).

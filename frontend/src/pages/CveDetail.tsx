@@ -44,7 +44,7 @@ export default function CveDetail() {
         <div>
           <div className="muted small"><Link to="/vulnerabilities">Vulnerabilities</Link> /</div>
           <h1 className="mono">{cve_id}</h1>
-          <p>Severity bands use the cached CVSS base score (9 / 7 / 4). Missing CVSS is unscored — not a guessed medium.</p>
+          <p>Severity bands use the cached CVSS base score (9 / 7 / 4). Missing CVSS is unscored - not a guessed medium.</p>
         </div>
         <Link className="btn" to="/vulnerabilities">&larr; Back to vulnerabilities</Link>
       </div>
@@ -91,9 +91,9 @@ export default function CveDetail() {
                       : <span className="muted">Not on the KEV list</span>}
                   </dd>
                   <dt>Published</dt>
-                  <dd>{data.published_at ? <>{fmtTime(data.published_at)} <span className="muted">({relTime(data.published_at)})</span></> : '—'}</dd>
+                  <dd>{data.published_at ? <>{fmtTime(data.published_at)} <span className="muted">({relTime(data.published_at)})</span></> : '-'}</dd>
                   <dt>First seen on this network</dt>
-                  <dd>{data.first_seen_at ? <>{fmtTime(data.first_seen_at)} <span className="muted">({relTime(data.first_seen_at)})</span></> : '—'}</dd>
+                  <dd>{data.first_seen_at ? <>{fmtTime(data.first_seen_at)} <span className="muted">({relTime(data.first_seen_at)})</span></> : '-'}</dd>
                 </dl>
               </Card>
 
@@ -122,7 +122,7 @@ export default function CveDetail() {
                                 <Link className="mono" to={`/devices/${d.device_uuid}`}>{d.device_ip}</Link>
                                 {d.device_hostname && <div className="muted small">{d.device_hostname}</div>}
                               </td>
-                              <td>{d.network ?? '—'}</td>
+                              <td>{d.network ?? '-'}</td>
                               <td className="small">
                                 {d.protocol.toUpperCase()}/{d.port} {d.product ?? d.service ?? ''} {d.version ?? ''}
                               </td>

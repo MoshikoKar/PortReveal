@@ -89,7 +89,7 @@ def test_runner_applies_vpn_flag_without_slowing_batches(db, vpn_s2s):
     result = scan(scanner, network_id=net.id)
     assert result.status == "completed"
     assert scanner.ctx_vpn and all(v is vpn_s2s for v in scanner.ctx_vpn)
-    # Port batches and rate caps stay on the admin profile — VPN no longer shrinks them.
+    # Port batches and rate caps stay on the admin profile - VPN no longer shrinks them.
     assert all(p.max_rate is None for p in scanner.profiles)
 
 
@@ -109,3 +109,17 @@ def test_network_api_round_trips_vpn_flag(client):
     assert client.put(f"/api/networks/{net['id']}", json=body, headers=h).json()["vpn_s2s"] is True
     listed = next(n for n in client.get("/api/networks").json() if n["id"] == net["id"])
     assert listed["vpn_s2s"] is True and listed["baseline_at"] is None
+
+
+@pytest.mark.parametrize("vpn_s2s", [False, True])
+def test_device_detail_exposes_network_vpn_flag(client, db, vpn_s2s):
+    # Display-only: the UI explains a missing MAC over S2S; the MAC itself stays null (never guessed).
+    assert client.post("/api/setup/admin", json={"username": "admin", "password": "correct-horse-1"}).status_code == 200
+    net = make_network(db, cidr="10.8.0.0/24", name="Branch")
+    net.vpn_s2s = vpn_s2s
+    db.commit()
+    assert scan(ScriptedScanner([host("10.8.0.5", [port(22, "ssh")])]), network_id=net.id).status == "completed"
+    uuid = client.get("/api/devices").json()["items"][0]["uuid"]
+    detail = client.get(f"/api/devices/{uuid}").json()
+    assert detail["vpn_s2s"] is vpn_s2s
+    assert detail["mac"] is None

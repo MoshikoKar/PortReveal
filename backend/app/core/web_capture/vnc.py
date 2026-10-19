@@ -1,4 +1,4 @@
-"""Native VNC still capture — no-password / empty-password only; never wordlists.
+"""Native VNC still capture - no-password / empty-password only; never wordlists.
 
 A minimal RFB client (RFC 6143) asks the server for one full framebuffer in Raw encoding. It needs no
 external tool. `vncsnapshot`, when installed, is a fallback for servers whose framebuffer

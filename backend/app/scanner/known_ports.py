@@ -6,7 +6,7 @@ ports. They exist so nmap --top-ports does not miss them.
 
 Ports are NOT identity: an open port here only means "worth scanning / probing".
 Service names (Ollama, LM Studio, …) must come from response fingerprints
-(title, body, JSON shape, Server header) in web capture — see
+(title, body, JSON shape, Server header) in web capture - see
 ``app.core.web_capture.identify_ai``.
 
 TrueNAS Apps catalog ports (``TRUENAS_APPS_TCP_PORTS``) are *not* merged into
@@ -34,7 +34,7 @@ AI_LLM_TCP_PORTS: tuple[int, ...] = (
     30000,  # SGLang
 )
 
-# Default listen ports of modern web-app dev servers and frameworks — the ones AI code
+# Default listen ports of modern web-app dev servers and frameworks - the ones AI code
 # assistants scaffold onto by default. Open here means "likely HTTP, worth scanning / probing",
 # never a product label.
 WEB_DEV_TCP_PORTS: tuple[int, ...] = (
@@ -641,7 +641,7 @@ TRUENAS_APPS_TCP_PORTS: tuple[int, ...] = (
 
 # Ports added to every standard scan on top of nmap --top-ports: local AI/LLM APIs plus
 # web-app dev servers. De-duplicated and sorted. TrueNAS catalog ports are intentionally
-# excluded — see TRUENAS_APPS_TCP_PORTS.
+# excluded - see TRUENAS_APPS_TCP_PORTS.
 STANDARD_EXTRA_TCP_PORTS: tuple[int, ...] = tuple(sorted(set(AI_LLM_TCP_PORTS) | set(WEB_DEV_TCP_PORTS)))
 
 # Telephony signaling ports are never probed: -sV probes into SCCP/SIP/H.323/CTI listeners have
@@ -656,7 +656,7 @@ AI_LLM_DISCOVERY_TCP_PORTS: tuple[int, ...] = (
 )
 
 # Ports that often speak HTTP even when nmap leaves service empty/unknown.
-# Again: candidates for web capture only — not product labels.
+# Again: candidates for web capture only - not product labels.
 AI_LLM_WEB_PORTS: frozenset[int] = frozenset(AI_LLM_TCP_PORTS) | frozenset(WEB_DEV_TCP_PORTS)
 
 

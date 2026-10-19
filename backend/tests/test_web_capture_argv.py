@@ -8,7 +8,7 @@ Invariants asserted for every external tool invocation:
   (``/v:ip:port``, ``ip::port``, ``-i rtsp://...``) and the
   token holding the target never starts with ``-`` (cannot become an option);
 - no token references a password / credentials file, and RDP sends only empty
-  ``/u:`` ``/p:`` — no credential guessing, no stdin/arg-file credential sources;
+  ``/u:`` ``/p:`` - no credential guessing, no stdin/arg-file credential sources;
 - invalid targets are rejected upstream (``AddressSet.from_specs`` → HTTP 422,
   live RTSP port range → HTTP 400) before any argv can be built.
 
@@ -229,7 +229,7 @@ def _assert_ffmpeg_rtsp_argv(argv: list[str], kw: dict, url: str) -> None:
     assert argv[argv.index("-i") + 1] == url
     assert url.startswith(("rtsp://", "rtsps://"))
     assert argv.count("-i") == 1
-    # Output is stdout only — never a filesystem path.
+    # Output is stdout only - never a filesystem path.
     assert argv[-1] == "-"
     for tok in argv:
         assert not tok.startswith(("file:", "concat:", "subfile:", "pipe:")), tok

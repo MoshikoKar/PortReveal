@@ -21,7 +21,7 @@ _KIND_RANK = {WEB_PAGE_HOME: 0, WEB_PAGE_LOGIN: 1}
 # PortHttp title/server that would fire the hypervisor tagging rule.
 _HYPERVISOR_HTTP = ("vmware esxi", "proxmox")
 # nmap product/service/cpe substrings that prove the page is not a hypervisor UI. Used only to
-# drop *contradictory* stale captures — never to reject a real ESXi with an empty product field.
+# drop *contradictory* stale captures - never to reject a real ESXi with an empty product field.
 _CONFLICTING_PRODUCTS = (
     "fortigate", "fortissh", "fortinet", "cisco", "synology", "samba",
     "nginx", "apache", "httpd", "ollama", "lm studio", "hikvision",
@@ -71,7 +71,7 @@ def clear_stale_hypervisor_http(db: Session, device_ids: list[int]) -> set[int]:
         if not _product_conflicts_hypervisor(port.product, port.service, port.cpe):
             continue
         log.info(
-            "dropping stale hypervisor PortHttp on %s (%s) — product %r conflicts with title/server",
+            "dropping stale hypervisor PortHttp on %s (%s) - product %r conflicts with title/server",
             port.port, http.device_id, port.product,
         )
         db.delete(http)

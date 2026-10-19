@@ -149,19 +149,19 @@ export function ScanProfileForm({ onDirtyChange }: { onDirtyChange?: (dirty: boo
         </div>
         <div className="muted small">No exploitation, brute force, authentication attempts or intrusive NSE scripts are ever used. Raw nmap arguments are not configurable.</div>
         <div className="form-grid">
-          <Num label="Common TCP ports (standard scan)" value={s.top_ports} min={100} max={10000} onChange={(v) => set({ top_ports: v })} hint="nmap --top-ports, 100–10000" />
+          <Num label="Common TCP ports (standard scan)" value={s.top_ports} min={100} max={10000} onChange={(v) => set({ top_ports: v })} hint="nmap --top-ports, 100-10000" />
           <label className="field">Timing
             <select value={s.timing} onChange={(e) => set({ timing: e.target.value as ScanSettings['timing'] })}>
-              <option value="polite">Polite (T2) – slowest, gentlest</option>
-              <option value="normal">Normal (T3) – default</option>
-              <option value="fast">Fast (T4) – reliable LANs</option>
+              <option value="polite">Polite (T2) - slowest, gentlest</option>
+              <option value="normal">Normal (T3) - default</option>
+              <option value="fast">Fast (T4) - reliable LANs</option>
             </select>
           </label>
           <Num label="Parallel nmap processes" value={s.parallelism} min={1} max={16} onChange={(v) => set({ parallelism: v })} hint="Upper bound on concurrent nmap processes" />
           <Num label="Discovery chunk size" value={s.discovery_chunk_size} min={16} max={16384} onChange={(v) => set({ discovery_chunk_size: v })} hint="Addresses per discovery process (/16 = 64 chunks of 1024)" />
           <Num label="Hosts per service-scan batch" value={s.port_batch_size} min={1} max={256} onChange={(v) => set({ port_batch_size: v })} />
-          <Num label="Host timeout – standard (min)" value={s.host_timeout_minutes} min={1} max={240} onChange={(v) => set({ host_timeout_minutes: v })} hint="One slow host can never block the scan" />
-          <Num label="Host timeout – full (min)" value={s.full_host_timeout_minutes} min={5} max={720} onChange={(v) => set({ full_host_timeout_minutes: v })} />
+          <Num label="Host timeout - standard (min)" value={s.host_timeout_minutes} min={1} max={240} onChange={(v) => set({ host_timeout_minutes: v })} hint="One slow host can never block the scan" />
+          <Num label="Host timeout - full (min)" value={s.full_host_timeout_minutes} min={5} max={720} onChange={(v) => set({ full_host_timeout_minutes: v })} />
           <Num label="Missed scans before 'not detected'" value={s.disappear_after_missed} min={1} max={30} onChange={(v) => set({ disappear_after_missed: v })} hint="Consecutive complete scans; avoids false 'disappeared' alerts" />
           <Num label="Mass-change guard (%)" value={s.mass_change_guard_percent} min={10} max={100} onChange={(v) => set({ mass_change_guard_percent: v })} hint="Skip removals when more than this share would vanish at once" />
           <Num label="Keep raw XML (days)" value={s.raw_retention_days} min={1} max={90} onChange={(v) => set({ raw_retention_days: v })} />
@@ -511,7 +511,7 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
       <div className="stack">
         <div className="muted small">
           Risk scoring matches each device's identified product/version (CPE) against a local cache of known
-          vulnerabilities. Off by default. No information about this network is ever sent out — only a plain
+          vulnerabilities. Off by default. No information about this network is ever sent out - only a plain
           HTTP download of public NVD / CISA KEV / FIRST EPSS data files, on a weekly schedule. Works fully
           without an NVD API key; adding one only raises the request rate limit.
         </div>
@@ -531,7 +531,7 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
           <Num label="Sync interval (hours)" value={s.sync_interval_hours} min={24} max={720} onChange={(v) => set({ sync_interval_hours: v })} hint="Default 168 = weekly" />
           <label className="field">Sync time (HH:MM)<input type="time" value={s.sync_time} onChange={(e) => set({ sync_time: e.target.value })} /></label>
           <label className="field">NVD API key (optional)
-            <input type="password" value={apiKey ?? ''} placeholder={s.nvd_api_key_set ? '•••••• (unchanged)' : 'not set — public rate limit applies'}
+            <input type="password" value={apiKey ?? ''} placeholder={s.nvd_api_key_set ? '•••••• (unchanged)' : 'not set - public rate limit applies'}
               onChange={(e) => setApiKey(e.target.value)} autoComplete="new-password" />
           </label>
           <Num label="Min CVSS to display" value={s.min_cvss_display} min={0} max={10} onChange={(v) => set({ min_cvss_display: v })} />
@@ -541,7 +541,7 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
         <div className="row wrap">
           <label className="check"><input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />Offline mode (no feed downloads; import with <code>npm run cli -- vuln-import PATH</code>)</label>
           <label className="check"><input type="checkbox" checked={s.include_potential} onChange={(e) => set({ include_potential: e.target.checked })} />Show "potential" matches (imprecise version), not just confirmed</label>
-          <label className="check" title="Safe/discovery nmap scripts only (SCRIPT_ALLOWLIST) — never vulners, never intrusive categories">
+          <label className="check" title="Safe/discovery nmap scripts only (SCRIPT_ALLOWLIST) - never vulners, never intrusive categories">
             <input type="checkbox" checked={s.scripts_enabled} onChange={(e) => set({ scripts_enabled: e.target.checked })} />
             Run allow-listed nmap scripts as a secondary signal
           </label>
@@ -551,7 +551,7 @@ export function VulnForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =
         {running && (
           <div className="muted small">
             First-time NVD import downloads several years of public CVE feeds in the background.
-            Refreshing the page is safe — it does not cancel the sync. Leave this tab open or come back later;
+            Refreshing the page is safe - it does not cancel the sync. Leave this tab open or come back later;
             progress updates every few seconds.
           </div>
         )}

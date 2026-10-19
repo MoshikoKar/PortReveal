@@ -122,7 +122,7 @@ function TopDevices({ items, filters, onToggleDevice }: {
                         onClick={(e) => e.stopPropagation()}>{d.ip}</Link>
                       {d.hostname && <div className="muted small">{d.hostname}</div>}
                     </td>
-                    <td>{d.network_name ?? '—'}</td>
+                    <td>{d.network_name ?? '-'}</td>
                     <td className="right"><RiskBadge score={d.risk_score} kind="risk" /></td>
                     <td className="right"><ScoreBadge score={d.exposure_score} /></td>
                     <td className="right"><RiskBadge score={d.combined_score} kind="combined" /></td>

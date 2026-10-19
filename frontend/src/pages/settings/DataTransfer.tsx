@@ -46,7 +46,7 @@ export function DataTransferPanel() {
       fd.append('confirm', 'true');
       const result = await postForm<ImportResult>('/data/import', fd);
       const parts = Object.entries(result.imported || {}).map(([k, v]) => `${v} ${k}`).join(', ');
-      setMsg({ ok: true, text: `Import complete: ${parts || 'no rows'}. Web captures were cleared — re-run them if needed.` });
+      setMsg({ ok: true, text: `Import complete: ${parts || 'no rows'}. Web captures were cleared - re-run them if needed.` });
       setConfirm(false);
       if (fileRef.current) fileRef.current.value = '';
     } catch (e: unknown) {

@@ -214,8 +214,8 @@ export function HealthPanel() {
           <div className="muted small">{scanner.message}</div>
         </Health>
         <Health ok={!scans.last_failed || (scans.last_successful?.id ?? 0) > scans.last_failed.id} label="Scans">
-          <div className="small">Last success: {scans.last_successful ? fmtTime(scans.last_successful.finished_at) : '—'}</div>
-          <div className="small">Last failure: {scans.last_failed ? fmtTime(scans.last_failed.finished_at) : '—'}</div>
+          <div className="small">Last success: {scans.last_successful ? fmtTime(scans.last_successful.finished_at) : '-'}</div>
+          <div className="small">Last failure: {scans.last_failed ? fmtTime(scans.last_failed.finished_at) : '-'}</div>
           <div className="small">Next: {scans.next_scheduled ? fmtTime(scans.next_scheduled) : 'not scheduled'}</div>
         </Health>
       </div>
@@ -227,7 +227,7 @@ export function HealthPanel() {
             <dt>Database</dt><dd>{database.type}{database.location && <span className="mono"> · {database.location}</span>}</dd>
             <dt>Scanner mode</dt><dd>configured <code>{scanner.configured_mode}</code> → effective <code>{scanner.mode}</code></dd>
             <dt>nmap</dt><dd>{scanner.nmap_detected ? `detected (${scanner.nmap_version}) at ${scanner.nmap_path}` : `NOT detected (${scanner.nmap_path})`} · {scanner.privileged ? 'privileged' : 'unprivileged'}</dd>
-            <dt>Mock scanner</dt><dd>{scanner.mock_active ? 'ACTIVE – results are simulated' : 'inactive'}</dd>
+            <dt>Mock scanner</dt><dd>{scanner.mock_active ? 'ACTIVE - results are simulated' : 'inactive'}</dd>
             <dt>Current scan</dt><dd>{scans.current ? <><ScanStatusBadge status={scans.current.status} /> #{scans.current.id}</> : 'none'} · {scans.queued} queued</dd>
           </dl>
         </Card>

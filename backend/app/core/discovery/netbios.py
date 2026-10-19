@@ -50,24 +50,42 @@ def build_nbstat_query(transaction_id: int) -> bytes:
     return header + question
 
 
-def parse_nbstat_response(data: bytes) -> list[dict]:
-    """[{"name", "suffix", "group"}] from an NBSTAT answer's name table. Best-effort."""
+def _nbstat_rdata(data: bytes) -> bytes:
+    """The NBSTAT answer's RDATA (name count, name table, then statistics), or b"" if malformed."""
     if len(data) < 12:
-        return []
+        return b""
     ancount = int.from_bytes(data[6:8], "big")
     if ancount < 1:
-        return []
+        return b""
     pos = 12
     if pos >= len(data):
-        return []
+        return b""
     name_len = data[pos]
     pos += 1 + name_len + 1  # encoded name + trailing NUL label terminator
     pos += 2 + 2 + 4  # type + class + ttl
     if pos + 2 > len(data):
-        return []
+        return b""
     rdlength = int.from_bytes(data[pos:pos + 2], "big")
     pos += 2
-    rdata = data[pos:pos + rdlength]
+    return data[pos:pos + rdlength]
+
+
+def parse_nbstat_mac(data: bytes) -> str | None:
+    """The responder's own MAC (the statistics block's "unit ID", right after the name table), or
+    None when absent or unusable. Samba typically reports all zeros; multicast bits are never a NIC."""
+    rdata = _nbstat_rdata(data)
+    if not rdata:
+        return None
+    off = 1 + 18 * rdata[0]
+    unit = rdata[off:off + 6]
+    if len(unit) != 6 or unit == b"\x00" * 6 or unit[0] & 0x01:
+        return None
+    return ":".join(f"{b:02X}" for b in unit)
+
+
+def parse_nbstat_response(data: bytes) -> list[dict]:
+    """[{"name", "suffix", "group"}] from an NBSTAT answer's name table. Best-effort."""
+    rdata = _nbstat_rdata(data)
     if not rdata:
         return []
     num_names = rdata[0]
@@ -140,10 +158,12 @@ def _query_batch_live(ips: list[str], timeout: float) -> Iterable[tuple[bytes, t
 
 
 def query_netbios_names(ips: list[str], *, timeout: float = 0.5,
-                        transact: BatchTransactor | None = None) -> dict[str, str]:
+                        transact: BatchTransactor | None = None,
+                        macs: dict[str, str] | None = None) -> dict[str, str]:
     """{ip: name} for every host in `ips` that answered. One shared receive window for the whole
     batch (see BatchTransactor), so the total cost does not scale with how many hosts never
-    respond (most non-Windows devices)."""
+    respond (most non-Windows devices). When `macs` is given, it also receives {ip: MAC} from the
+    same replies (unicast UDP, so this works across routed / VPN paths where ARP cannot)."""
     results: dict[str, str] = {}
     if not ips:
         return results
@@ -152,6 +172,8 @@ def query_netbios_names(ips: list[str], *, timeout: float = 0.5,
             ip = addr[0]
             if ip in results or ip not in ips:
                 continue
+            if macs is not None and (mac := parse_nbstat_mac(data)):
+                macs.setdefault(ip, mac)
             name = _best_name(data)
             if name:
                 results[ip] = name

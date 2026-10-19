@@ -77,7 +77,7 @@ def _enrich_open_services(db: Session, device_ids: list[int], *, scan_id: int | 
 
     if not device_ids:
         return
-    # Live probes (TLS/SSH) need real sockets — skip in mock/tests so scripts stay fast.
+    # Live probes (TLS/SSH) need real sockets - skip in mock/tests so scripts stay fast.
     live = scanner_status().effective_mode != "mock"
     devices = {d.id: d for d in db.scalars(select(Device).where(Device.id.in_(device_ids)))}
     failures = {"tls": 0, "ssh": 0}
@@ -117,7 +117,7 @@ def _enrich_local_names(db: Session, devices: dict[int, Device]) -> None:
     and a fallback display name. Never touches nmap; skipped entirely when disabled or in mock mode
     (the caller already checks `live`, i.e. a real scanner is configured).
 
-    Names persist across passes and age out after ``DISCOVERY_NAME_TTL_DAYS`` without a hear —
+    Names persist across passes and age out after ``DISCOVERY_NAME_TTL_DAYS`` without a hear -
     they are not wiped when a single pass misses the host (NetBIOS cap / quiet mDNS window).
     """
     from datetime import timedelta
@@ -129,11 +129,13 @@ def _enrich_local_names(db: Session, devices: dict[int, Device]) -> None:
     cfg = get_section(db, DiscoverySettings)
     if not cfg.enabled or not devices:
         return
+    netbios_macs: dict[str, str] = {}
     found = collect_local_names(
         [d.current_ip for d in devices.values() if d.current_ip],
         mdns=cfg.mdns, ssdp=cfg.ssdp, netbios=cfg.netbios,
-        timeout=cfg.timeout_seconds,
+        timeout=cfg.timeout_seconds, netbios_macs=netbios_macs,
     )
+    apply_netbios_macs(db, devices.values(), netbios_macs)
     now = utcnow()
     ttl = timedelta(days=DISCOVERY_NAME_TTL_DAYS)
     for dev in devices.values():
@@ -152,6 +154,27 @@ def _enrich_local_names(db: Session, devices: dict[int, Device]) -> None:
             dev.discovery_name = None
             dev.discovery_source = None
             dev.discovery_name_seen_at = None
+
+
+def apply_netbios_macs(db: Session, devices: Iterable[Device], macs: dict[str, str]) -> int:
+    """Fill a MAC-less device's MAC from its own NetBIOS reply (Windows/Samba answer with their
+    adapter MAC over unicast UDP, which crosses routed / VPN paths that ARP cannot). Never replaces
+    a MAC, and skips one already held by another device so identity stays unambiguous.
+    Returns how many devices were filled."""
+    from .identity import normalize_mac
+    from .oui import vendor_for
+
+    filled = 0
+    for dev in devices:
+        mac = normalize_mac(macs.get(dev.current_ip)) if dev.current_ip else None
+        if dev.mac or not mac:
+            continue
+        if db.scalar(select(Device.id).where(Device.mac == mac, Device.id != dev.id).limit(1)) is not None:
+            continue
+        dev.mac, dev.mac_source = mac, "netbios"
+        dev.vendor = dev.vendor or vendor_for(mac)
+        filled += 1
+    return filled
 
 
 def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:

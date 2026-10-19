@@ -2,7 +2,7 @@
  * component harness). Severity shown in the UI is the CVSS-derived bucket, never NVD's label. */
 
 export function formatCvss(cvss: number | null | undefined): string {
-  return cvss != null ? cvss.toFixed(1) : '—';
+  return cvss != null ? cvss.toFixed(1) : '-';
 }
 
 export function formatEpss(epss: number | null | undefined): string {
@@ -11,7 +11,7 @@ export function formatEpss(epss: number | null | undefined): string {
 }
 
 export function formatEpssPct(epss: number | null | undefined): string {
-  if (epss == null) return '—';
+  if (epss == null) return '-';
   return `${(epss * 100).toFixed(0)}%`;
 }
 

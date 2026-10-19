@@ -110,6 +110,8 @@ export interface DeviceSummary {
   uuid: string;
   current_ip: string;
   mac: string | null;
+  /** Where the MAC came from: the scanner's own ARP, the site router's ARP table (SNMP), or NetBIOS. */
+  mac_source: 'arp' | 'snmp' | 'netbios' | null;
   vendor: string | null;
   hostname: string | null;
   os_name: string | null;
@@ -213,6 +215,7 @@ export interface DeviceDetail extends DeviceSummary {
   score_level: ScoreLevel;
   classified_at: string | null;
   zone: string | null;
+  vpn_s2s: boolean;
   tags: DeviceTag[];
   profile: DeviceProfile;
 }
@@ -449,6 +452,19 @@ export interface WebCaptureSettings {
   force_mock: boolean;
 }
 
+/** Gateway whose ARP table (read over SNMP) supplies MACs across a routed / VPN path. Secrets are write-only. */
+export interface ArpSnmp {
+  host: string;
+  port: number;
+  version: '2c' | '3';
+  user: string | null;
+  auth_protocol: string | null;
+  priv_protocol: string | null;
+  community_set: boolean;
+  auth_key_set: boolean;
+  priv_key_set: boolean;
+}
+
 export interface Network {
   id: number;
   name: string;
@@ -457,6 +473,7 @@ export interface Network {
   enabled: boolean;
   zone: string | null;
   vpn_s2s: boolean;
+  arp_snmp: ArpSnmp | null;
   baseline_scan_id: number | null;
   baseline_at: string | null;
   archived_at: string | null;

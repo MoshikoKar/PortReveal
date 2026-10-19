@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/portreveal-lockup-dark.png">
-    <img src="docs/brand/portreveal-lockup-light.png" alt="PortReveal — Network discovery" width="440">
+    <img src="docs/brand/portreveal-lockup-light.png" alt="PortReveal - Network discovery" width="440">
   </picture>
 </p>
 
@@ -28,7 +28,7 @@ network, what does each device expose, and what changed since the last scan?*
 
 Use it on a machine that can see the LAN you care about. Development defaults to
 a safe mock scanner (no network traffic). Production uses real nmap with fixed
-argument profiles — the UI and API never accept raw nmap options.
+argument profiles - the UI and API never accept raw nmap options.
 
 ## Installation
 
@@ -111,7 +111,7 @@ port/service/IP/absence changes → quiet steps). Reset with `npm run mock:reset
 
 Post-scan stills of remote UIs found in inventory: **HTTP(S)** (Playwright),
 **RTSP** (ffmpeg), **RDP** (FreeRDP), and **VNC** (built-in RFB client; `vncsnapshot` optional fallback).
-Galleries are split — **Web** (HTTP/RTSP) and **Remote** (RDP/VNC). Not an nmap
+Galleries are split - **Web** (HTTP/RTSP) and **Remote** (RDP/VNC). Not an nmap
 stage. Large jobs that hit endpoint or time limits queue a **continuation** for the
 remaining hosts (numeric IP order) instead of dropping the same tail every run;
 auto-queue after standard/full scans merges into a waiting job or splits by
@@ -130,7 +130,7 @@ Devices multi-select, or **Scans → Web captures**. On **Remote**, admins can
 | VNC stills | None (built-in RFB client). `vncsnapshot`, if on `PATH`, is tried when the built-in client cannot read a server's framebuffer | Optional: `sudo apt-get install -y vncsnapshot` |
 | RDP stills | `wfreerdp` / `sdl-freerdp` (Windows) or `xfreerdp` (Linux) | Windows: `npm run setup:capture-tools` (Scoop `freerdp-nightly` + `wfreerdp` shim). Official FreeRDP does not ship Windows release zips. Linux: `sudo apt-get install -y freerdp2-x11`. **Preinstalled in Docker.** |
 
-Empty credentials only — no password guessing. RDP stills use FreeRDP `/sec:tls`
+Empty credentials only - no password guessing. RDP stills use FreeRDP `/sec:tls`
 first so hosts **without NLA** yield a Shodan-style Windows logon-screen bitmap.
 Hosts that **require NLA** never draw a desktop before CredSSP, so there is no
 frame to capture (shown as auth required). VNC stills need no-auth RFB; password
@@ -181,7 +181,7 @@ VNC gateways (noVNC, Guacamole) are classified as `web-vnc`.
 Rule-based **tags** and a **device type** (printer, camera, nas, hypervisor,
 domain-controller, database, …) are recomputed after every scan and web
 capture; admins can add or pin manual tags. Each device gets an **exposure
-score** (0–100) with the factors behind it, weighted by the network **zone**.
+score** (0-100) with the factors behind it, weighted by the network **zone**.
 Save a query as a **watch** (alert when a new host matches), **policy** (every
 new match is a violation), or **monitor** (alert when a matching host changes);
 alerts appear in the daily digest.
@@ -298,14 +298,14 @@ exclusions → schedule → SMTP → optional LDAP → recipients → baseline s
    (`git rev-parse HEAD`) with the stamp.
 2. `git pull`, `npm run setup` (venv / capture tools; migrates **dev SQLite** from `.env`
    only), then `.\scripts\run.ps1 -Mode production -ForceRestart` (starts Docker Postgres
-   and runs Alembic against it — check `data/logs/production.log` if migrate fails).
+   and runs Alembic against it - check `data/logs/production.log` if migrate fails).
 3. Confirm `/api/health`, sign-in, and a smoke check of inventory before closing the
    window. Production migrations run automatically on start via `run.ps1`.
 
 **Rollback (Windows):** stop the app (`.\scripts\run.ps1 -Stop`). If the new revision
 applied a schema migration (or startup failed mid-migration), restore the matching
 pre-upgrade backup set and check out the recorded prior revision, then start with
-`-SkipBuild` in the foreground — see [docs/runbook/runbook.md](docs/runbook/runbook.md)
+`-SkipBuild` in the foreground - see [docs/runbook/runbook.md](docs/runbook/runbook.md)
 (Deployment rollback / Failed migration). If the failure was app-only and the database
 schema did not change, `git checkout <prior-sha>` and restart is enough. Do **not** run
 `alembic downgrade` against production.
@@ -313,7 +313,7 @@ schema did not change, `git checkout <prior-sha>` and restart is enough. Do **no
 **Task Scheduler** (same Windows user as Docker Desktop / Npcap):
 
 1. Create Task → **Run only when user is logged on**
-2. Trigger: At log on (optional 1–2 minute delay)
+2. Trigger: At log on (optional 1-2 minute delay)
 3. Action: `powershell.exe` with arguments:
 
 ```text
@@ -430,7 +430,7 @@ cp .env.production /secure/backup/location/
 ```
 
 Restore steps, validation checklist, and quarterly restore drill:
-[operations runbook — Backup set and restore](docs/runbook/runbook.md#backup-set-and-restore).
+[operations runbook - Backup set and restore](docs/runbook/runbook.md#backup-set-and-restore).
 
 **Migrate inventory from dev to production** (ZIP export; users/settings/web-capture
 screenshots are not included):
@@ -489,7 +489,7 @@ pages (defaults 3 and 1).
 |---|---|---|---|---|
 | Up to a few /24s, default settings | 2 cores | 2 GB | 512 MB | 5 GB |
 | /16 inventory, full-port scans, web capture (Compose defaults) | 4 cores | 3 GB | 1 GB | 20 GB |
-| Parallelism 8–16, screenshot concurrency 2 | 8 cores | 6 GB | 2 GB | 40 GB+ |
+| Parallelism 8-16, screenshot concurrency 2 | 8 cores | 6 GB | 2 GB | 40 GB+ |
 
 Disk grows mainly with web-capture screenshots and event history, both bounded by the
 retention period. Linux Compose enforces `APP_MEM_LIMIT` / `APP_CPUS` (defaults `3g` /
@@ -517,8 +517,8 @@ for production).
 | Full port | Discovery, then `-Pn -sV -p 1-65535` on live hosts (manual) |
 
 Vulnerability matching uses CPE strings from service detection (`-sV`). A
-**discovery** scan only finds live hosts — it does not collect product/version
-data — so the Vulnerabilities page stays empty until a **standard** or **full**
+**discovery** scan only finds live hosts - it does not collect product/version
+data - so the Vulnerabilities page stays empty until a **standard** or **full**
 scan (or Mock Lab baseline) has run against those hosts and the local CVE cache
 is populated. First-time NVD/KEV/EPSS import runs in a background process
 (Settings → Vulnerabilities); refreshing the UI does not cancel it.
@@ -530,9 +530,9 @@ still queued or running, so a long scan never stacks the next day's jobs.
 Large CIDRs are chunked with bounded parallelism; failed/partial scans never
 remove inventory. Discovery caps probe RTT, uses one retry, and bounds probe
 rate (min and max) on both local and routed/VPN paths so silent ranges finish
-without flooding a remote site — duration follows live hosts, not CIDR size.
+without flooding a remote site - duration follows live hosts, not CIDR size.
 Networks marked **Reached over VPN (site-to-site)** (Settings → Networks) use
-the same remote discovery rates that finish a /16 in about an hour (~500–1000
+the same remote discovery rates that finish a /16 in about an hour (~500-1000
 probes/s at normal timing), force that routed profile even if a NIC looks
 local, and drop "fast" timing so the tunnel never sees the 2000 probes/s
 burst. Scanning is not slowed or disabled relative to a normal remote job.
@@ -648,7 +648,7 @@ agreement. Publication of this repo does not change those terms.
 ### Third-party tools (separate licenses)
 
 This app orchestrates tools you install yourself (or that ship in the Docker
-image). Those tools keep their own licenses — PortReveal’s grant does **not**
+image). Those tools keep their own licenses - PortReveal’s grant does **not**
 cover them. Comply with each vendor’s terms, especially for commercial deployments:
 
 | Tool | Used for | License (verify upstream) |

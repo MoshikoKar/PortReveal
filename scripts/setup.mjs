@@ -67,7 +67,7 @@ export function ensureNode() {
 
 export function migrate() {
   // Uses .env (usually SQLite). Production Postgres is migrated by scripts/run.ps1.
-  log('running database migrations (dev .env — production uses run.ps1 + .env.production)');
+  log('running database migrations (dev .env - production uses run.ps1 + .env.production)');
   if (run(VENV_PYTHON, ['-m', 'app.cli', 'migrate'], { cwd: BACKEND }) !== 0) {
     fail('Database migration failed. See the output above. For a disposable dev DB run: npm run db:reset');
   }
@@ -93,7 +93,7 @@ export function ensureCaptureTools() {
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
   ]);
   if (status !== 0) {
-    log(c.yellow('capture-tools install reported issues — RDP/RTSP/HTTP stills may soft-skip until tools are on PATH'));
+    log(c.yellow('capture-tools install reported issues - RDP/RTSP/HTTP stills may soft-skip until tools are on PATH'));
   }
 }
 

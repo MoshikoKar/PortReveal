@@ -2,8 +2,8 @@
 
 nmap soft-matches text protocols on the response status line alone, e.g.
 ``softmatch rtsp m|^RTSP/1.0 .*\\r\\n|``. Many web servers echo the request's protocol
-token back — embedded camera/DVR httpds and every Netty/Vert.x based server (Keycloak,
-Quarkus, …) — so nmap's ``OPTIONS / RTSP/1.0`` probe gets ``RTSP/1.0 404 Not Found``
+token back - embedded camera/DVR httpds and every Netty/Vert.x based server (Keycloak,
+Quarkus, …) - so nmap's ``OPTIONS / RTSP/1.0`` probe gets ``RTSP/1.0 404 Not Found``
 and the port is reported as ``rtsp`` with method=probed conf=10, indistinguishable
 from a real fingerprint. HTTP soft matches (``http-proxy``, ``https-alt``) likewise
 carry no product.
@@ -14,7 +14,7 @@ are asked directly:
 
 * RTSP label: a real RTSP server answers ``OPTIONS`` with an RTSP status line *and*
   echoes ``CSeq`` (RFC 2326 §12.17). Confirmed RTSP keeps its label.
-* Otherwise ``GET / HTTP/1.0`` — the same request nmap's GetRequest probe already
+* Otherwise ``GET / HTTP/1.0`` - the same request nmap's GetRequest probe already
   sent. An ``HTTP/1.x`` status line means the port is HTTP; Server / X-Powered-By /
   body markers give the product. A plain reply that proves the port wants TLS (alert
   record, nginx "plain HTTP request was sent to HTTPS port") is retried once over TLS.
@@ -38,7 +38,7 @@ from .types import VERIFIED_METHOD, HostObservation, PortObservation, ScanContex
 
 log = logging.getLogger(__name__)
 
-# HTTP-family names nmap gives from a soft match or its port table — no product behind them.
+# HTTP-family names nmap gives from a soft match or its port table - no product behind them.
 HTTP_FAMILY_LABELS = frozenset({"http", "https", "http-alt", "https-alt", "http-proxy", "ssl/http"})
 # Labels nmap derives from a bare status-line soft match (or no match at all).
 WEAK_SERVICE_LABELS = frozenset({"", "unknown", "rtsp", "sip"}) | HTTP_FAMILY_LABELS

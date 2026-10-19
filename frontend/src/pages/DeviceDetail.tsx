@@ -6,7 +6,7 @@ import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MockBadge, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MacSourceBadge, MockBadge, NO_NAME_TIP, NO_NAME_VPN_TIP, NoMac, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
 import { SCAN_TYPE_LABELS, fmtTime, relTime, useApi } from '../util';
@@ -146,7 +146,7 @@ export default function DeviceDetail() {
       <ErrorBox error={vulnError} />
 
       <div className="grid two">
-        <Card title={`Network exposure — ${open.length} open port${open.length === 1 ? '' : 's'}`} flush
+        <Card title={`Network exposure - ${open.length} open port${open.length === 1 ? '' : 's'}`} flush
           actions={closed.length > 0 && <label className="check small"><input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />show {closed.length} closed</label>}>
           {!d.last_port_scan_at && <div className="card-body muted small">This device has not been port-scanned yet (discovery only).</div>}
           {open.length === 0 && !showClosed ? <Empty>No open ports detected.</Empty> : (
@@ -158,9 +158,9 @@ export default function DeviceDetail() {
                     {previewRows(portRows, portsOpen).map((p) => (
                       <tr key={`${p.protocol}${p.port}`} className={p.is_open ? '' : 'dim'}>
                         <td className="mono nowrap"><strong>{p.protocol.toUpperCase()}/{p.port}</strong>{!p.is_open && <span className="badge outline" style={{ marginLeft: 6 }}>closed {fmtTime(p.closed_at)}</span>}</td>
-                        <td>{p.service ?? '—'}{p.tunnel && <span className="badge outline" style={{ marginLeft: 6 }}>{p.tunnel}</span>}</td>
+                        <td>{p.service ?? '-'}{p.tunnel && <span className="badge outline" style={{ marginLeft: 6 }}>{p.tunnel}</span>}</td>
                         <td>
-                          {[p.product, p.version].filter(Boolean).join(' ') || <span className="muted">—</span>}
+                          {[p.product, p.version].filter(Boolean).join(' ') || <span className="muted">-</span>}
                           {p.extra_info && <div className="muted small">{p.extra_info}</div>}
                           {p.cpe?.map((c) => <div key={c} className="mono muted small">{c}</div>)}
                         </td>
@@ -172,7 +172,7 @@ export default function DeviceDetail() {
                               {p.http.default_page && <span className="badge outline" style={{ marginLeft: 6 }}>default page</span>}
                               {p.http.server && <div className="muted">{p.http.server}</div>}
                             </>
-                          ) : <span className="muted">—</span>}
+                          ) : <span className="muted">-</span>}
                         </td>
                         <td className="small"><IdentityBadge method={p.method} product={p.product} version={p.version} />{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
                         <td className="nowrap small">{fmtTime(p.opened_at)}</td>
@@ -189,15 +189,15 @@ export default function DeviceDetail() {
 
         <Card title="Device">
           <dl className="dl">
-            <dt>Hostname</dt><dd>{d.hostname ?? '—'}</dd>
-            <dt>DNS name</dt><dd>{d.dns_name ?? '—'}</dd>
+            <dt>Hostname</dt><dd>{d.hostname ?? <span className="muted" title={d.vpn_s2s ? NO_NAME_VPN_TIP : NO_NAME_TIP}>-</span>}</dd>
+            <dt>DNS name</dt><dd>{d.dns_name ?? '-'}</dd>
             <dt>Current IP</dt><dd className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></dd>
-            <dt>Previous IPs</dt><dd className="mono">{d.previous_ips.length ? d.previous_ips.join(', ') : '—'}</dd>
-            <dt>MAC</dt><dd className="mono">{d.mac ?? '— (not on scanner L2 segment)'}</dd>
-            <dt>Vendor</dt><dd>{d.vendor ?? '—'}</dd>
+            <dt>Previous IPs</dt><dd className="mono">{d.previous_ips.length ? d.previous_ips.join(', ') : '-'}</dd>
+            <dt>MAC</dt><dd>{d.mac ? <><span className="mono">{d.mac}</span><MacSourceBadge source={d.mac_source} /></> : <NoMac vpn={d.vpn_s2s} />}</dd>
+            <dt>Vendor</dt><dd>{d.vendor ?? '-'}</dd>
             <dt>OS guess</dt>
             <dd>
-              {d.os_name ?? '—'}
+              {d.os_name ?? '-'}
               {d.os_name && d.os_accuracy != null && d.os_accuracy < 85 && <span className="badge outline" style={{ marginLeft: 6 }}>uncertain</span>}
               {d.os_name && d.os_accuracy != null && <span className="muted small"> ({d.os_accuracy}% confidence)</span>}
               {d.os_name && d.os_source && <span className="badge outline" style={{ marginLeft: 6 }}>{d.os_source}</span>}
@@ -205,16 +205,16 @@ export default function DeviceDetail() {
                 <span className="muted small"> · detected {relTime(d.os_detected_at)}</span>
               )}
             </dd>
-            <dt>Network</dt><dd>{d.network_name ?? '—'}{d.zone && <span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
+            <dt>Network</dt><dd>{d.network_name ?? '-'}{d.vpn_s2s && <span className="badge outline" style={{ marginLeft: 6 }} title="Reached over a site-to-site VPN: no MAC or local discovery names across the routed path">VPN</span>}{d.zone &&<span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
             <dt>Device type</dt>
             <dd>
-              {d.type === 'unknown' ? <span className="muted">Unknown (low confidence)</span> : d.type ?? '—'}
+              {d.type === 'unknown' ? <span className="muted">Unknown (low confidence)</span> : d.type ?? '-'}
               {d.type && d.type_confidence != null && <span className="muted small"> ({d.type_confidence}% confidence)</span>}
               {d.classified_at && <span className="muted small"> · classified {relTime(d.classified_at)}</span>}
             </dd>
             <dt>Local discovery name</dt>
             <dd>
-              {d.discovery_name ?? <span className="muted">—</span>}
+              {d.discovery_name ?? <span className="muted">-</span>}
               {d.discovery_name && d.discovery_source && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
             </dd>
             <dt>First seen</dt><dd>{fmtTime(d.first_seen)}</dd>

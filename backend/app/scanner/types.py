@@ -40,6 +40,8 @@ class PortObservation:
 class HostObservation:
     ip: str
     mac: str | None = None
+    # Where `mac` came from when not the scanner's own ARP reply: "snmp" (router ARP table).
+    mac_source: str | None = None
     vendor: str | None = None
     hostname: str | None = None
     os_name: str | None = None
@@ -53,13 +55,15 @@ class HostObservation:
     ports: list[PortObservation] | None = None
     port_scan_failed: bool = False
     # TCP ports probed only on this host (e.g. TrueNAS Apps catalog). Not part of
-    # the scan-wide port_scope — compare uses these for per-host closure coverage.
+    # the scan-wide port_scope - compare uses these for per-host closure coverage.
     extra_tcp_ports: tuple[int, ...] | None = None
     # <hostscript> NSE results (phase-4 vulnerability-script stage only; see `scripts` above).
     host_scripts: dict[str, str] = field(default_factory=dict)
 
     def merge(self, other: HostObservation) -> None:
         """Merge information from another stage of the same scan."""
+        if not self.mac and other.mac:
+            self.mac_source = other.mac_source
         self.mac = self.mac or other.mac
         self.vendor = self.vendor or other.vendor
         self.hostname = self.hostname or other.hostname

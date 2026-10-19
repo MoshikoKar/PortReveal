@@ -1,5 +1,5 @@
 # Declarative device tag rules (versioned). Loaded by tagging.py; Python RULES remain the runtime
-# source of truth until a full YAML evaluator lands — this file documents the pack.
+# source of truth until a full YAML evaluator lands - this file documents the pack.
 version: 1
 rules:
   - tag: domain-controller

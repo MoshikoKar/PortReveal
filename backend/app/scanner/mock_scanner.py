@@ -67,7 +67,7 @@ def mock_cpe_for(product: str | None, version: str | None) -> str | None:
     """nmap-style CPE 2.2 for a Mock Lab product/version, or None when unknown.
 
     Version is the first token only (e.g. ``8.9p1 Ubuntu …`` → ``8.9p1``), matching how
-    nmap typically pins the CPE version field. Used only by MockScanner — never by nmap.
+    nmap typically pins the CPE version field. Used only by MockScanner - never by nmap.
     """
     if not product:
         return None

@@ -2,9 +2,9 @@
 
 Two contexts:
 
-* row  — one open service joined with its device (+ its HTTP metadata). Used for the services view
+* row  - one open service joined with its device (+ its HTTP metadata). Used for the services view
   and inside EXISTS sub-queries.
-* host — one device. Port-level terms become EXISTS over the device's open services. Inside an AND,
+* host - one device. Port-level terms become EXISTS over the device's open services. Inside an AND,
   every port-only part (positive terms, and negations once a positive port term exists) goes into a
   single EXISTS, so they must hold for the *same* service. A negated port term with no positive
   partner means "host without": `-port:22` = no open 22.
@@ -57,7 +57,7 @@ class Ctx:
 
 # --- column maps ---------------------------------------------------------------------------------
 P = DeviceProfile
-# name: (wrapper, columns) — wrapper is "device", "profile", "tag" or "network"
+# name: (wrapper, columns) - wrapper is "device", "profile", "tag" or "network"
 _HOST_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "ip": ("device", lambda: [Device.current_ip]),
     "net": ("device", lambda: [Device.current_ip]),
@@ -84,7 +84,7 @@ _HOST_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "notes": ("profile", lambda: [P.notes]),
 }
 
-# name: (table, columns) — table is "port" or "http" (outer-joined when needed)
+# name: (table, columns) - table is "port" or "http" (outer-joined when needed)
 _PORT_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "port": ("port", lambda: [DevicePort.port]),
     "proto": ("port", lambda: [DevicePort.protocol]),

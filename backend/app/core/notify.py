@@ -119,22 +119,22 @@ def _line_for(ev: Event) -> str:
 
     if ev.event_type == EV_DEVICE_DISCOVERED:
         ports = _short(ev.new_value, 28) if ev.new_value else ""
-        return f"{who}" + (f" — {ports}" if ports else "")
+        return f"{who}" + (f" - {ports}" if ports else "")
     if ev.event_type in (EV_DEVICE_DISAPPEARED, EV_DEVICE_REAPPEARED):
         return who
     if ev.event_type == EV_IP_CHANGED:
         return f"{name}: {ev.old_value or '?'} → {ip or '?'}"
     if ev.event_type in (EV_PORT_OPENED, EV_PORT_CLOSED):
         svc = _short(ev.new_value if ev.event_type == EV_PORT_OPENED else ev.old_value, 24)
-        return f"{who} — {port}" + (f" {svc}" if svc else "")
+        return f"{who} - {port}" + (f" {svc}" if svc else "")
     if ev.event_type == EV_SERVICE_DETECTED:
-        return f"{who} — {port} {_short(ev.new_value, 28)}".rstrip()
+        return f"{who} - {port} {_short(ev.new_value, 28)}".rstrip()
     if ev.event_type in (EV_SERVICE_CHANGED, EV_VERSION_CHANGED):
-        return f"{who} — {port}: {_short(ev.old_value, 22)} → {_short(ev.new_value, 22)}"
+        return f"{who} - {port}: {_short(ev.old_value, 22)} → {_short(ev.new_value, 22)}"
     if ev.event_type in (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE):
-        return f"{who} — {_short(ev.new_value, 40)}"
+        return f"{who} - {_short(ev.new_value, 40)}"
     if ev.event_type in (EV_TAG_ADDED, EV_TAG_REMOVED):
-        return f"{who} — {_short(ev.new_value or ev.old_value, 30)}"
+        return f"{who} - {_short(ev.new_value or ev.old_value, 30)}"
     return _short(ev.message, 60) or who
 
 
@@ -162,7 +162,7 @@ def _section_lines(events: list[Event], etype: str) -> list[str]:
             label = _port_label(ev)
             if label and label not in by_host[key]:
                 by_host[key].append(label)
-        return [f"{host} — {', '.join(ports)}" for host, ports in ((h, by_host[h]) for h in order)]
+        return [f"{host} - {', '.join(ports)}" for host, ports in ((h, by_host[h]) for h in order)]
     return [_line_for(ev) for ev in group]
 
 
@@ -175,7 +175,7 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
         counts[ev.event_type] += 1
 
     n = len(events)
-    subject = f"{SUBJECT_PREFIX} Daily summary — {n} change{'s' if n != 1 else ''} ({day})"
+    subject = f"{SUBJECT_PREFIX} Daily summary - {n} change{'s' if n != 1 else ''} ({day})"
 
     count_bits = [f"{counts[t]} {TITLES.get(t, t).lower()}" for t, _ in
                   sorted(((t, TITLES.get(t, t)) for t in counts), key=lambda x: x[1])]
@@ -183,7 +183,7 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
 
     # --- plain text ---
     plain_lines = [
-        f"PortReveal — {day}",
+        f"PortReveal - {day}",
         f"{n} change{'s' if n != 1 else ''}: {summary}",
         "",
     ]
@@ -269,13 +269,13 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
 def format_sample_digest() -> tuple[str, str, str]:
     """Sample compact daily summary for the settings test-email action."""
     day = utcnow().astimezone().strftime("%Y-%m-%d")
-    subject = f"{SUBJECT_PREFIX} Daily summary — sample ({day})"
+    subject = f"{SUBJECT_PREFIX} Daily summary - sample ({day})"
     plain = (
-        f"PortReveal — {day}\n"
+        f"PortReveal - {day}\n"
         "1 change: 1 ports opened\n\n"
         "Ports (1)\n"
         "  Ports opened\n"
-        "    • server01 (10.0.0.10) — TCP/8080\n"
+        "    • server01 (10.0.0.10) - TCP/8080\n"
     )
     html_body = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>{_esc(subject)}</title></head>
@@ -292,7 +292,7 @@ def format_sample_digest() -> tuple[str, str, str]:
   <p style="margin:0 0 12px;font-size:13px;color:#475569;">1 ports opened</p>
   <div style="font-size:15px;font-weight:600;">Ports <span style="font-weight:500;color:#64748b;font-size:13px;">(1)</span></div>
   <div style="margin-top:10px;font-size:13px;font-weight:600;color:#334155;">Ports opened <span style="font-weight:500;color:#64748b;">(1)</span></div>
-  <ul style="margin:4px 0 0;padding:0 0 0 18px;font-size:13px;"><li>server01 (10.0.0.10) — TCP/8080</li></ul>
+  <ul style="margin:4px 0 0;padding:0 0 0 18px;font-size:13px;"><li>server01 (10.0.0.10) - TCP/8080</li></ul>
 </td></tr>
 <tr><td style="padding:12px 20px;background:#f1f5f9;font-size:12px;color:#64748b;border-top:1px solid #e2e8f0;">
   Test email from PortReveal settings.

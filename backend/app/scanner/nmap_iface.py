@@ -118,7 +118,7 @@ def _target_networks(targets: list[str]) -> list[ipaddress.IPv4Network]:
                 if addr.version == 4:
                     nets.append(ipaddress.ip_network(f"{addr}/32"))
         except ValueError:
-            continue  # hostname or invalid — ignore for bind selection
+            continue  # hostname or invalid - ignore for bind selection
     return [n for n in nets if n.version == 4]
 
 

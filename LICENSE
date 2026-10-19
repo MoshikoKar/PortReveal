@@ -35,14 +35,14 @@ PortReveal depends on separate tools and libraries that remain under their
 own licenses. Installing or using those components does not grant you rights
 beyond each component’s license. Notable runtime tools include:
 
-- Nmap — Nmap Public Source License (NPSL); see https://nmap.org/npsl/
-- Npcap (Windows packet capture) — Nmap/Npc license; commercial use may
+- Nmap - Nmap Public Source License (NPSL); see https://nmap.org/npsl/
+- Npcap (Windows packet capture) - Nmap/Npc license; commercial use may
   require a separate Npcap OEM/commercial license from Nmap Software LLC
-- PostgreSQL — PostgreSQL License
-- Playwright / Chromium — Apache-2.0 and Chromium/BSD-related terms
-- FFmpeg — LGPL/GPL (depending on build)
-- FreeRDP — Apache-2.0
-- Other Node.js and Python packages — see each package’s license metadata
+- PostgreSQL - PostgreSQL License
+- Playwright / Chromium - Apache-2.0 and Chromium/BSD-related terms
+- FFmpeg - LGPL/GPL (depending on build)
+- FreeRDP - Apache-2.0
+- Other Node.js and Python packages - see each package’s license metadata
 
 You are responsible for complying with those third-party licenses, including
 any commercial restrictions they impose (especially Nmap and Npcap).

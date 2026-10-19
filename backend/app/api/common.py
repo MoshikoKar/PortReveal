@@ -105,6 +105,15 @@ def user_out(u: User) -> dict:
     }
 
 
+def _arp_snmp_out(cfg: dict | None) -> dict | None:
+    """Secrets are write-only: only whether each one is set."""
+    if not cfg:
+        return None
+    out = {k: cfg.get(k) for k in ("host", "port", "version", "user", "auth_protocol", "priv_protocol")}
+    out.update({f"{k}_set": bool(cfg.get(f"{k}_enc")) for k in ("community", "auth_key", "priv_key")})
+    return out
+
+
 def network_out(n: Network, device_count: int | None = None, active_count: int | None = None) -> dict:
     return {
         "id": n.id,
@@ -114,6 +123,7 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
         "enabled": n.enabled,
         "zone": n.zone,
         "vpn_s2s": bool(n.vpn_s2s),
+        "arp_snmp": _arp_snmp_out(n.arp_snmp),
         "baseline_scan_id": n.baseline_scan_id,
         "baseline_at": n.baseline_at,
         "archived_at": n.archived_at,
@@ -147,6 +157,7 @@ def device_summary(d: Device, open_ports: list[DevicePort] | None = None, networ
         "uuid": d.uuid,
         "current_ip": d.current_ip,
         "mac": d.mac,
+        "mac_source": d.mac_source,
         "vendor": d.vendor,
         "hostname": d.hostname,
         "os_name": d.os_name,

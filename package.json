@@ -2,7 +2,7 @@
   "name": "portreveal",
   "version": "1.0.0",
   "private": true,
-  "description": "PortReveal — continuous network discovery, service inventory and change detection built around Nmap",
+  "description": "PortReveal - continuous network discovery, service inventory and change detection built around Nmap",
   "workspaces": [
     "frontend"
   ],

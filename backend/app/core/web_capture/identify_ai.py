@@ -1,7 +1,7 @@
 """Passive identification of local / self-hosted AI and LLM API services.
 
 Identity comes only from HTTP response evidence (title, body text, JSON shape,
-Server header). Port numbers are never used to name a product — the same port
+Server header). Port numbers are never used to name a product - the same port
 can host anything.
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ def _model_rows(data: dict) -> list[dict]:
 
 
 def identify_from_openai_models_json(data: Any) -> str | None:
-    """OpenAI-compatible GET /v1/models — name a vendor only from owned_by / id evidence."""
+    """OpenAI-compatible GET /v1/models - name a vendor only from owned_by / id evidence."""
     if not isinstance(data, dict):
         return None
     rows = _model_rows(data)
@@ -87,7 +87,7 @@ def identify_from_openai_models_json(data: Any) -> str | None:
         return "LiteLLM"
     if "xinference" in blob:
         return "Xinference"
-    # Generic OpenAI-compatible list with model ids — content proves an LLM API, not a port.
+    # Generic OpenAI-compatible list with model ids - content proves an LLM API, not a port.
     if data.get("object") == "list" and rows and any(r.get("id") for r in rows):
         return GENERIC_LLM_API
     return None

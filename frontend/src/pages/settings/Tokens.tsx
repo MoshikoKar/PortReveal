@@ -76,7 +76,7 @@ export function TokensSettings({ onDirtyChange }: { onDirtyChange?: (dirty: bool
       {created?.token && (
         <div className="card-body">
           <div className="alert ok stack" style={{ gap: 8 }}>
-            <div>Token “{created.name}” created. Copy it now — it is not shown again.</div>
+            <div>Token “{created.name}” created. Copy it now - it is not shown again.</div>
             <div className="row wrap">
               <code className="query-preview grow" style={{ userSelect: 'all' }}>{created.token}</code>
               <button className="btn sm" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>

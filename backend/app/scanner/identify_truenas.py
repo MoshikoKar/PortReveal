@@ -1,7 +1,7 @@
 """Identify TrueNAS / FreeNAS hosts from observation or inventory fields.
 
 Used to decide whether TrueNAS Apps catalog host ports should be scanned.
-Identity comes from hostname, OS, vendor, or nmap service product strings —
+Identity comes from hostname, OS, vendor, or nmap service product strings -
 never from an open 3XXXX port alone.
 """
 from __future__ import annotations

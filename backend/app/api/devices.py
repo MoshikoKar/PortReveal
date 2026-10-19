@@ -261,6 +261,7 @@ def get_device(uuid: str, db: Session = Depends(get_db), user: User = Depends(cu
         "combined_level": exposure_level(d.combined_score or 0),
         "classified_at": d.classified_at,
         "zone": net.zone if net else None,
+        "vpn_s2s": bool(net and net.vpn_s2s),
         "tags": [_tag_out(t) for t in d.tags],
         "profile": _profile_out(d.profile),
     })

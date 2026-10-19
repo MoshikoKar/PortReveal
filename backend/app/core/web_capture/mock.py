@@ -1,4 +1,4 @@
-"""Mock Web Capture responses for DEV / tests (scenarios A–E). Same pipeline, fake I/O only."""
+"""Mock Web Capture responses for DEV / tests (scenarios A-E). Same pipeline, fake I/O only."""
 from __future__ import annotations
 
 from ...models import WEB_PAGE_HOME, WEB_PAGE_LOGIN, WEB_PAGE_OTHER, WEB_PAGE_STREAM
@@ -115,7 +115,7 @@ def mock_probe_endpoint(scheme: str, host: str, port: int, ip: str) -> EndpointP
         ep.pages = [home]
         return ep
 
-    # Scenario A: ESXi hypervisor UI — only last octet 91 (unused by Mock Lab).
+    # Scenario A: ESXi hypervisor UI - only last octet 91 (unused by Mock Lab).
     # Broader patterns (% 10 == 1) hit gw-core (.1), nas01 (.21), ws-lmstudio (.81).
     if last == 91:
         home = ProbeResult(
@@ -144,7 +144,7 @@ def mock_probe_endpoint(scheme: str, host: str, port: int, ip: str) -> EndpointP
         return ep
 
     # Default: generic nginx app page (not the stock "Welcome to nginx" default-page
-    # fingerprint — that skips screenshots and left capture dirs empty in tests/dev).
+    # fingerprint - that skips screenshots and left capture dirs empty in tests/dev).
     home = ProbeResult(
         url=f"{base}/",
         final_url=f"{base}/",

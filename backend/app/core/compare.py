@@ -308,7 +308,8 @@ class _Applier:
             is_new = dev is None
             if dev is None:
                 dev = Device(
-                    current_ip=h.ip, mac=mac, vendor=h.vendor if mac else None, hostname=hostname,
+                    current_ip=h.ip, mac=mac, mac_source=(h.mac_source or "arp") if mac else None,
+                    vendor=h.vendor if mac else None, hostname=hostname,
                     dns_name=hostname, status=DEVICE_ACTIVE, first_seen=now,
                     last_seen=now, missed_scans=0, network_id=net.id if net else None,
                     port_scan_failed=False, continuous_since=now,
@@ -328,7 +329,7 @@ class _Applier:
                               quiet=self.correlate and not dev.absence_alerted)
                     dev.continuous_since = now
                 if mac and not dev.mac:
-                    dev.mac = mac
+                    dev.mac, dev.mac_source = mac, h.mac_source or "arp"
                 if mac and h.vendor:
                     dev.vendor = h.vendor
                 if hostname:
@@ -363,7 +364,7 @@ class _Applier:
                 if outcome.scan_type == SCAN_FULL:
                     dev.full_scanned_at = now
             elif h.port_scan_failed:
-                # Partial port data (e.g. nmap host-timeout): record opens only — empty
+                # Partial port data (e.g. nmap host-timeout): record opens only - empty
                 # scope skips closures so unscanned ports are not marked closed.
                 if h.ports is not None:
                     self._process_ports(dev, h.ports, is_new, mode, PortScope(""))
@@ -450,7 +451,7 @@ class _Applier:
     def _apply_os(self, dev: Device, h: HostObservation, mode: str, label: str) -> None:
         """Commit an OS guess with a flap guard: a name that differs from the current one only
         replaces it once it has been seen twice in a row, or arrives with accuracy at least ten
-        points above the current guess (spec 3.5) — otherwise it is parked as `os_pending`.
+        points above the current guess (spec 3.5) - otherwise it is parked as `os_pending`.
 
         Sources are ranked: a precise ``nmap_os`` (or script/ntlm) result is never overwritten by a
         weaker service/banner guess.

@@ -106,7 +106,7 @@ def _candidate_ips(db: Session, scan: Scan, cfg: WebCaptureSettings, *, baseline
             interesting.add(e.ip)
 
     # Stale hypervisor PortHttp: title/server still say ESXi/Proxmox while nmap product
-    # clearly identifies another service — re-capture so type and tiles can recover.
+    # clearly identifies another service - re-capture so type and tiles can recover.
     port_ids = [e.device_port_id for e in endpoints]
     ip_by_port = {e.device_port_id: e.ip for e in endpoints}
     if port_ids:

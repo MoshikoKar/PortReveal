@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import ipaddress
+import re
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import client_ip, current_user, require_admin
+from ..core.arp_snmp import AUTH_PROTOCOLS, PRIV_PROTOCOLS, fetch_arp_table, target_from_config
 from ..core.audit import audit
 from ..core.intel import refresh_devices
+from ..netutils import AddressSet
+from ..security import encrypt_secret
 from ..core.mockdata import device_visible
 from ..db import get_db, utcnow
 from ..models import DEVICE_ACTIVE, NETWORK_ZONES, Device, Network, User
@@ -17,6 +24,49 @@ from .common import FULL_REPLACE, UNPAGED_LIST, Row, network_out
 router = APIRouter(prefix="/api/networks", tags=["networks"])
 
 
+_HOSTNAME = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
+_SECRETS = ("community", "auth_key", "priv_key")
+
+
+class ArpSnmpIn(BaseModel):
+    """Remote gateway to read the ARP table from. Secrets are write-only: omit (null) to keep the
+    stored value, "" to clear it."""
+
+    host: str = Field(min_length=1, max_length=253, description="Router / firewall / L3 switch IPv4 address or hostname")
+    port: int = Field(161, ge=1, le=65535)
+    version: Literal["2c", "3"] = "2c"
+    community: str | None = Field(None, max_length=128, description="v2c read-only community; omit to keep")
+    user: str | None = Field(None, max_length=64, description="v3 security name")
+    auth_protocol: Literal[AUTH_PROTOCOLS] | None = None  # type: ignore[valid-type]
+    auth_key: str | None = Field(None, max_length=128, description="v3 auth passphrase; omit to keep")
+    priv_protocol: Literal[PRIV_PROTOCOLS] | None = None  # type: ignore[valid-type]
+    priv_key: str | None = Field(None, max_length=128, description="v3 privacy passphrase; omit to keep")
+
+    @field_validator("host")
+    @classmethod
+    def _host(cls, v: str) -> str:
+        v = v.strip()
+        try:
+            return str(ipaddress.IPv4Address(v))
+        except ValueError:
+            if _HOSTNAME.match(v) and not v.replace(".", "").isdigit():
+                return v.lower()
+        raise ValueError("must be an IPv4 address or a hostname")
+
+    @model_validator(mode="after")
+    def _v3(self) -> ArpSnmpIn:
+        if self.version == "3":
+            if not (self.user or "").strip():
+                raise ValueError("SNMPv3 needs a user name")
+            if self.priv_protocol and not self.auth_protocol:
+                raise ValueError("SNMPv3 privacy (encryption) requires an auth protocol")
+        for key in ("auth_key", "priv_key"):
+            value = getattr(self, key)
+            if value and len(value) < 8:
+                raise ValueError(f"{key} must be at least 8 characters (SNMPv3 rule)")
+        return self
+
+
 class NetworkIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     cidr: str = Field(min_length=7, max_length=64)
@@ -24,6 +74,8 @@ class NetworkIn(BaseModel):
     enabled: bool = True
     zone: str | None = None
     vpn_s2s: bool = False
+    arp_snmp: ArpSnmpIn | None = Field(None, description="Read MACs from this gateway's ARP table over SNMP; "
+                                                         "null removes it")
 
     @field_validator("zone")
     @classmethod
@@ -45,6 +97,34 @@ class NetworkIn(BaseModel):
             return validate_network_cidr(v)
         except TargetError as exc:
             raise ValueError(str(exc)) from exc
+
+
+def _arp_snmp_stored(body: ArpSnmpIn | None, current: dict | None) -> dict | None:
+    """Column value for `body`, keeping each stored secret the request omitted."""
+    if body is None:
+        return None
+    current = current or {}
+    out = body.model_dump(exclude=set(_SECRETS))
+    # Secrets of the other SNMP version are dropped, not kept dormant.
+    used = ("community",) if body.version == "2c" else ("auth_key", "priv_key")
+    for key in _SECRETS:
+        value = getattr(body, key)
+        stored = current.get(f"{key}_enc") if value is None else (encrypt_secret(value) or None)
+        out[f"{key}_enc"] = stored if key in used else None
+    if body.version == "2c":
+        out.update(user=None, auth_protocol=None, priv_protocol=None)
+    if body.version == "2c" and not out["community_enc"]:
+        raise HTTPException(422, "SNMPv2c needs a community string")
+    if body.version == "3":
+        if body.auth_protocol and not out["auth_key_enc"]:
+            raise HTTPException(422, "SNMPv3 auth protocol set but no auth passphrase")
+        if body.priv_protocol and not out["priv_key_enc"]:
+            raise HTTPException(422, "SNMPv3 privacy protocol set but no privacy passphrase")
+    return out
+
+
+def _audit_body(body: NetworkIn) -> dict:
+    return body.model_dump(exclude={"arp_snmp": set(_SECRETS)})
 
 
 def _counts(db: Session):
@@ -88,10 +168,10 @@ def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_
                    user: User = Depends(require_admin)):
     _check_name(db, body.name)
     net = Network(name=body.name, cidr=body.cidr, description=body.description, enabled=body.enabled,
-                  zone=body.zone, vpn_s2s=body.vpn_s2s)
+                  zone=body.zone, vpn_s2s=body.vpn_s2s, arp_snmp=_arp_snmp_stored(body.arp_snmp, None))
     db.add(net)
     db.flush()
-    audit(db, user.username, "network.create", net.name, body.model_dump(), client_ip(request))
+    audit(db, user.username, "network.create", net.name, _audit_body(body), client_ip(request))
     db.commit()
     return network_out(net, 0, 0)
 
@@ -102,16 +182,17 @@ def update_network(network_id: int, body: NetworkIn, request: Request, db: Sessi
     net = _active_network(db, network_id)
     _check_name(db, body.name, network_id)
     before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled, "zone": net.zone,
-              "vpn_s2s": net.vpn_s2s}
+              "vpn_s2s": net.vpn_s2s, "arp_snmp_host": (net.arp_snmp or {}).get("host")}
     if net.cidr != body.cidr:
         # A different scope needs a fresh baseline, otherwise every host in the new range would alert
         net.baseline_scan_id = None
         net.baseline_at = None
     net.name, net.cidr, net.description, net.enabled = body.name, body.cidr, body.description, body.enabled
     net.vpn_s2s = body.vpn_s2s
+    net.arp_snmp = _arp_snmp_stored(body.arp_snmp, net.arp_snmp)
     zone_changed = net.zone != body.zone
     net.zone = body.zone
-    audit(db, user.username, "network.update", net.name, {"before": before, "after": body.model_dump()},
+    audit(db, user.username, "network.update", net.name, {"before": before, "after": _audit_body(body)},
           client_ip(request))
     if zone_changed:
         db.flush()
@@ -119,6 +200,25 @@ def update_network(network_id: int, body: NetworkIn, request: Request, db: Sessi
     db.commit()
     total, active = _counts(db)
     return network_out(net, total.get(net.id, 0), active.get(net.id, 0))
+
+
+@router.post("/{network_id}/arp-snmp/test",
+             description="Reads the saved gateway's ARP table once. Returns how many usable entries it "
+                         "has and how many fall inside this network; nothing is stored.")
+def probe_arp_snmp(network_id: int, request: Request, db: Session = Depends(get_db),
+                  user: User = Depends(require_admin)):
+    net = _active_network(db, network_id)
+    target = target_from_config(net.arp_snmp)
+    if target is None:
+        raise HTTPException(409, "No ARP source (SNMP) is configured for this network")
+    audit(db, user.username, "network.arp_snmp_test", net.name, {"host": target.host}, client_ip(request))
+    db.commit()
+    try:
+        table = fetch_arp_table(target)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc) or type(exc).__name__}
+    scope = AddressSet.from_specs(net.cidr)
+    return {"ok": True, "entries": len(table), "in_network": sum(1 for ip in table if ip in scope)}
 
 
 @router.post("/{network_id}/reset-baseline")

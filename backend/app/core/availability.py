@@ -3,7 +3,7 @@
 Missed scans must count as down: ``scan_hosts`` only has rows for hosts that were seen, so the
 denominator is completed/partial scans on the device's network that should have covered it
 (finished after the device was first seen). A ``port_scan_failed`` observation still means the
-host answered discovery — it is up for availability purposes (scan health is separate).
+host answered discovery - it is up for availability purposes (scan health is separate).
 """
 from __future__ import annotations
 

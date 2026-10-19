@@ -49,9 +49,11 @@ def select_netbios_batch(ips: list[str], *, limit: int = MAX_NETBIOS_QUERIES_PER
 
 
 def collect_local_names(ips: list[str], *, mdns: bool = True, ssdp: bool = True, netbios: bool = True,
-                        timeout: float = 2.0, netbios_timeout: float = 0.5) -> dict[str, tuple[str, str]]:
+                        timeout: float = 2.0, netbios_timeout: float = 0.5,
+                        netbios_macs: dict[str, str] | None = None) -> dict[str, tuple[str, str]]:
     """{ip: (name, source)} for every ip in `ips` that answered. Best-effort and silent on error;
-    callers should also skip this entirely in mock-scanner mode (no real network to listen on)."""
+    callers should also skip this entirely in mock-scanner mode (no real network to listen on).
+    `netbios_macs`, when given, also receives {ip: MAC} from the NetBIOS replies."""
     if not ips:
         return {}
     wanted = set(ips)
@@ -81,7 +83,7 @@ def collect_local_names(ips: list[str], *, mdns: bool = True, ssdp: bool = True,
             log.info("NetBIOS discovery: querying %d of %d devices this pass (round-robin)",
                      len(batch), len(ips))
         try:
-            _merge(query_netbios_names(batch, timeout=netbios_timeout), "netbios")
+            _merge(query_netbios_names(batch, timeout=netbios_timeout, macs=netbios_macs), "netbios")
         except Exception:
             log.debug("NetBIOS discovery failed", exc_info=True)
     return out

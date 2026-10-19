@@ -7,7 +7,7 @@ lands there; blocking it left the capture on Chromium's error page ("browser cou
 not load the page") or a dead "redirects outside the target" tile.
 
 A redirect is followed when its host resolves to an address inside a configured
-network or belongs to a device in the inventory — never to an excluded address,
+network or belongs to a device in the inventory - never to an excluded address,
 and never to the internet.
 """
 from __future__ import annotations

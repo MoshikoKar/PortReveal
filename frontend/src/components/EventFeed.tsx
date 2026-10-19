@@ -13,7 +13,7 @@ export function EventFeed({ events, empty = 'No changes recorded yet.' }: { even
           <span><SeverityBadge ev={e} /></span>
           <span className="msg">
             {e.device_uuid ? <Link to={`/devices/${e.device_uuid}`}>{e.device_label}</Link> : e.device_label}
-            <span className="muted"> — </span>
+            <span className="muted"> - </span>
             <EventDetail ev={e} />
             {!e.notify && <span className="muted small" title="Recorded without email (device outside configured networks)"> · no alert</span>}
           </span>

@@ -111,7 +111,7 @@ Rules for actions:
 
 ## Correlation
 
-- Every response carries `X-Request-Id`. A client can send its own id (1–64 characters from
+- Every response carries `X-Request-Id`. A client can send its own id (1-64 characters from
   `A-Z a-z 0-9 . _ : -`) and the server echoes it. Otherwise the server generates one.
 - JSON logs (`LOG_FORMAT=json`) include the same `request_id`. The UI shows it as the reference on
   server errors, so a reported reference leads straight to the matching log lines.

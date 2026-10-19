@@ -79,13 +79,13 @@ export function SeverityBadge({ ev }: { ev: ChangeEvent }) {
 
 const SCORE_CLASS = { high: 'high', medium: 'medium', low: 'ok' } as const;
 
-/** Exposure score 0–100 (computed from stored scan data, not a vulnerability rating). */
+/** Exposure score 0-100 (computed from stored scan data, not a vulnerability rating). */
 export function ScoreBadge({ score }: { score: number | null | undefined }) {
   const s = score ?? 0;
   return <span className={`badge ${SCORE_CLASS[scoreLevel(s)]}`} title={`Exposure score ${s} / 100`}>{s}</span>;
 }
 
-/** Risk (CVE-based) or combined score 0-100 — same 60/30 scale as exposure. */
+/** Risk (CVE-based) or combined score 0-100 - same 60/30 scale as exposure. */
 export function RiskBadge({ score, kind = 'risk' }: { score: number | null | undefined; kind?: 'risk' | 'combined' }) {
   const s = score ?? 0;
   const label = kind === 'risk' ? 'Risk score' : 'Combined score';
@@ -121,6 +121,38 @@ export function IpAssignmentBadge({ value }: { value: string | null | undefined 
   if (!value) return null;
   const [cls, label, title] = IP_ASSIGNMENT[value] ?? ['outline', value, undefined as unknown as string];
   return <span className={`badge ${cls}`} title={title}>{label}</span>;
+}
+
+// MACs come from ARP and local names from L2 broadcast discovery, so routed/VPN devices legitimately lack them.
+const ARP_SOURCE_HINT = "To get MACs for a routed site, set that site's router as the ARP source in Settings > Networks.";
+const NO_MAC_TIP = `MAC addresses come from ARP, which only reaches the scanner's own L2 segment. Routed and unprivileged scans cannot see them - this is expected, not an error. ${ARP_SOURCE_HINT}`;
+const NO_MAC_VPN_TIP = `This device is reached over a site-to-site VPN (a routed path). ARP does not cross it, so no MAC address is available - this is expected, not an error. ${ARP_SOURCE_HINT}`;
+
+const MAC_SOURCES: Record<string, [string, string]> = {
+  snmp: ['router ARP', "Read from the site router's ARP table over SNMP (the scanner is not on this device's L2 segment)"],
+  netbios: ['NetBIOS', "Reported by the device itself in its NetBIOS reply (the scanner is not on this device's L2 segment)"],
+};
+
+/** Where a MAC came from when it was not the scanner's own ARP. Renders nothing for local ARP. */
+export function MacSourceBadge({ source }: { source: string | null | undefined }) {
+  const meta = source ? MAC_SOURCES[source] : undefined;
+  if (!meta) return null;
+  return <span className="badge outline" style={{ marginLeft: 6 }} title={meta[1]}>{meta[0]}</span>;
+}
+
+export function macSourceTitle(source: string | null | undefined): string | undefined {
+  return source ? MAC_SOURCES[source]?.[1] : undefined;
+}
+export const NO_NAME_TIP = 'No reverse-DNS (PTR) record and no local discovery name (mDNS/NetBIOS/SSDP).';
+export const NO_NAME_VPN_TIP = `${NO_NAME_TIP} Local discovery is L2-only and does not cross a site-to-site VPN, so only DNS can name this device.`;
+
+/** Empty state for a missing MAC: says why instead of a bare dash. Never shows a guessed MAC. */
+export function NoMac({ vpn, className }: { vpn?: boolean; className?: string }) {
+  return (
+    <span className={`muted ${className ?? ''}`} title={vpn ? NO_MAC_VPN_TIP : NO_MAC_TIP}>
+      {vpn ? '- (not available over VPN)' : '- (not on scanner L2 segment)'}
+    </span>
+  );
 }
 
 export function MockBadge({ mode }: { mode: string | null }) {
@@ -223,7 +255,7 @@ export function Pager({ page, pageSize, total, onPage }: {
   return (
     <div className="pager">
       <span>
-        {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} of {total}
+        {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total}
       </span>
       <div className="row">
         <button className="btn sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
@@ -250,7 +282,7 @@ export function useRowLimit<T>(items: T[], size = 10) {
         <span className="mini-pager">
           <button type="button" className="btn sm ghost" disabled={current <= 1} aria-label="Previous page"
             onClick={() => setPage(current - 1)}>‹</button>
-          <span>{(current - 1) * size + 1}–{Math.min(current * size, total)} of {total}</span>
+          <span>{(current - 1) * size + 1}-{Math.min(current * size, total)} of {total}</span>
           <button type="button" className="btn sm ghost" disabled={current >= pages} aria-label="Next page"
             onClick={() => setPage(current + 1)}>›</button>
         </span>
@@ -406,7 +438,7 @@ function chipTitle(p: ChipPort): string | undefined {
 }
 
 export function PortChips({ ports, max = 8 }: { ports: ChipPort[]; max?: number }) {
-  if (!ports.length) return <span className="muted">—</span>;
+  if (!ports.length) return <span className="muted">-</span>;
   return (
     <span>
       {ports.slice(0, max).map((p) => (

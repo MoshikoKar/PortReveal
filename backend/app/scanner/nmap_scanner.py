@@ -75,7 +75,7 @@ _DISCOVERY_MIN_PARALLELISM = 32
 EXTRA_PORTS_TIMEOUT_S = 20 * 60
 # No scan stage sends UDP, with one narrow exception: OS detection (-O) fires a single U1
 # probe at a closed port as part of its fingerprint. Every other UDP form (-sU, -PU, -sY,
-# -PY, a general UDP scan) stays forbidden — unanswered UDP dominates scan time, and fragile
+# -PY, a general UDP scan) stays forbidden - unanswered UDP dominates scan time, and fragile
 # embedded UDP services (SNMP/IPMI/CoAP/SSDP/TFTP) can misbehave when probed.
 # Telephony signaling ports are never probed (see known_ports.NEVER_PROBE_TCP_PORTS).
 _NEVER_PROBE_TCP_PORTS = ",".join(str(p) for p in NEVER_PROBE_TCP_PORTS)
@@ -135,7 +135,7 @@ def build_discovery_args(privileged: bool, timing: str, *, local_l2: bool = Fals
         "--initial-rtt-timeout", f"{initial_rtt}ms",
         "--max-rtt-timeout", f"{max_rtt}ms",
     ]
-    # VPN always takes the remote (routed) arg shape — never the quieter local-L2 ARP path.
+    # VPN always takes the remote (routed) arg shape - never the quieter local-L2 ARP path.
     use_local = local_l2 and not vpn_s2s
     if use_local:
         args += ["--max-rate", str(discovery_max_rate(timing, local_l2=True))]
@@ -272,7 +272,7 @@ def build_script_args(privileged: bool, script_names: list[str], ports: tuple[in
 def _merge_host_ports(base: HostObservation, extra: HostObservation) -> None:
     """Union open ports from a follow-up scan into the primary host observation.
 
-    Follow-ups are additive. Do not clear ``port_scan_failed`` on the primary host —
+    Follow-ups are additive. Do not clear ``port_scan_failed`` on the primary host -
     a timed-out full ``1-65535`` pass is still incomplete coverage even after extras.
     """
     if extra.ports is None:
@@ -325,7 +325,7 @@ class NmapScanner:
             )
         elif not local_l2:
             log.warning(
-                "scan %s: no local ethernet overlaps targets — ARP/MAC unavailable "
+                "scan %s: no local ethernet overlaps targets - ARP/MAC unavailable "
                 "(typical on Docker Desktop / remote VPS). Using remote discovery "
                 "(higher rate, tighter RTT); only hosts that answer ICMP/TCP are reported; "
                 "silent phones/IoT need a LAN/host-network scan.",

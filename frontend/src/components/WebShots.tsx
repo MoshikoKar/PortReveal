@@ -15,7 +15,7 @@ export const KIND_LABELS: Record<WebPageKind, string> = {
 
 export const shotUrl = (p: WebPage) => `/api/web-pages/${p.id}/screenshot`;
 
-/** Screenshot image that turns into a note when the file cannot be loaded — never a broken icon. */
+/** Screenshot image that turns into a note when the file cannot be loaded - never a broken icon. */
 export function ShotImg({ alt, ...rest }: ImgHTMLAttributes<HTMLImageElement> & { src: string }) {
   const [failed, setFailed] = useState(false);
   if (failed) return <span className="shot-missing">Screenshot unavailable</span>;
@@ -70,7 +70,7 @@ export function shotNote(p: WebPage): string {
   if (isDesktopPage(p)) {
     if (p.capture_error === 'freerdp unavailable') return 'freerdp unavailable';
     if (p.capture_error === 'vnc tools unavailable') return 'vnc tools unavailable';
-    // NLA/CredSSP: protocol never draws a logon bitmap — Shodan-style still needs non-NLA RDP.
+    // NLA/CredSSP: protocol never draws a logon bitmap - Shodan-style still needs non-NLA RDP.
     if (p.capture_error === 'skipped_auth') return 'auth required (no pre-login screen)';
     if (p.screenshot_status === 'failed') return p.capture_error ?? 'Desktop frame failed';
     if (p.screenshot_status === 'skipped') return p.capture_error ?? 'No desktop frame';
@@ -91,10 +91,10 @@ export function shotNote(p: WebPage): string {
   if (p.http_status === 401 || p.http_status === 403) return 'Authentication required';
   if (p.error_reason?.startsWith('default server page')) {
     const m = p.error_reason.match(/\(([^)]+)\)/);
-    return m ? `${m[1]} default page — no app here` : 'Default server page';
+    return m ? `${m[1]} default page - no app here` : 'Default server page';
   }
   if (p.http_status == null) return 'No response';
-  if (p.error_reason === 'blank page') return 'Blank page — nothing shown';
+  if (p.error_reason === 'blank page') return 'Blank page - nothing shown';
   if (p.error_reason) return 'Error page';
   if (p.capture_error === 'Chromium unavailable') return 'Browser unavailable at capture time';
   if (p.screenshot_status === 'not_requested') return 'Not captured (screenshot limit)';

@@ -48,7 +48,7 @@ export function Logo() {
 
 /** Full mark + wordmark + tagline artwork (sidebar header, sign-in screen). */
 export function LogoLockup({ className = 'brand-lockup-img' }: { className?: string }) {
-  return <img className={className} src={logoLockup} width={720} height={289} alt="PortReveal — Network discovery" />;
+  return <img className={className} src={logoLockup} width={720} height={289} alt="PortReveal - Network discovery" />;
 }
 
 export function BrandLockup({ subtitle = 'Network discovery' }: { subtitle?: string }) {
@@ -165,7 +165,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <div className="main">
         {scanner?.mock_active && (
           <div className="banner">
-            SIMULATED DATA — the mock scanner is active. Scan results are generated, not observed on a real network.
+            SIMULATED DATA - the mock scanner is active. Scan results are generated, not observed on a real network.
           </div>
         )}
         {scanner?.mode === 'unavailable' && (

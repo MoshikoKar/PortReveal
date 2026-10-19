@@ -199,7 +199,7 @@ def _stage_scripts(db, device_ids: list[int], ctx: ScanContext, budget_seconds: 
             stats["budget_exceeded"] = True
             break
         batch = device_list[i:i + SCRIPT_HOST_BATCH]
-        # Spec 8.4.3: each host is probed only on the ports that justify its scripts — never a
+        # Spec 8.4.3: each host is probed only on the ports that justify its scripts - never a
         # union of every script with every port across the batch.
         for d in batch:
             ctx.check_cancelled()

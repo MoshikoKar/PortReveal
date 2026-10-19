@@ -1,7 +1,7 @@
 # Completed findings migrated from todo.md
 
 Migrated: 2026-10-18
-Source: todo.md Critical–Low sections (Status: Completed blocks)
+Source: todo.md Critical-Low sections (Status: Completed blocks)
 Count: 26
 
 ---

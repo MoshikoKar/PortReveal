@@ -6,16 +6,16 @@ also depends on `exposure_score`, which changes far more often than CVE matches 
 
 Formula (kept here so the PR / operators can read it in one place):
 
-1. **Per-CVE points** — start from ``10 × CVSS`` (missing CVSS → ``DEFAULT_CVSS``), scale by EPSS
+1. **Per-CVE points** - start from ``10 × CVSS`` (missing CVSS → ``DEFAULT_CVSS``), scale by EPSS
    percentile when present (``0.6 + 0.4 × p``), apply KEV (``×1.5``, floored to the *medium*
    band so one KEV alone is not already "high"), and halve potential matches. Then
    **soft-compress** with ``100 × (1 − e^{−raw/COMPRESS_K})``.
 
-2. **Device risk** — take the top ``TOP_N`` compressed scores and fold them with **residual
+2. **Device risk** - take the top ``TOP_N`` compressed scores and fold them with **residual
    saturation**: each finding fills ``PRIMARY_WEIGHT × (SECONDARY_DECAY**i)`` of the *remaining*
    room to 100. One serious finding lands medium; several KEVs/criticals are needed for high.
 
-3. **Combined** — exposure may spend at most ``EXPOSURE_HEADROOM_FRACTION`` of the room left
+3. **Combined** - exposure may spend at most ``EXPOSURE_HEADROOM_FRACTION`` of the room left
    below 100 (scaled by ``exposure/100``). It never multiplies risk by up to 1.5.
 """
 from __future__ import annotations
@@ -47,7 +47,7 @@ COMPRESS_K = 180.0
 # First finding uses this fraction of residual room; each next uses SECONDARY_DECAY of that.
 PRIMARY_WEIGHT = 0.85
 SECONDARY_DECAY = 0.55
-# Exposure may fill at most this fraction of the room left under 100 — enough to tip a
+# Exposure may fill at most this fraction of the room left under 100 - enough to tip a
 # near-threshold host up a band, not enough to push mid-risk devices to 100.
 EXPOSURE_HEADROOM_FRACTION = 0.12
 RISK_CHUNK = 500
@@ -56,7 +56,7 @@ RISK_CHUNK = 500
 RISK_HIGH_THRESHOLD = 60
 RISK_MEDIUM_THRESHOLD = 30
 RISK_BANDS = ("high", "medium", "low")
-# KEV alone clears the *medium* band on the raw score before soft-compress — not high.
+# KEV alone clears the *medium* band on the raw score before soft-compress - not high.
 KEV_FLOOR = RISK_MEDIUM_THRESHOLD
 
 

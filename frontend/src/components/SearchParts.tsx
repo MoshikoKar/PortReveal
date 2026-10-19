@@ -60,7 +60,7 @@ export function HostResult({ h }: { h: SearchHost }) {
           <DeviceStatusBadge status={h.status} />
         </div>
         <div className="muted small">
-          {[h.network, h.os, h.vendor].filter(Boolean).join(' · ') || '—'} · seen {relTime(h.last_seen)}
+          {[h.network, h.os, h.vendor].filter(Boolean).join(' · ') || '-'} · seen {relTime(h.last_seen)}
         </div>
         {h.tags.length > 0 && <div>{h.tags.map((t) => <span key={t} className="chip">{t}</span>)}</div>}
         {h.services.length > 0 && (

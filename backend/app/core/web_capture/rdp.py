@@ -1,9 +1,9 @@
-"""RDP still capture via FreeRDP — empty credentials only; soft-skip on NLA/auth.
+"""RDP still capture via FreeRDP - empty credentials only; soft-skip on NLA/auth.
 
 Shodan-style behaviour: when the server allows a session without Network Level
 Authentication, FreeRDP can reach the Windows logon/greeter bitmap and
 ``/screenshot`` captures it. No passwords are tried. If the server requires NLA
-(CredSSP), the protocol never draws a desktop — there is no frame to capture.
+(CredSSP), the protocol never draws a desktop - there is no frame to capture.
 """
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def _run_freerdp(exe: str, args: list[str], *, timeout: float) -> tuple[int, str
 def grab_rdp_frame(ip: str, port: int = 3389, *, timeout: float = 12.0) -> RdpShot:
     """Capture the pre-auth RDP logon bitmap when the server allows it.
 
-    Empty ``/u:`` / ``/p:`` only — never retries with credentials. Tries ``/sec:tls``
+    Empty ``/u:`` / ``/p:`` only - never retries with credentials. Tries ``/sec:tls``
     first so hosts without NLA yield a Shodan-style login-screen still.
     """
     exe = _freerdp_bin()

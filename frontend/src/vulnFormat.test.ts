@@ -7,9 +7,9 @@ describe('formatCvss', () => {
     expect(formatCvss(5)).toBe('5.0');
   });
 
-  it('uses an em dash when missing', () => {
-    expect(formatCvss(null)).toBe('—');
-    expect(formatCvss(undefined)).toBe('—');
+  it('uses a hyphen when missing', () => {
+    expect(formatCvss(null)).toBe('-');
+    expect(formatCvss(undefined)).toBe('-');
   });
 });
 
@@ -26,7 +26,7 @@ describe('formatEpss', () => {
 describe('formatEpssPct', () => {
   it('renders a bare percent for table cells', () => {
     expect(formatEpssPct(0.1)).toBe('10%');
-    expect(formatEpssPct(null)).toBe('—');
+    expect(formatEpssPct(null)).toBe('-');
   });
 });
 

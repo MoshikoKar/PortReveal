@@ -154,7 +154,7 @@ def test_mock_rtsp_endpoint_shape():
 
 
 def test_looks_like_rtsp_rejects_http_json_400(monkeypatch):
-    """Keycloak-like ports answer RTSP probes with RTSP/1.0 400 + JSON — not a camera."""
+    """Keycloak-like ports answer RTSP probes with RTSP/1.0 400 + JSON - not a camera."""
     from app.core.web_capture import rtsp as rtsp_mod
 
     class FakeSock:
@@ -485,7 +485,7 @@ def test_soft_not_found_body_is_unusable():
 
 
 def test_stored_title_rematch_without_html():
-    """Existing captures keep only title/status — new rules must apply without re-capture."""
+    """Existing captures keep only title/status - new rules must apply without re-capture."""
     assert unusable_page_reason(200, "Apache Tomcat (TomEE)/9.0.35 (8.0.2)") == "default server page (Tomcat)"
     assert unusable_page_reason(200, "Not Found") is not None
     assert unusable_page_reason(200, "Test Page for the HTTP Server on Red Hat Enterprise Linux") == (
