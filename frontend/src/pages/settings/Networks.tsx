@@ -153,7 +153,7 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
   const [actionError, setActionError] = useState<string | null>(null);
   const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
-  const canSave = !!draft && !!draft.name.trim() && !!draft.cidr.trim();
+  const canSave = !!draft && !!draft.name.trim() && !!draft.cidr.trim() && (!draft.arp || !!draft.arp.host.trim());
   useReportDirty(!!draft && dirty, onDirtyChange);
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
@@ -304,4 +304,15 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
           <label className="check"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />Include in the scheduled daily scan</label>
           <label className="check" title={VPN_S2S_TIP}><input type="checkbox" checked={draft.vpn_s2s} onChange={(e) => setDraft({ ...draft, vpn_s2s: e.target.checked })} />Reached over VPN (site-to-site)</label>
           <span className="hint">{VPN_S2S_TIP}</span>
-          <label className="check" title={ARP_TIP}><input 
+          <label className="check" title={ARP_TIP}><input type="checkbox" checked={!!draft.arp} onChange={(e) => setDraft({ ...draft, arp: e.target.checked ? (draft.arp ?? initial?.arp ?? NEW_ARP) : null })} />Get MAC addresses from the site's router (SNMP)</label>
+          <span className="hint">{ARP_TIP}</span>
+          {draft.arp && (
+            <ArpSnmpFields arp={draft.arp} onChange={(arp) => setDraft({ ...draft, arp })} networkId={draft.id}
+              saved={!!initial?.arp && JSON.stringify(draft.arp) === JSON.stringify(initial.arp)} />
+          )}
+          <ErrorBox error={saveError} />
+        </Modal>
+      )}
+    </Card>
+  );
+}
