@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type MouseEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent, type RefObject } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { post } from '../api';
 import { useApp } from '../context';
@@ -69,13 +69,67 @@ function BaselineCell({ n, onStarted }: { n: Network; onStarted: () => void }) {
   );
 }
 
+// .grid.two drops to one column at 1200px; side by side, Recent changes alone sets the row height.
+const SIDE_BY_SIDE = '(min-width: 1201px)';
+
+/** How many `.bar-row`s fit in the card body around `ref` (null = no limit: stacked layout). */
+function useFittingRows(ref: RefObject<HTMLDivElement | null>, count: number): number | null {
+  const [fit, setFit] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const bars = ref.current;
+    const body = bars?.parentElement;
+    if (!bars || !body) return;
+    const mq = window.matchMedia(SIDE_BY_SIDE);
+    const measure = () => {
+      const row = bars.querySelector('.bar-row');
+      if (!mq.matches || !row) { setFit(null); return; }
+      const pad = getComputedStyle(body);
+      const room = body.clientHeight - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
+      const gap = parseFloat(getComputedStyle(bars).rowGap) || 0;
+      setFit(Math.max(1, Math.floor((room + gap) / (row.getBoundingClientRect().height + gap))));
+    };
+    measure();
+    // The card is size-contained, so its body only resizes with the row, never with the bars.
+    const ro = new ResizeObserver(measure);
+    ro.observe(body);
+    mq.addEventListener('change', measure);
+    return () => { ro.disconnect(); mq.removeEventListener('change', measure); };
+  }, [ref, count]);
+  return fit;
+}
+
+/** Busiest change types first, cut to what fits beside Recent changes so neither column has a gap. */
+function ChangesByType({ byType }: { byType: [EventType, number][] }) {
+  const barsRef = useRef<HTMLDivElement>(null);
+  const fit = useFittingRows(barsRef, byType.length);
+  const sorted = [...byType].sort((a, b) => b[1] - a[1]);
+  const shown = fit == null ? sorted : sorted.slice(0, fit);
+  const hidden = sorted.length - shown.length;
+  const maxType = Math.max(1, ...byType.map(([, n]) => n));
+  return (
+    <Card title="Changes by type (7 days)" className="fill-rest"
+      actions={hidden > 0 && <Link to="/changes?range=7d" className="small">+{hidden} more →</Link>}>
+      {byType.length === 0 ? <div className="muted">No changes in the last 7 days.</div> : (
+        <div className="bars" ref={barsRef}>
+          {shown.map(([t, n]) => (
+            <Link to={`/changes?type=${t}&range=7d`} key={t} className="bar-row" title={`${EVENT_LABELS[t]}: ${n}`}>
+              <span>{EVENT_LABELS[t]}</span>
+              <span className="bar-track"><span className="bar-fill" style={{ width: `${(n / maxType) * 100}%`, ['--bar-color' as any]: TYPE_COLORS[t] }} /></span>
+              <span className="right">{n}</span>
+            </Link>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   const { data, error, reload } = useApi<DashboardData>('/dashboard', undefined, 10000);
   const nav = useNavigate();
   if (!data) return <>{error ? <ErrorBox error={error} /> : <Loading />}</>;
   const { devices, last_24h: d1, last_7d: d7, scans } = data;
   const byType = Object.entries(d7.by_type) as [EventType, number][];
-  const maxType = Math.max(1, ...byType.map(([, n]) => n));
   const maxSvc = Math.max(1, ...data.top_services.map((s) => s.count));
   const current = scans.current;
   const last = scans.last_completed;
@@ -143,19 +197,7 @@ export default function Dashboard() {
             </div>
           </Card>
 
-          <Card title="Changes by type (7 days)">
-            {byType.length === 0 ? <div className="muted">No changes in the last 7 days.</div> : (
-              <div className="bars">
-                {byType.sort((a, b) => b[1] - a[1]).map(([t, n]) => (
-                  <Link to={`/changes?type=${t}&range=7d`} key={t} className="bar-row" title={`${EVENT_LABELS[t]}: ${n}`}>
-                    <span>{EVENT_LABELS[t]}</span>
-                    <span className="bar-track"><span className="bar-fill" style={{ width: `${(n / maxType) * 100}%`, ['--bar-color' as any]: TYPE_COLORS[t] }} /></span>
-                    <span className="right">{n}</span>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </Card>
+          <ChangesByType byType={byType} />
         </div>
       </div>
 

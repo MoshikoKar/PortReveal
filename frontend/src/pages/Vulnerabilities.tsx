@@ -223,10 +223,8 @@ export default function Vulnerabilities() {
             </Card>
           </div>
 
-          <Card title="Severity by network" actions={<span className="muted small">Severity is derived from CVSS, not NVD&apos;s label</span>}>
-            <VulnHeatmap rows={data.severity_by_network} filters={filters}
-              onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))} />
-          </Card>
+          <VulnHeatmap rows={data.severity_by_network} filters={filters}
+            onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))} />
 
           <VulnFacets summary={data} filters={filters} onToggle={toggle}
             onToggleVendorProduct={toggleVendorProduct} />

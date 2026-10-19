@@ -44,7 +44,7 @@ WEEKS = 12
 SNAPSHOT_RETENTION_DAYS = 365
 SNAPSHOT_DECIMATE_AFTER_DAYS = 90  # rows older than this collapse to one point per week at read time
 AGE_BUCKETS = ("under_30d", "30_90d", "90_365d", "over_365d", "unknown")
-FACET_LIMIT = 20
+FACET_LIMIT = 100  # the UI shows 10 per facet and pages through the rest behind "See all"
 
 # Report-only, refreshed in the background after every scan/sync: a short TTL just bounds
 # staleness for a second app process sharing the database; invalidate_vuln_summary_cache() covers

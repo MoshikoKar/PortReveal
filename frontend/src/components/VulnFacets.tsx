@@ -1,4 +1,4 @@
-import { Card } from './ui';
+import { Card, useRowLimit } from './ui';
 import type { AgeBucket, FacetBucket, VulnSummary } from '../types';
 import { barFillStyle, maxOf } from '../vulnChartMath';
 import {
@@ -14,55 +14,26 @@ function ageBuckets(counts: Record<AgeBucket, number>): FacetBucket[] {
   return AGE_BUCKETS.map((key) => ({ key, count: counts[key], label: AGE_LABELS[key] }));
 }
 
-function FacetBars({ title, buckets, filterKey, filters, onToggle }: {
+/** One facet card: at most 10 bars, then "See all" pages through the rest. Bars scale to the
+ * largest bucket overall, so they stay comparable across pages. */
+function BarsCard({ title, buckets, isActive, onClick }: {
   title: string;
   buckets: FacetBucket[];
-  filterKey: VulnFilterKey;
-  filters: VulnFilters;
-  onToggle: (key: VulnFilterKey, value: string) => void;
+  isActive: (value: string) => boolean;
+  onClick: (value: string) => void;
 }) {
   const max = maxOf(buckets.map((b) => b.count));
-  const selected = filters[filterKey];
+  const { rows, actions } = useRowLimit(buckets);
   return (
-    <Card title={title}>
+    <Card title={title} actions={actions}>
       {buckets.length === 0 ? <div className="muted small">No data yet.</div> : (
         <div className="bars">
-          {buckets.map((b) => {
+          {rows.map((b) => {
             const value = String(b.key);
-            const active = selected === value;
+            const active = isActive(value);
             return (
               <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`} aria-pressed={active}
-                title={`${b.label ?? value}: ${b.count}`} onClick={() => onToggle(filterKey, value)}>
-                <span>{b.label ?? value}</span>
-                <span className="bar-track"><span className="bar-fill" style={barFillStyle(b.count, max)} /></span>
-                <span className="right">{b.count}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-/** Vendor/product facet: one click sets both URL params (`vendor` + `product`), matching the
- * summary bucket key `vendor:product` (or `vendor=unknown` with no product). */
-function VendorProductFacet({ buckets, filters, onToggleKey }: {
-  buckets: FacetBucket[];
-  filters: VulnFilters;
-  onToggleKey: (facetKey: string) => void;
-}) {
-  const max = maxOf(buckets.map((b) => b.count));
-  return (
-    <Card title="By vendor / product">
-      {buckets.length === 0 ? <div className="muted small">No data yet.</div> : (
-        <div className="bars">
-          {buckets.map((b) => {
-            const value = String(b.key);
-            const active = vendorProductFacetActive(filters, value);
-            return (
-              <button key={value} type="button" className={`bar-row ${active ? 'active' : ''}`} aria-pressed={active}
-                title={`${b.label ?? value}: ${b.count}`} onClick={() => onToggleKey(value)}>
+                title={`${b.label ?? value}: ${b.count}`} onClick={() => onClick(value)}>
                 <span>{b.label ?? value}</span>
                 <span className="bar-track"><span className="bar-fill" style={barFillStyle(b.count, max)} /></span>
                 <span className="right">{b.count}</span>
@@ -81,23 +52,31 @@ export function VulnFacets({ summary, filters, onToggle, onToggleVendorProduct }
   onToggle: (key: VulnFilterKey, value: string) => void;
   onToggleVendorProduct: (facetKey: string) => void;
 }) {
+  const facet = (title: string, buckets: FacetBucket[], key: VulnFilterKey) => (
+    <BarsCard title={title} buckets={buckets}
+      isActive={(value) => filters[key] === value} onClick={(value) => onToggle(key, value)} />
+  );
   return (
     <>
       {/* Text-heavy facets stay at two columns. */}
       <div className="grid halves">
-        <FacetBars title="By OS" buckets={summary.facets.os} filterKey="os_name" filters={filters} onToggle={onToggle} />
-        <VendorProductFacet buckets={summary.facets.vendor_product} filters={filters} onToggleKey={onToggleVendorProduct} />
+        {facet('By OS', summary.facets.os, 'os_name')}
+        {/* One click sets both URL params (`vendor` + `product`), matching the summary bucket key
+            `vendor:product` (or `vendor=unknown` with no product). */}
+        <BarsCard title="By vendor / product" buckets={summary.facets.vendor_product}
+          isActive={(value) => vendorProductFacetActive(filters, value)} onClick={onToggleVendorProduct} />
       </div>
-      {/* Compact short-label facets: three per row on wide screens. */}
+      {/* Grouped by length so cards sharing a row are about the same height: the open-ended
+          facets (up to 10 rows each), then the short ones (a few networks, 5 age buckets). */}
       <div className="grid three">
-        <FacetBars title="By service" buckets={summary.facets.service} filterKey="service" filters={filters} onToggle={onToggle} />
-        <FacetBars title="By port" buckets={summary.facets.port} filterKey="port" filters={filters} onToggle={onToggle} />
-        <FacetBars title="By network" buckets={summary.facets.network} filterKey="network_id" filters={filters} onToggle={onToggle} />
-        <FacetBars title="By device type" buckets={summary.facets.device_type} filterKey="device_type" filters={filters} onToggle={onToggle} />
-        <FacetBars title="By CVE age (published)" buckets={ageBuckets(summary.facets.cve_age)} filterKey="cve_age"
-          filters={filters} onToggle={onToggle} />
-        <FacetBars title="By exposure duration" buckets={ageBuckets(summary.facets.exposure_duration)}
-          filterKey="exposure_duration" filters={filters} onToggle={onToggle} />
+        {facet('By service', summary.facets.service, 'service')}
+        {facet('By port', summary.facets.port, 'port')}
+        {facet('By device type', summary.facets.device_type, 'device_type')}
+      </div>
+      <div className="grid three">
+        {facet('By network', summary.facets.network, 'network_id')}
+        {facet('By CVE age (published)', ageBuckets(summary.facets.cve_age), 'cve_age')}
+        {facet('By exposure duration', ageBuckets(summary.facets.exposure_duration), 'exposure_duration')}
       </div>
     </>
   );

@@ -234,6 +234,36 @@ export function Pager({ page, pageSize, total, onPage }: {
   );
 }
 
+/** Caps a fully loaded list at `size` rows. Longer lists get a "See all" toggle that switches to
+ *  paging through every row, still `size` at a time. `actions` goes in the card head, so paging
+ *  never changes the card's height (cards sharing a grid row stay level). */
+export function useRowLimit<T>(items: T[], size = 10) {
+  const [paging, setPaging] = useState(false);
+  const [page, setPage] = useState(1);
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const current = paging ? Math.min(page, pages) : 1;
+  const rows = items.slice((current - 1) * size, current * size);
+  const actions = total > size ? (
+    <>
+      {paging && (
+        <span className="mini-pager">
+          <button type="button" className="btn sm ghost" disabled={current <= 1} aria-label="Previous page"
+            onClick={() => setPage(current - 1)}>‹</button>
+          <span>{(current - 1) * size + 1}–{Math.min(current * size, total)} of {total}</span>
+          <button type="button" className="btn sm ghost" disabled={current >= pages} aria-label="Next page"
+            onClick={() => setPage(current + 1)}>›</button>
+        </span>
+      )}
+      <button type="button" className="btn sm ghost" aria-expanded={paging}
+        onClick={() => { setPaging(!paging); setPage(1); }}>
+        {paging ? `Top ${size}` : `See all ${total}`}
+      </button>
+    </>
+  ) : null;
+  return { rows, actions };
+}
+
 /** True when closing may proceed: nothing unsaved, or the user agreed to discard it. */
 export function confirmDiscard(dirty: boolean | undefined): boolean {
   return !dirty || confirm('Discard unsaved changes?');

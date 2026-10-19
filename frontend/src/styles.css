@@ -179,6 +179,12 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 @media (max-width: 700px) { .grid.kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .dashboard { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }
+@media (min-width: 1201px) {
+  /* Beside Recent changes: takes the height the feed leaves and never stretches the row itself
+     (size containment); Dashboard.tsx lists only the rows that fit. */
+  .card.fill-rest { flex: 1 1 0; min-height: 150px; contain: size; }
+  .card.fill-rest > .card-body { overflow: hidden; }
+}
 
 /* Narrow viewports: the sidebar collapses into a sticky top bar (brand, current page, menu toggle);
    the toggle drops the nav and account footer down beneath it. */
@@ -406,6 +412,9 @@ table.compact td.heatmap-cell { padding: 2px; }
 table.skeleton tbody tr:hover { background: none; }
 .skeleton-bar { display: block; height: 10px; border-radius: var(--radius-sm); background: var(--panel-3); animation: pulse 1.6s ease-in-out infinite; }
 .pager { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; color: var(--muted); font-size: 12.5px; }
+/* Card-head pager for capped lists (useRowLimit): sits beside "See all" so the body height is fixed. */
+.mini-pager { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mini-pager .btn { font-size: 16px; line-height: 1; padding-inline: 8px; }
 
 .modal-back { position: fixed; inset: 0; background: rgba(2, 6, 14, 0.72); display: grid; place-items: center; z-index: 50; padding: 20px; }
 .modal { background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius-xl); width: min(640px, 100%); max-height: 90vh; overflow: auto; }
