@@ -6,10 +6,10 @@ import { EventFeed } from '../components/EventFeed';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MacSourceBadge, MockBadge, NO_NAME_TIP, NO_NAME_VPN_TIP, NoMac, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MacSourceBadge, MockBadge, NO_NAME_TIP, NO_NAME_VPN_TIP, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
-import { SCAN_TYPE_LABELS, fmtTime, relTime, useApi } from '../util';
+import { SCAN_TYPE_LABELS, fmtTime, httpTitleDisplay, relTime, useApi } from '../util';
 
 const PREVIEW_ROWS = 10;
 
@@ -167,7 +167,7 @@ export default function DeviceDetail() {
                         <td className="small">
                           {p.http ? (
                             <>
-                              {p.http.status != null && <span className="badge outline">{p.http.status}</span>} {p.http.title ?? <span className="muted">no title</span>}
+                              {p.http.status != null && <span className="badge outline">{p.http.status}</span>} {httpTitleDisplay(p.http.status, p.http.title) ?? <span className="muted">no title</span>}
                               {p.http.login && <span className="badge medium" style={{ marginLeft: 6 }}>login</span>}
                               {p.http.default_page && <span className="badge outline" style={{ marginLeft: 6 }}>default page</span>}
                               {p.http.server && <div className="muted">{p.http.server}</div>}
@@ -193,8 +193,8 @@ export default function DeviceDetail() {
             <dt>DNS name</dt><dd>{d.dns_name ?? '-'}</dd>
             <dt>Current IP</dt><dd className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></dd>
             <dt>Previous IPs</dt><dd className="mono">{d.previous_ips.length ? d.previous_ips.join(', ') : '-'}</dd>
-            <dt>MAC</dt><dd>{d.mac ? <><span className="mono">{d.mac}</span><MacSourceBadge source={d.mac_source} /></> : <NoMac vpn={d.vpn_s2s} />}</dd>
-            <dt>Vendor</dt><dd>{d.vendor ?? '-'}</dd>
+            {d.mac && <><dt>MAC</dt><dd><span className="mono">{d.mac}</span><MacSourceBadge source={d.mac_source} /></dd></>}
+            {d.vendor && <><dt>Vendor</dt><dd>{d.vendor}</dd></>}
             <dt>OS guess</dt>
             <dd>
               {d.os_name ?? '-'}
@@ -205,7 +205,7 @@ export default function DeviceDetail() {
                 <span className="muted small"> · detected {relTime(d.os_detected_at)}</span>
               )}
             </dd>
-            <dt>Network</dt><dd>{d.network_name ?? '-'}{d.vpn_s2s && <span className="badge outline" style={{ marginLeft: 6 }} title="Reached over a site-to-site VPN: no MAC or local discovery names across the routed path">VPN</span>}{d.zone &&<span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
+            <dt>Network</dt><dd>{d.network_name ?? '-'}{d.vpn_s2s && <span className="badge outline" style={{ marginLeft: 6 }} title="Reached over a site-to-site VPN: ARP and local discovery names do not cross the routed path. To get MACs, set the site's router as the ARP source in Settings > Networks.">VPN</span>}{d.zone && <span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
             <dt>Device type</dt>
             <dd>
               {d.type === 'unknown' ? <span className="muted">Unknown (low confidence)</span> : d.type ?? '-'}

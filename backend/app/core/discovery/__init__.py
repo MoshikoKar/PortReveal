@@ -83,7 +83,8 @@ def collect_local_names(ips: list[str], *, mdns: bool = True, ssdp: bool = True,
             log.info("NetBIOS discovery: querying %d of %d devices this pass (round-robin)",
                      len(batch), len(ips))
         try:
-            _merge(query_netbios_names(batch, timeout=netbios_timeout, macs=netbios_macs), "netbios")
+            extra = {"macs": netbios_macs} if netbios_macs is not None else {}
+            _merge(query_netbios_names(batch, timeout=netbios_timeout, **extra), "netbios")
         except Exception:
             log.debug("NetBIOS discovery failed", exc_info=True)
     return out

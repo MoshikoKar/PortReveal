@@ -399,6 +399,11 @@ tr.row-active { background: color-mix(in srgb, var(--accent) 12%, transparent); 
 table.heatmap { table-layout: fixed; }
 table.heatmap col.heatmap-label { width: 180px; }
 .heatmap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* One-line table cell text (e.g. Devices OS column): the full value lives in the cell's title. */
+.cell-ellipsis { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Fluid column: takes the table's leftover width and truncates instead of forcing a horizontal scroll
+   (max-width: 0 drops the cell's min-content width so the auto table layout can shrink it). */
+td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 table.compact td.heatmap-cell { padding: 2px; }
 .heatmap-cell button {
   display: block; width: 100%; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm);

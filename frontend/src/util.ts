@@ -32,6 +32,17 @@ export function relTime(iso: string | null | undefined): string {
   return future ? `in ${out}` : `${out} ago`;
 }
 
+/** A page title for display next to its HTTP status badge: drops a leading copy of the same status
+ *  ("403 - Forbidden", "403: x", "HTTP 403 x", "HTTP/1.1 403 Forbidden", "403 Forbidden") so the badge
+ *  is the only status shown. Display-only; the stored title is unchanged. Null when nothing is left. */
+export function httpTitleDisplay(status: number | null | undefined, title: string | null | undefined): string | null {
+  const t = title?.trim();
+  if (!t) return null;
+  if (status == null) return t;
+  const lead = new RegExp(`^(?:HTTP(?:/\\d(?:\\.\\d)?)?\\s*)?${status}(?!\\d)\\s*[-:|.\\u2013\\u2014]?\\s*`, 'i');
+  return t.replace(lead, '').trim() || null;
+}
+
 export function duration(start: string | null, end: string | null): string {
   if (!start) return '-';
   const s = Math.max(0, ((end ? new Date(end) : new Date()).getTime() - new Date(start).getTime()) / 1000);

@@ -7,7 +7,7 @@ import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { Card, Empty, ErrorBox, Loading, Pager, ScoreBadge } from '../components/ui';
 import { useApp } from '../context';
 import type { FacetValue, Facets, FieldDoc, SearchHost, SearchServiceRow } from '../types';
-import { addTerm, useApi } from '../util';
+import { addTerm, httpTitleDisplay, useApi } from '../util';
 
 const PAGE_SIZE = 25;
 const SEARCH_FACETS = 'port,product,tag,type,os,network';
@@ -273,7 +273,7 @@ export default function Search() {
                             <td><span className="mono">{s.host.ip}</span>{s.host.hostname && <div className="muted small">{s.host.hostname}</div>}</td>
                             <td className="mono nowrap">{s.port}/{s.protocol}</td>
                             <td>{serviceLabel(s) || <span className="muted">-</span>}{s.extra_info && <div className="muted small">{s.extra_info}</div>}</td>
-                            <td className="small">{s.http ? <>{s.http.status ?? ''} {s.http.title ?? ''}</> : <span className="muted">-</span>}</td>
+                            <td className="small">{s.http ? <>{s.http.status != null && <span className="badge outline">{s.http.status}</span>} {httpTitleDisplay(s.http.status, s.http.title) ?? ''}</> : <span className="muted">-</span>}</td>
                             <td><ScoreBadge score={s.host.score} /></td>
                           </tr>
                         ))}

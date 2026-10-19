@@ -8,7 +8,7 @@ import { HttpBadge, KIND_LABELS, ShotImg, isUsefulShot, shotNote, shotUrl } from
 import { Card, Empty, ErrorBox, MockBadge, Modal, Pager, Progress, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import type { ChangeEvent, Paged, Scan, SnapshotInfo, WebCapture } from '../types';
-import { SCAN_TYPE_LABELS, duration, fmtTime, relTime, scanStageFraction, useApi, useInFlight } from '../util';
+import { SCAN_TYPE_LABELS, duration, fmtTime, httpTitleDisplay, relTime, scanStageFraction, useApi, useInFlight } from '../util';
 
 interface MockState { mock_active: boolean; last_step: number; steps: string[]; networks: { id: number; name: string; step: number }[] }
 
@@ -378,7 +378,7 @@ export default function Scans() {
                         <tr key={p.id} className={p.error_reason ? 'dim' : ''}>
                           <td className="mono nowrap">{preview ? <Link to={preview}>{p.ip}:{p.port}</Link> : `${p.ip}:${p.port}`}</td>
                           <td>{KIND_LABELS[p.kind] ?? p.kind}</td>
-                          <td>{p.title ?? '-'} <HttpBadge status={p.http_status} /></td>
+                          <td>{httpTitleDisplay(p.http_status, p.title) ?? '-'} <HttpBadge status={p.http_status} /></td>
                           <td>
                             {isUsefulShot(p) && preview ? (
                               <Link to={preview}><ShotImg src={shotUrl(p)} alt="" loading="lazy" className="thumb" /></Link>

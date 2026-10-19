@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { post } from '../api';
 import type { FacetValue, Facets, SavedSearch, SearchHost, SearchService } from '../types';
-import { relTime } from '../util';
+import { httpTitleDisplay, relTime } from '../util';
 import { DeviceStatusBadge, ErrorBox, Modal, ScoreBadge, confirmDiscard } from './ui';
 import { ShotImg } from './WebShots';
 
@@ -69,7 +69,9 @@ export function HostResult({ h }: { h: SearchHost }) {
               <li key={`${s.protocol}${s.port}`}>
                 <span className="mono nowrap">{s.port}/{s.protocol}</span>
                 <span>{serviceLabel(s) || <span className="muted">unknown</span>}</span>
-                {s.http?.title && <span className="muted small" title="HTTP page title">“{s.http.title}”</span>}
+                {s.http && httpTitleDisplay(s.http.status, s.http.title) && (
+                  <span className="muted small" title="HTTP page title">“{httpTitleDisplay(s.http.status, s.http.title)}”</span>
+                )}
                 {s.http?.status != null && <span className="badge outline">{s.http.status}</span>}
                 {s.http?.login && <span className="badge medium">login</span>}
               </li>

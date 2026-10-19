@@ -13,18 +13,18 @@ from ..auth.deps import client_ip, current_user, require_admin
 from ..core.arp_snmp import AUTH_PROTOCOLS, PRIV_PROTOCOLS, fetch_arp_table, target_from_config
 from ..core.audit import audit
 from ..core.intel import refresh_devices
-from ..netutils import AddressSet
-from ..security import encrypt_secret
 from ..core.mockdata import device_visible
 from ..db import get_db, utcnow
 from ..models import DEVICE_ACTIVE, NETWORK_ZONES, Device, Network, User
-from ..netutils import TargetError, validate_network_cidr
+from ..netutils import AddressSet, TargetError, validate_network_cidr
+from ..security import encrypt_secret
 from .common import FULL_REPLACE, UNPAGED_LIST, Row, network_out
 
 router = APIRouter(prefix="/api/networks", tags=["networks"])
 
 
-_HOSTNAME = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")
+_LABEL = r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOSTNAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(\.{_LABEL})*$")
 _SECRETS = ("community", "auth_key", "priv_key")
 
 

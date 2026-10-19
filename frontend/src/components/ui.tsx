@@ -123,11 +123,6 @@ export function IpAssignmentBadge({ value }: { value: string | null | undefined 
   return <span className={`badge ${cls}`} title={title}>{label}</span>;
 }
 
-// MACs come from ARP and local names from L2 broadcast discovery, so routed/VPN devices legitimately lack them.
-const ARP_SOURCE_HINT = "To get MACs for a routed site, set that site's router as the ARP source in Settings > Networks.";
-const NO_MAC_TIP = `MAC addresses come from ARP, which only reaches the scanner's own L2 segment. Routed and unprivileged scans cannot see them - this is expected, not an error. ${ARP_SOURCE_HINT}`;
-const NO_MAC_VPN_TIP = `This device is reached over a site-to-site VPN (a routed path). ARP does not cross it, so no MAC address is available - this is expected, not an error. ${ARP_SOURCE_HINT}`;
-
 const MAC_SOURCES: Record<string, [string, string]> = {
   snmp: ['router ARP', "Read from the site router's ARP table over SNMP (the scanner is not on this device's L2 segment)"],
   netbios: ['NetBIOS', "Reported by the device itself in its NetBIOS reply (the scanner is not on this device's L2 segment)"],
@@ -143,17 +138,10 @@ export function MacSourceBadge({ source }: { source: string | null | undefined }
 export function macSourceTitle(source: string | null | undefined): string | undefined {
   return source ? MAC_SOURCES[source]?.[1] : undefined;
 }
+
+// Local names come from L2 broadcast discovery, so routed/VPN devices legitimately lack them.
 export const NO_NAME_TIP = 'No reverse-DNS (PTR) record and no local discovery name (mDNS/NetBIOS/SSDP).';
 export const NO_NAME_VPN_TIP = `${NO_NAME_TIP} Local discovery is L2-only and does not cross a site-to-site VPN, so only DNS can name this device.`;
-
-/** Empty state for a missing MAC: says why instead of a bare dash. Never shows a guessed MAC. */
-export function NoMac({ vpn, className }: { vpn?: boolean; className?: string }) {
-  return (
-    <span className={`muted ${className ?? ''}`} title={vpn ? NO_MAC_VPN_TIP : NO_MAC_TIP}>
-      {vpn ? '- (not available over VPN)' : '- (not on scanner L2 segment)'}
-    </span>
-  );
-}
 
 export function MockBadge({ mode }: { mode: string | null }) {
   if (mode !== 'mock') return null;

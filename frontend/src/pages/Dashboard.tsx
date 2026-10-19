@@ -215,11 +215,13 @@ export default function Dashboard() {
             </div>
             {data.exposure.top.length > 0 && (
               <table>
+                <thead><tr><th>IP</th><th>Hostname</th><th>Type</th><th className="right">Score</th></tr></thead>
                 <tbody>
                   {data.exposure.top.map((h) => (
                     <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
-                      <td><span className="mono">{h.ip}</span>{h.hostname && <span className="muted small"> {h.hostname}</span>}</td>
-                      <td className="muted small">{h.type ?? ''}</td>
+                      <td className="mono nowrap">{h.ip}</td>
+                      <td className="muted small">{h.hostname || '-'}</td>
+                      <td className="muted small">{h.type || '-'}</td>
                       <td className="right"><ScoreBadge score={h.score} /></td>
                     </tr>
                   ))}

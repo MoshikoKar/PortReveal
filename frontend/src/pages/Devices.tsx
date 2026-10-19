@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, macSourceTitle, NO_NAME_TIP, NO_NAME_VPN_TIP, NoMac, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, macSourceTitle, NO_NAME_TIP, NO_NAME_VPN_TIP, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -109,6 +109,9 @@ export default function Devices() {
     <SortTh active={params.sort === col} desc={params.order === 'desc'} onSort={() => sortBy(col)}>{label}</SortTh>
   );
   const items = data?.items ?? [];
+  // Port chips stay on one line: optional columns take width from Open ports, so show fewer chips
+  // (the rest as "+N"; Services lists them all) instead of letting the row grow taller.
+  const portChipMax = 6 - (showOs ? 2 : 0) - (showRtt ? 1 : 0);
   const total = data?.total ?? 0;
   const allSelected = items.length > 0 && items.every((d) => selected.has(d.uuid));
   const moreThanPage = total > items.length;
@@ -295,16 +298,20 @@ export default function Devices() {
                         </button>
                       )}
                     </td>
-                    <td>{d.mac ? <span className="mono" title={macSourceTitle(d.mac_source)}>{d.mac}</span> : <NoMac vpn={vpn} className="small" />}{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
-                    <td><PortChips ports={d.open_ports} /></td>
+                    <td>{d.mac && <span className="mono" title={macSourceTitle(d.mac_source)}>{d.mac}</span>}{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
+                    <td className="nowrap"><PortChips ports={d.open_ports} max={portChipMax} /></td>
                     {showOs && (
-                      <td className="small" title={d.os_accuracy != null ? `${d.os_accuracy}% confidence` : undefined}>
-                        {d.os_name ?? <span className="muted">-</span>}
-                        {d.os_name && d.os_accuracy != null && d.os_accuracy < 85 && <span className="badge outline" style={{ marginLeft: 4 }}>uncertain</span>}
+                      <td className="small nowrap fluid-ellipsis" title={d.os_name ? `${d.os_name}${d.os_accuracy != null ? ` (${d.os_accuracy}% confidence)` : ''}` : undefined}>
+                        {d.os_name ? (
+                          <span className="row" style={{ gap: 4 }}>
+                            <span className="cell-ellipsis">{d.os_name}</span>
+                            {d.os_accuracy != null && d.os_accuracy < 85 && <span className="badge outline">uncertain</span>}
+                          </span>
+                        ) : <span className="muted">-</span>}
                       </td>
                     )}
                     {showRtt && (
-                      <td className="mono small">{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">-</span>}</td>
+                      <td className="mono small nowrap">{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">-</span>}</td>
                     )}
                     <td className="small">{d.network_name ?? <span className="muted">-</span>}</td>
                     <td>{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">-</span>}</td>
