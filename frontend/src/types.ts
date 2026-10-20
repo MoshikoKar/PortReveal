@@ -7,6 +7,8 @@ export interface User {
   role: Role;
   source: 'local' | 'ldap';
   is_active: boolean;
+  /** Per-user UI prefs (dashboard layout). null = built-in defaults. */
+  preferences: Record<string, unknown> | null;
   created_at: string;
   last_login_at: string | null;
 }

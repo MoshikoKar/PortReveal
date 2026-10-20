@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -13,6 +15,11 @@ from ..auth.ldap_auth import ldap_authenticate
 from ..auth.ratelimit import LoginRateLimiter
 from ..config import get_settings
 from ..core.audit import audit
+from ..dashboard_prefs import (
+    PreferencesValidationError,
+    merge_preferences,
+    validate_preferences_payload,
+)
 from ..db import get_db
 from ..models import User, UserSession
 from ..security import hash_password, verify_password
@@ -94,3 +101,19 @@ def logout(request: Request, response: Response, sess: UserSession = Depends(get
 def me(request: Request, user: User = Depends(current_user)):
     sess = getattr(request.state, "session", None)  # absent for API-token requests
     return {"user": user_out(user), "csrf_token": sess.csrf_token if sess else None}
+
+
+@router.put("/me/preferences", dependencies=[Depends(require_json)])
+def put_preferences(body: dict[str, Any], db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Replace the caller's dashboard (and future) UI preferences."""
+    try:
+        encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        validated = validate_preferences_payload(body, raw_bytes=len(encoded))
+    except PreferencesValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    existing = user.preferences if isinstance(user.preferences, dict) else None
+    user.preferences = merge_preferences(existing, validated)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"user": user_out(user)}

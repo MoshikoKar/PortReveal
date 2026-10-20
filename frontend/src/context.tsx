@@ -6,6 +6,7 @@ export interface AppCtx {
   isAdmin: boolean;
   system: SystemStatus | null;
   refreshSystem: () => void;
+  setUser: (user: User) => void;
   logout: () => void;
 }
 

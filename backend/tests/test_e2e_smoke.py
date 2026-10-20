@@ -99,6 +99,13 @@ def browser():
         b.close()
 
 
+def _sign_in(page, live_app: str) -> None:
+    page.goto(live_app)
+    page.get_by_label("Username").fill("admin")
+    page.get_by_label("Password").fill(PASSWORD)
+    page.get_by_role("button", name="Sign in").click()
+
+
 def test_sign_in_dashboard_and_devices_list(live_app, browser):
     from playwright.sync_api import expect
 
@@ -106,10 +113,7 @@ def test_sign_in_dashboard_and_devices_list(live_app, browser):
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
-        page.goto(live_app)
-        page.get_by_label("Username").fill("admin")
-        page.get_by_label("Password").fill(PASSWORD)
-        page.get_by_role("button", name="Sign in").click()
+        _sign_in(page, live_app)
 
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
 
@@ -119,6 +123,63 @@ def test_sign_in_dashboard_and_devices_list(live_app, browser):
         # The seeded mock scan runs in the background; its hosts (10.99.0.0/24) fill the list.
         expect(page.locator("tbody tr").filter(has_text="10.99.0.").first).to_be_visible(timeout=30_000)
         expect(page.locator("a.active", has_text="Devices")).to_have_attribute("aria-current", "page")
+    finally:
+        page.close()
+    assert errors == []
+
+
+def test_dashboard_layout_resize_save_and_reload(live_app, browser):
+    """Customize → resize a card → Save → reload → layout still applied."""
+    from playwright.sync_api import expect
+
+    page = browser.new_page(viewport={"width": 1400, "height": 900})
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, live_app)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+        expect(page.locator(".dashboard-rgl")).to_be_visible(timeout=15_000)
+
+        page.get_by_role("button", name="Customize layout").click()
+        expect(page.get_by_role("button", name="Save")).to_be_visible()
+
+        card = page.locator('[data-grid-id="recent_changes"]')
+        expect(card).to_be_visible()
+        handle = card.locator(".react-resizable-handle-se")
+        expect(handle).to_be_visible()
+        box = handle.bounding_box()
+        assert box is not None
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        # Grow height and width past the default (w=7, h=10).
+        page.mouse.move(box["x"] + 180, box["y"] + 220, steps=12)
+        page.mouse.up()
+
+        page.get_by_role("button", name="Save").click()
+        expect(page.get_by_text("Saved", exact=True)).to_be_visible(timeout=10_000)
+
+        prefs = page.evaluate(
+            """async () => {
+              const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+              const body = await r.json();
+              return body.user && body.user.preferences;
+            }"""
+        )
+        assert prefs and prefs.get("dashboard"), prefs
+        recent = next(it for it in prefs["dashboard"]["layouts"]["lg"] if it["i"] == "recent_changes")
+        assert recent["h"] > 10 or recent["w"] > 7, recent
+
+        page.reload()
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+        prefs2 = page.evaluate(
+            """async () => {
+              const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
+              const body = await r.json();
+              return body.user && body.user.preferences;
+            }"""
+        )
+        recent2 = next(it for it in prefs2["dashboard"]["layouts"]["lg"] if it["i"] == "recent_changes")
+        assert recent2 == recent
     finally:
         page.close()
     assert errors == []

@@ -235,6 +235,8 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default=ROLE_VIEWER)
     source: Mapped[str] = mapped_column(String(20), default="local")  # local | ldap
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-user UI prefs (e.g. dashboard layout). null = built-in defaults.
+    preferences: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 

@@ -189,6 +189,23 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   .card.fill-rest > .card-body { overflow: hidden; }
 }
 
+/* Customizable dashboard grid (react-grid-layout) */
+.dashboard-grid-wrap { width: 100%; min-height: 120px; }
+.dashboard-grid-item { height: 100%; }
+.dashboard-widget { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.dashboard-widget > .card-body { flex: 1 1 0; min-height: 0; overflow: hidden; }
+.dashboard-drag-handle {
+  cursor: grab; flex: 0 0 auto; padding: 2px 6px; line-height: 1; color: var(--muted);
+  font-size: 14px; letter-spacing: -2px; user-select: none;
+}
+.dashboard-drag-handle:active { cursor: grabbing; }
+.dashboard-grid-wrap.is-editing .dashboard-widget { outline: 1px dashed var(--border-2); }
+.dashboard-chart-fill { width: 100%; height: 100%; min-height: 100px; }
+.dashboard-chart-fill .trend-wrap { height: 100%; }
+.dashboard-chart-fill .trend { height: 100%; display: block; }
+.react-grid-item.react-grid-placeholder { background: var(--accent); opacity: 0.15; border-radius: var(--radius-lg); }
+.react-resizable-handle::after { border-color: var(--muted) !important; }
+
 /* Narrow viewports: the sidebar collapses into a sticky top bar (brand, current page, menu toggle);
    the toggle drops the nav and account footer down beneath it. */
 /* Scoped under .brand so these beat the later generic `.btn { display: inline-flex }`. */

@@ -6,12 +6,14 @@ import { Empty } from './ui';
 
 interface Point { date: string; hosts_active: number; open_ports: number }
 
-export function Trend({ points }: { points: Point[] }) {
+export function Trend({ points, width, height }: { points: Point[]; width?: number; height?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   if (points.length < 2) {
     return <Empty>Trend appears after two daily snapshots.</Empty>;
   }
-  const W = 560, H = 150, L = 36, R = 36, T = 22, B = 20;
+  const W = Math.max(200, width || 560);
+  const H = Math.max(100, height || 150);
+  const L = 36, R = 36, T = 22, B = 20;
   const plotW = W - L - R, plotH = H - T - B;
   const n = points.length;
   // Snapshots aren't guaranteed daily, so place each point by its real date rather than its index.

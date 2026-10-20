@@ -100,6 +100,7 @@ def user_out(u: User) -> dict:
         "role": u.role,
         "source": u.source,
         "is_active": u.is_active,
+        "preferences": u.preferences,
         "created_at": u.created_at,
         "last_login_at": u.last_login_at,
     }

@@ -129,7 +129,7 @@ export default function App() {
   }, []);
 
   const ctx = useMemo(
-    () => (user ? { user, isAdmin: user.role === 'admin', system, refreshSystem, logout } : null),
+    () => (user ? { user, isAdmin: user.role === 'admin', system, refreshSystem, setUser, logout } : null),
     [user, system, refreshSystem, logout],
   );
 
