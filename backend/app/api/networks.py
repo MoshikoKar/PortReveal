@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.arp_snmp import AUTH_PROTOCOLS, PRIV_PROTOCOLS, fetch_arp_table, target_from_config
 from ..core.audit import audit
+from ..core.geo import normalize_expected
 from ..core.intel import refresh_devices
 from ..core.mockdata import device_visible
 from ..db import get_db, utcnow
@@ -74,6 +75,8 @@ class NetworkIn(BaseModel):
     enabled: bool = True
     zone: str | None = None
     vpn_s2s: bool = False
+    expected_countries: list[str] = Field(default_factory=list,
+                                          description="ISO 3166-1 alpha-2 codes this network is expected to live in")
     arp_snmp: ArpSnmpIn | None = Field(None, description="Read MACs from this gateway's ARP table over SNMP; "
                                                          "null removes it")
 
@@ -97,6 +100,16 @@ class NetworkIn(BaseModel):
             return validate_network_cidr(v)
         except TargetError as exc:
             raise ValueError(str(exc)) from exc
+
+    @field_validator("expected_countries")
+    @classmethod
+    def _countries(cls, v: list[str] | None) -> list[str]:
+        codes = normalize_expected(v)
+        if v and not codes:
+            raise ValueError("expected_countries must be 2-letter country codes")
+        if len(codes) > 20:
+            raise ValueError("at most 20 expected countries")
+        return codes
 
 
 def _arp_snmp_stored(body: ArpSnmpIn | None, current: dict | None) -> dict | None:
@@ -168,7 +181,8 @@ def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_
                    user: User = Depends(require_admin)):
     _check_name(db, body.name)
     net = Network(name=body.name, cidr=body.cidr, description=body.description, enabled=body.enabled,
-                  zone=body.zone, vpn_s2s=body.vpn_s2s, arp_snmp=_arp_snmp_stored(body.arp_snmp, None))
+                  zone=body.zone, vpn_s2s=body.vpn_s2s, expected_countries=body.expected_countries or None,
+                  arp_snmp=_arp_snmp_stored(body.arp_snmp, None))
     db.add(net)
     db.flush()
     audit(db, user.username, "network.create", net.name, _audit_body(body), client_ip(request))
@@ -182,13 +196,15 @@ def update_network(network_id: int, body: NetworkIn, request: Request, db: Sessi
     net = _active_network(db, network_id)
     _check_name(db, body.name, network_id)
     before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled, "zone": net.zone,
-              "vpn_s2s": net.vpn_s2s, "arp_snmp_host": (net.arp_snmp or {}).get("host")}
+              "vpn_s2s": net.vpn_s2s, "expected_countries": list(net.expected_countries or []),
+              "arp_snmp_host": (net.arp_snmp or {}).get("host")}
     if net.cidr != body.cidr:
         # A different scope needs a fresh baseline, otherwise every host in the new range would alert
         net.baseline_scan_id = None
         net.baseline_at = None
     net.name, net.cidr, net.description, net.enabled = body.name, body.cidr, body.description, body.enabled
     net.vpn_s2s = body.vpn_s2s
+    net.expected_countries = body.expected_countries or None
     net.arp_snmp = _arp_snmp_stored(body.arp_snmp, net.arp_snmp)
     zone_changed = net.zone != body.zone
     net.zone = body.zone

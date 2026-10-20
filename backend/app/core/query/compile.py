@@ -82,6 +82,9 @@ _HOST_COLS: dict[str, tuple[str, Callable[[], list]]] = {
     "location": ("profile", lambda: [P.location]),
     "criticality": ("profile", lambda: [P.criticality]),
     "notes": ("profile", lambda: [P.notes]),
+    "geo.mismatch": ("device", lambda: [Device.geo_mismatch]),
+    "geo.country": ("device", lambda: [Device.geo_country]),
+    "geo.cdn": ("device", lambda: [Device.geo_cdn]),
 }
 
 # name: (table, columns) - table is "port" or "http" (outer-joined when needed)

@@ -123,6 +123,7 @@ def network_out(n: Network, device_count: int | None = None, active_count: int |
         "enabled": n.enabled,
         "zone": n.zone,
         "vpn_s2s": bool(n.vpn_s2s),
+        "expected_countries": list(n.expected_countries or []),
         "arp_snmp": _arp_snmp_out(n.arp_snmp),
         "baseline_scan_id": n.baseline_scan_id,
         "baseline_at": n.baseline_at,
@@ -184,6 +185,10 @@ def device_summary(d: Device, open_ports: list[DevicePort] | None = None, networ
             {"port": p.port, "protocol": p.protocol, "service": p.service, "product": p.product, "version": p.version}
             for p in sorted(ports, key=lambda x: x.port)
         ],
+        "geo_mismatch": bool(d.geo_mismatch),
+        "geo_status": d.geo_status,
+        "geo_country": d.geo_country,
+        "geo_cdn": bool(d.geo_cdn),
     }
 
 

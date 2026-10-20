@@ -277,3 +277,37 @@ Practical signals:
 Do not rely on the daily digest SMTP path alone for this: digests only fire when
 there are pending notify events, so a failed scan with no inventory changes can
 produce no email.
+
+## Geo mismatch (DB-IP Lite)
+
+After each scan, devices on networks with **expected countries** (Settings → Networks)
+are checked: published names (hostname, DNS name, TLS CN/SAN, HTTP redirect hosts)
+are resolved to public A/AAAA records, those IPs (and a public `current_ip` if any)
+are geolocated locally, and a country outside the list raises a `geo_mismatch`
+event. Private, loopback, link-local and CGNAT addresses are never geolocated.
+When no public IP exists the device shows **geo not checked**, not OK.
+
+### Database files
+
+Default source is **DB-IP Lite Country** and **DB-IP Lite ASN** (MMDB, CC BY 4.0,
+no account or API key). Files live under the app data directory:
+
+- `data/geo/dbip-country-lite.mmdb`
+- `data/geo/dbip-asn-lite.mmdb`
+
+(Compose: the `appdata` volume mounted at `/data`, so `/data/geo/…`.)
+
+The app downloads them on first need and refreshes about monthly (same inbound-GET
+pattern as vulnerability feeds). Settings → Geo shows last update and the
+attribution string **IP Geolocation by DB-IP — https://db-ip.com/ (CC BY 4.0)**.
+Offline mode skips downloads; place the MMDB files yourself.
+
+Optional **MaxMind GeoLite2 Country**: set a path in Settings → Geo to an
+operator-supplied file (relative to the data dir or absolute). MaxMind is never
+required and is never downloaded with credentials from this repo.
+
+DNS and MMDB answers are cached (default 24h). Unchanged names are not re-resolved
+until the cache expires.
+
+CDN/anycast ASNs (editable list) still flag mismatches, at lower severity, labelled
+“behind CDN – location reflects CDN edge, not origin.”

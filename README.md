@@ -177,6 +177,9 @@ port:3389 net:10.0.0.0/8          RDP inside 10/8
 tag:camera -zone:iot              cameras outside the IoT zone
 http.login:true http.status:200   web login pages
 has:tls ssl.cert.expired:true     expired TLS certificates
+geo.mismatch:true                 public IP country outside the network's expected list
+geo.country:AA                    observed public-IP country (ISO 3166-1 alpha-2)
+geo.cdn:true                      observed public IP is a known CDN/anycast ASN
 has:screenshot product:OpenSSH    hosts with a captured still
 product:nginx -version:1.25*      nginx not on 1.25.x
 score:>=60 new:7d                 high-exposure hosts first seen this week
@@ -573,8 +576,9 @@ docker/Dockerfile, docker-compose.yml
 ## Features
 
 - Continuous discovery and service inventory via nmap (or labelled mock data)
-- Change detection for devices, ports, services, versions, and IP moves
+- Change detection for devices, ports, services, versions, IP moves, and geo mismatches
 - Inventory search (`field:value` queries, facets, export), tags, exposure scores, watches and reports
+- Optional expected-country geo check (DB-IP Lite, local MMDB; flags published public IPs outside the network's countries)
 - Enrichment: banners, TLS certs, SNMP sys*, CPE provenance, SSH host keys, subnet heatmap
 - SOC-style dashboard with devices, ports, changes, scans, and settings
 - Daily categorized HTML email summary of pending changes; optional webhooks and SSE

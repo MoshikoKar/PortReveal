@@ -77,6 +77,7 @@ EV_POLICY_VIOLATION = "policy_violation"
 EV_BANNER_CHANGED = "banner_changed"
 EV_OS_CHANGED = "os_changed"
 EV_MONITOR_CHANGE = "monitor_change"
+EV_GEO_MISMATCH = "geo_mismatch"
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -94,6 +95,7 @@ EVENT_TYPES = (
     EV_BANNER_CHANGED,
     EV_OS_CHANGED,
     EV_MONITOR_CHANGE,
+    EV_GEO_MISMATCH,
 )
 # Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
 ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE)
@@ -103,6 +105,7 @@ EVENT_SEVERITY = {
     EV_WATCH_MATCH: "high",
     EV_POLICY_VIOLATION: "high",
     EV_MONITOR_CHANGE: "high",
+    EV_GEO_MISMATCH: "high",
     EV_SERVICE_CHANGED: "medium",
     EV_DEVICE_DISAPPEARED: "medium",
     EV_PORT_CLOSED: "medium",
@@ -174,6 +177,18 @@ VULN_RESOLUTIONS = (VULN_RESOLUTION_NO_LONGER_MATCHED, VULN_RESOLUTION_DEVICE_RE
 # evidence pointed at a type but the combined score stayed below TYPE_CONFIDENCE_THRESHOLD.
 DEVICE_TYPE_UNKNOWN = "unknown"
 
+# Geo check against a network's expected countries (core/geo.py). NULL on the device means the
+# network has no expected countries (check skipped). not_checked = configured but no public IP.
+GEO_OK = "ok"
+GEO_MISMATCH = "mismatch"
+GEO_MISMATCH_CDN = "mismatch_cdn"
+GEO_NOT_CHECKED = "not_checked"
+GEO_UNAVAILABLE = "unavailable"
+GEO_STATUSES = (GEO_OK, GEO_MISMATCH, GEO_MISMATCH_CDN, GEO_NOT_CHECKED, GEO_UNAVAILABLE)
+GEO_SOURCE_PUBLISHED_NAME = "published_name"
+GEO_SOURCE_DEVICE_IP = "device_ip"
+GEO_SOURCES = (GEO_SOURCE_PUBLISHED_NAME, GEO_SOURCE_DEVICE_IP)
+
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
 # migration that rewrites the matching constraint.
@@ -183,6 +198,8 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("networks", "zone"): NETWORK_ZONES,
     ("devices", "status"): DEVICE_STATUSES,
     ("devices", "ip_assignment"): IP_ASSIGNMENTS,
+    ("devices", "geo_status"): GEO_STATUSES,
+    ("devices", "geo_source"): GEO_SOURCES,
     ("device_tags", "source"): TAG_SOURCES,
     ("device_profiles", "criticality"): CRITICALITY_LEVELS,
     ("scans", "scan_type"): SCAN_TYPES,
@@ -250,6 +267,8 @@ class Network(Base):
     # routed / VPN path. {"host", "port", "version", "user", "auth_protocol", "priv_protocol",
     # "community_enc", "auth_key_enc", "priv_key_enc"} (secrets Fernet-encrypted) or None.
     arp_snmp: Mapped[dict | None] = mapped_column(JSON)
+    # ISO 3166-1 alpha-2 codes this network is expected to live in. Empty/null turns geo checks off.
+    expected_countries: Mapped[list | None] = mapped_column(JSON)
     baseline_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
     baseline_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # Set when removed from Settings: the row and its findings stay, hidden from default views.
@@ -277,7 +296,12 @@ class AppSetting(Base):
 
 class Device(Base):
     __tablename__ = "devices"
-    __table_args__ = (one_of("devices", "status"), one_of("devices", "ip_assignment"))
+    __table_args__ = (
+        one_of("devices", "status"),
+        one_of("devices", "ip_assignment"),
+        one_of("devices", "geo_status"),
+        one_of("devices", "geo_source"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)
     network_id: Mapped[int | None] = mapped_column(ForeignKey("networks.id", ondelete="SET NULL"), index=True)
@@ -331,6 +355,18 @@ class Device(Base):
     last_rtt_ms: Mapped[float | None] = mapped_column(Float)
     # Since when the device has been continuously seen (reset on a not_detected -> seen transition).
     continuous_since: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Public-IP geography vs Network.expected_countries (core/geo.py). Private scan addresses are
+    # never geolocated; status is not_checked when no public candidate IP exists.
+    geo_status: Mapped[str | None] = mapped_column(String(20))
+    geo_country: Mapped[str | None] = mapped_column(String(2))
+    geo_ip: Mapped[str | None] = mapped_column(String(45))
+    geo_asn: Mapped[int | None] = mapped_column(Integer)
+    geo_as_org: Mapped[str | None] = mapped_column(String(200))
+    geo_cdn: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    geo_source: Mapped[str | None] = mapped_column(String(20))
+    geo_name: Mapped[str | None] = mapped_column(String(255))
+    geo_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    geo_mismatch: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), index=True)
 
     ports: Mapped[list[DevicePort]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DevicePort.port"
@@ -551,6 +587,26 @@ class VulnFeedState(Base):
     # years; do not treat a partial cache as "bootstrap done".
     mirror_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     mirror_next_year: Mapped[int | None] = mapped_column(Integer)
+
+
+class GeoFeedState(Base):
+    """Sync bookkeeping for one geo MMDB source (country / asn)."""
+
+    __tablename__ = "geo_feed_state"
+    source: Mapped[str] = mapped_column(String(20), primary_key=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    file_month: Mapped[str | None] = mapped_column(String(7))  # YYYY-MM of the DB-IP build
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class GeoLookupCache(Base):
+    """TTL cache for DNS answers and MMDB country/ASN lookups (keyed dns:<name> or ip:<addr>)."""
+
+    __tablename__ = "geo_lookup_cache"
+    cache_key: Mapped[str] = mapped_column(String(300), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10))  # dns | ip
+    payload: Mapped[dict] = mapped_column(JSON)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
 
 
 class VulnJob(Base):

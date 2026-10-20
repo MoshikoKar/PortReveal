@@ -20,6 +20,7 @@ from ..models import (
     EV_DEVICE_DISAPPEARED,
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_REAPPEARED,
+    EV_GEO_MISMATCH,
     EV_IP_CHANGED,
     EV_MONITOR_CHANGE,
     EV_POLICY_VIOLATION,
@@ -60,11 +61,13 @@ TITLES = {
     EV_WATCH_MATCH: "Watch matches",
     EV_POLICY_VIOLATION: "Policy violations",
     EV_MONITOR_CHANGE: "Monitored changes",
+    EV_GEO_MISMATCH: "Geo mismatches",
 }
 
 # Ordered categories for the daily summary email.
 CATEGORIES: list[tuple[str, list[str]]] = [
     ("Watches", [EV_POLICY_VIOLATION, EV_WATCH_MATCH, EV_MONITOR_CHANGE]),
+    ("Geo", [EV_GEO_MISMATCH]),
     ("Devices", [EV_DEVICE_DISCOVERED, EV_DEVICE_DISAPPEARED, EV_DEVICE_REAPPEARED, EV_IP_CHANGED]),
     ("Ports", [EV_PORT_OPENED, EV_PORT_CLOSED]),
     ("Services", [EV_SERVICE_DETECTED, EV_SERVICE_CHANGED, EV_VERSION_CHANGED]),

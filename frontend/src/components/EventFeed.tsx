@@ -46,6 +46,8 @@ export function EventDetail({ ev }: { ev: ChangeEvent }) {
       return <span>{ev.new_value}</span>;
     case 'monitor_change':
       return <span>{ev.new_value}{port && <> {port}</>}</span>;
+    case 'geo_mismatch':
+      return <span>{ev.message}</span>;
     default:
       return <span className="mono">{ev.ip}</span>;
   }

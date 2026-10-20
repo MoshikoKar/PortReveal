@@ -89,6 +89,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   banner_changed: 'Banner changed',
   os_changed: 'OS changed',
   monitor_change: 'Monitor change',
+  geo_mismatch: 'Geo mismatch',
 };
 
 export const SCAN_TYPE_LABELS = { discovery: 'Discovery', standard: 'Standard', full: 'Full port' } as const;

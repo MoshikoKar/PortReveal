@@ -11,7 +11,7 @@ type ArpDraft = {
   auth_protocol: string; auth_key: string; priv_protocol: string; priv_key: string;
   community_set: boolean; auth_key_set: boolean; priv_key_set: boolean;
 };
-type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean; zone: string; vpn_s2s: boolean; arp: ArpDraft | null };
+type Draft = { id?: number; name: string; cidr: string; description: string; enabled: boolean; zone: string; vpn_s2s: boolean; expected_countries: string[]; arp: ArpDraft | null };
 
 const VPN_S2S_TIP = 'Mark networks reached over a site-to-site VPN. Scans use the same remote discovery speed as '
   + 'before (so a /16 still finishes in about an hour), force the routed profile even if a NIC looks local, '
@@ -135,6 +135,45 @@ function ArpSnmpFields({ arp, onChange, networkId, saved }: {
   );
 }
 
+const GEO_TIP = 'ISO country codes this network is expected to live in. After each scan, published DNS names and public IPs are geolocated; a country outside this list is flagged. Leave empty to skip geo checks.';
+
+function countryLabel(code: string): string {
+  try {
+    const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
+    return name && name !== code ? `${code} (${name})` : code;
+  } catch {
+    return code;
+  }
+}
+
+function CountryChips({ codes, onChange }: { codes: string[]; onChange: (c: string[]) => void }) {
+  const [typed, setTyped] = useState('');
+  const add = (raw: string) => {
+    const code = raw.trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) return;
+    if (codes.includes(code)) { setTyped(''); return; }
+    onChange([...codes, code]);
+    setTyped('');
+  };
+  return (
+    <label className="field" title={GEO_TIP}>Expected countries
+      <div className="row wrap" style={{ gap: 6 }}>
+        {codes.map((c) => (
+          <span key={c} className="badge outline" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            {countryLabel(c)}
+            <button type="button" className="btn ghost sm" aria-label={`Remove ${c}`} onClick={() => onChange(codes.filter((x) => x !== c))}>×</button>
+          </span>
+        ))}
+        <input type="text" value={typed} maxLength={2} placeholder="AA" aria-label="Add country code"
+          style={{ width: 72 }} title={GEO_TIP}
+          onChange={(e) => setTyped(e.target.value.toUpperCase())}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',' || e.key === ' ') { e.preventDefault(); add(typed); } }}
+          onBlur={() => add(typed)} />
+      </div>
+    </label>
+  );
+}
+
 /** `onCount`: told how many networks exist whenever the list loads (the setup wizard gates on it).
  *  `onDirtyChange`: told when the add/edit dialog holds unsaved edits (Settings / setup leave guards). */
 export function NetworksSettings({ compact, onCount, onDirtyChange }: {
@@ -159,7 +198,7 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
   const draftOf = (n: Network): Draft => ({
     id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '',
-    vpn_s2s: n.vpn_s2s, arp: arpDraft(n.arp_snmp),
+    vpn_s2s: n.vpn_s2s, expected_countries: n.expected_countries ?? [], arp: arpDraft(n.arp_snmp),
   });
   const closeDraft = () => confirmDiscard(dirty) && setDraft(null);
 
@@ -168,7 +207,7 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
     setSaveError(null);
     setSaving(true);
     try {
-      const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled, zone: draft.zone || null, vpn_s2s: draft.vpn_s2s, arp_snmp: arpBody(draft.arp) };
+      const body = { name: draft.name, cidr: draft.cidr, description: draft.description || null, enabled: draft.enabled, zone: draft.zone || null, vpn_s2s: draft.vpn_s2s, expected_countries: draft.expected_countries, arp_snmp: arpBody(draft.arp) };
       if (draft.id) {
         // Stay open after saving an ARP source so it can be tested right away.
         const saved = await put<Network>(`/networks/${draft.id}`, body);
@@ -235,7 +274,7 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
     <Card
       title="Network scopes"
       flush
-      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ name: '', cidr: '', description: '', enabled: true, zone: '', vpn_s2s: false, arp: null })}>Add network</button>}
+      actions={isAdmin && <button className="btn primary sm" onClick={() => openDraft({ name: '', cidr: '', description: '', enabled: true, zone: '', vpn_s2s: false, expected_countries: [], arp: null })}>Add network</button>}
     >
       {!compact && (
         <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -254,7 +293,7 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
             <tbody>
               {data.map((n) => (
                 <tr key={n.id} className={n.archived_at ? 'dim' : undefined}>
-                  <td><strong>{n.name}</strong>{n.vpn_s2s && <> <span className="badge outline" title={VPN_S2S_TIP}>VPN</span></>}{n.arp_snmp && <> <span className="badge outline" title={`MACs from the ARP table of ${n.arp_snmp.host} (SNMPv${n.arp_snmp.version})`}>ARP via SNMP</span></>}{n.description && <div className="muted small">{n.description}</div>}</td>
+                  <td><strong>{n.name}</strong>{n.vpn_s2s && <> <span className="badge outline" title={VPN_S2S_TIP}>VPN</span></>}{n.arp_snmp && <> <span className="badge outline" title={`MACs from the ARP table of ${n.arp_snmp.host} (SNMPv${n.arp_snmp.version})`}>ARP via SNMP</span></>}{(n.expected_countries ?? []).length > 0 && <> <span className="badge outline" title="Expected countries for geo mismatch checks">{n.expected_countries.map(countryLabel).join(', ')}</span></>}{n.description && <div className="muted small">{n.description}</div>}</td>
                   <td className="mono">{n.cidr}</td>
                   <td>{n.zone ?? <span className="muted">-</span>}</td>
                   <td>{n.active_count ?? 0} active / {n.device_count ?? 0}</td>
@@ -292,20 +331,24 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
           </>}
         >
           <label className="field">Name<input type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" /></label>
-          <label className="field">CIDR<input type="text" value={draft.cidr} onChange={(e) => setDraft({ ...draft, cidr: e.target.value })} placeholder="10.0.0.0/24" />
-            <span className="hint">IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline.</span></label>
+          <label className="field" title="IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline.">
+            CIDR
+            <input type="text" value={draft.cidr} onChange={(e) => setDraft({ ...draft, cidr: e.target.value })} placeholder="10.0.0.0/24"
+              title="IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline." />
+          </label>
           <label className="field">Description<input type="text" value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></label>
-          <label className="field">Zone
-            <select value={draft.zone} onChange={(e) => setDraft({ ...draft, zone: e.target.value })}>
+          <label className="field" title="Admin services and databases score higher in users, iot and guest zones. Changing it re-scores this network's devices.">
+            Zone
+            <select value={draft.zone} onChange={(e) => setDraft({ ...draft, zone: e.target.value })}
+              title="Admin services and databases score higher in users, iot and guest zones. Changing it re-scores this network's devices.">
               <option value="">None</option>
               {NETWORK_ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
             </select>
-            <span className="hint">Admin services and databases score higher in users, iot and guest zones. Changing it re-scores this network's devices.</span></label>
+          </label>
           <label className="check"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />Include in the scheduled daily scan</label>
           <label className="check" title={VPN_S2S_TIP}><input type="checkbox" checked={draft.vpn_s2s} onChange={(e) => setDraft({ ...draft, vpn_s2s: e.target.checked })} />Reached over VPN (site-to-site)</label>
-          <span className="hint">{VPN_S2S_TIP}</span>
+          <CountryChips codes={draft.expected_countries} onChange={(expected_countries) => setDraft({ ...draft, expected_countries })} />
           <label className="check" title={ARP_TIP}><input type="checkbox" checked={!!draft.arp} onChange={(e) => setDraft({ ...draft, arp: e.target.checked ? (draft.arp ?? initial?.arp ?? NEW_ARP) : null })} />Get MAC addresses from the site's router (SNMP)</label>
-          <span className="hint">{ARP_TIP}</span>
           {draft.arp && (
             <ArpSnmpFields arp={draft.arp} onChange={(arp) => setDraft({ ...draft, arp })} networkId={draft.id}
               saved={!!initial?.arp && JSON.stringify(draft.arp) === JSON.stringify(initial.arp)} />

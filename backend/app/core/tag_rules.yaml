@@ -24,3 +24,5 @@ rules:
     priority: 55
     http: ["novnc", "guacamole", "websockify"]
     reason: "browser VNC/RDP gateway"
+  - tag: geo-mismatch
+    reason: "published public IP country is outside the network's expected countries"

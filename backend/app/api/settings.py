@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -15,10 +15,12 @@ from ..core.notify import format_sample_digest, send_email, smtp_failure_reason
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
 from ..db import get_db
-from ..models import EVENT_TYPES, User, Vulnerability, VulnFeedState
+from ..models import EVENT_TYPES, GeoFeedState, User, Vulnerability, VulnFeedState
 from ..security import encrypt_secret
 from ..settings_store import (
+    CdnAsnEntry,
     DiscoverySettings,
+    GeoSettings,
     LdapSettings,
     NotificationSettings,
     PresenceSettings,
@@ -226,6 +228,77 @@ def put_discovery_settings(body: DiscoverySettings, request: Request, db: Sessio
     audit(db, user.username, "settings.discovery", None, body.model_dump(), _ip(request))
     db.commit()
     return body.model_dump()
+
+
+# --- geo (expected-country mismatch vs public IPs) --------------------------------
+def _geo_out(cfg: GeoSettings, db: Session) -> dict:
+    from ..core.geo_sync import (
+        DBIP_ATTRIBUTION,
+        DBIP_LICENSE,
+        asn_db_path,
+        country_db_path,
+        files_ready,
+        maxmind_country_path,
+        sync_running,
+    )
+    feeds = [
+        {"source": f.source, "last_synced_at": f.last_synced_at, "file_month": f.file_month,
+         "last_error": f.last_error}
+        for f in db.scalars(select(GeoFeedState).order_by(GeoFeedState.source)).all()
+    ]
+    mm = maxmind_country_path(cfg)
+    return {
+        **cfg.model_dump(),
+        "attribution": DBIP_ATTRIBUTION,
+        "license": DBIP_LICENSE,
+        "country_db_loaded": country_db_path().is_file() or bool(mm),
+        "asn_db_loaded": asn_db_path().is_file(),
+        "maxmind_loaded": bool(mm),
+        "files_ready": files_ready(cfg),
+        "sync_running": sync_running(),
+        "feeds": feeds,
+    }
+
+
+@router.get("/geo")
+def get_geo_settings(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return _geo_out(get_section(db, GeoSettings), db)
+
+
+class GeoIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cache_ttl_hours: int = Field(24, ge=1, le=168)
+    offline_mode: bool = False
+    maxmind_country_path: str = Field("", max_length=1000)
+    cdn_asns: list[CdnAsnEntry] = Field(default_factory=list)
+
+
+@router.put("/geo")
+def put_geo_settings(body: GeoIn, request: Request, db: Session = Depends(get_db),
+                     user: User = Depends(require_admin)):
+    try:
+        cfg = GeoSettings.model_validate(body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    put_section(db, cfg)
+    audit(db, user.username, "settings.geo", None, cfg.model_dump(), _ip(request))
+    db.commit()
+    return _geo_out(cfg, db)
+
+
+@router.post("/geo/sync")
+def sync_geo_now(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    from ..core.geo_sync import sync_running, trigger_background_sync
+
+    cfg = get_section(db, GeoSettings)
+    if cfg.offline_mode:
+        raise HTTPException(409, "Offline mode is on; place MMDB files in the data geo directory instead")
+    if sync_running():
+        return {"ok": True, "message": "A sync is already running"}
+    started = trigger_background_sync(cfg)
+    audit(db, user.username, "settings.geo_sync", None, {"started": started}, _ip(request))
+    db.commit()
+    return {"ok": True, "message": "Sync started in the background" if started else "A sync is already running"}
 
 
 # --- notifications --------------------------------------------------------------

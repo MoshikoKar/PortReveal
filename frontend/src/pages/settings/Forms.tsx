@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading, useReportDirty } from '../../components/ui';
-import type { DiscoverySettings, EventType, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
+import type { CdnAsnEntry, DiscoverySettings, EventType, GeoSettings, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
 import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
 
 function useForm<T>(path: string) {
@@ -596,6 +596,101 @@ export function DiscoveryForm({ onDirtyChange }: { onDirtyChange?: (dirty: boole
           onChange={(v) => set({ timeout_seconds: v })} hint="mDNS/SSDP listen window; NetBIOS uses a shorter fixed window" />
         <Msg msg={f.msg} />
         <div><button className="btn primary" disabled={f.saving} onClick={() => f.save(s)}>Save</button></div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- geo (expected-country mismatch)
+export function GeoForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const f = useForm<GeoSettings>('/settings/geo');
+  useReportDirty(f.dirty, onDirtyChange);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!f.form) return <Card title="Geo mismatch"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<GeoSettings>) => f.setForm({ ...s, ...patch });
+  const save = () => f.save({
+    cache_ttl_hours: s.cache_ttl_hours,
+    offline_mode: s.offline_mode,
+    maxmind_country_path: s.maxmind_country_path,
+    cdn_asns: s.cdn_asns.filter((r) => r.asn >= 1),
+  });
+  const syncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const out = await post<{ ok: boolean; message: string }>('/settings/geo/sync');
+      setSyncMsg({ ok: true, text: out.message });
+      f.reload();
+    } catch (e: any) {
+      setSyncMsg({ ok: false, text: e.message });
+    } finally {
+      setSyncing(false);
+    }
+  };
+  const setAsn = (i: number, patch: Partial<CdnAsnEntry>) => {
+    const next = s.cdn_asns.map((row, idx) => idx === i ? { ...row, ...patch } : row);
+    set({ cdn_asns: next });
+  };
+  const addAsn = () => set({ cdn_asns: [...s.cdn_asns, { asn: 0, label: '' }] });
+  const dropAsn = (i: number) => set({ cdn_asns: s.cdn_asns.filter((_, idx) => idx !== i) });
+  return (
+    <Card title="Geo mismatch">
+      <div className="stack">
+        <div className="muted small">
+          After each scan, devices on networks with expected countries are checked: published DNS names
+          and public IPs are geolocated locally (never private addresses). A country outside the list is
+          flagged. Default database is DB-IP Lite Country + ASN, downloaded automatically (no API key).
+        </div>
+        <div className="muted small">{s.attribution}</div>
+        <div className="row wrap">
+          <span className={`badge ${s.country_db_loaded ? 'ok' : 'outline'}`}>country DB {s.country_db_loaded ? 'loaded' : 'missing'}</span>
+          <span className={`badge ${s.asn_db_loaded ? 'ok' : 'outline'}`}>ASN DB {s.asn_db_loaded ? 'loaded' : 'missing'}</span>
+          {s.maxmind_loaded && <span className="badge ok">MaxMind override loaded</span>}
+          {s.sync_running && <span className="badge medium">sync running</span>}
+        </div>
+        {s.feeds.map((feed) => (
+          <div key={feed.source} className="muted small">
+            {feed.source}: {feed.file_month ?? 'never'} {feed.last_synced_at ? `(${relTime(feed.last_synced_at)})` : ''}
+            {feed.last_error && <span className="badge high" style={{ marginLeft: 6 }}>{feed.last_error}</span>}
+          </div>
+        ))}
+        <label className="check">
+          <input type="checkbox" checked={s.offline_mode} onChange={(e) => set({ offline_mode: e.target.checked })} />
+          Offline mode (do not download DB-IP files)
+        </label>
+        <div className="form-grid">
+          <Num label="DNS / geo cache TTL (hours)" value={s.cache_ttl_hours} min={1} max={168}
+            onChange={(v) => set({ cache_ttl_hours: v })} hint="Unchanged names are not re-resolved until this expires" />
+          <label className="field">Optional MaxMind GeoLite2 Country path
+            <input type="text" value={s.maxmind_country_path} onChange={(e) => set({ maxmind_country_path: e.target.value })}
+              placeholder="relative to the data dir, or absolute" />
+            <span className="hint">Operator-supplied file only. Never required; DB-IP remains the default.</span>
+          </label>
+        </div>
+        <div className="field"><span>CDN / anycast ASNs</span>
+          <span className="hint">Mismatches on these ASNs are still flagged, at lower severity, as CDN edge location not origin.</span>
+          {s.cdn_asns.map((row, i) => (
+            <div className="row wrap" key={`${row.asn}-${i}`} style={{ gap: 8, marginTop: 6 }}>
+              <input type="number" min={1} value={row.asn || ''} placeholder="ASN" style={{ width: 120 }}
+                onChange={(e) => setAsn(i, { asn: Number(e.target.value) || 0 })} />
+              <input type="text" value={row.label} placeholder="label" maxLength={80}
+                onChange={(e) => setAsn(i, { label: e.target.value })} />
+              <button type="button" className="btn ghost sm" onClick={() => dropAsn(i)}>Remove</button>
+            </div>
+          ))}
+          <div style={{ marginTop: 8 }}><button type="button" className="btn sm" onClick={addAsn}>Add ASN</button></div>
+        </div>
+        <Msg msg={f.msg} />
+        {syncMsg && <div className={`alert ${syncMsg.ok ? 'ok' : 'error'}`}>{syncMsg.text}</div>}
+        <div className="row">
+          <button className="btn primary" disabled={f.saving} onClick={save}>Save</button>
+          <button className="btn" onClick={syncNow} disabled={s.offline_mode || syncing || s.sync_running}>
+            {syncing ? 'Starting…' : s.sync_running ? 'Sync running…' : 'Sync DB-IP now'}
+          </button>
+        </div>
       </div>
     </Card>
   );

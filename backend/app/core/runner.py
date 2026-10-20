@@ -379,8 +379,8 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             scan = db.get(Scan, scan_id)
             res = apply_outcome(db, scan, outcome, cfg)
             db.flush()
-            tag_events = after_scan(db, scan, res.events)
-            event_ids = [e.id for e in res.events]
+            extra_events, extra_ids = after_scan(db, scan, res.events)
+            event_ids = [e.id for e in res.events] + extra_ids
             status = SCAN_COMPLETED if outcome.complete and not res.guard_tripped else SCAN_PARTIAL
             notes = scan_notes + list(res.notes) + arp_notes
             if failures:
@@ -393,7 +393,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             scan.hosts_discovered = len(live)
             scan.hosts_scanned = sum(1 for h in live.values() if h.ports is not None)
             scan.hosts_failed = res.hosts_failed
-            scan.events_count = len(res.events) + tag_events
+            scan.events_count = len(res.events) + extra_events
             scan.notes = "\n".join(notes) or None
             if status == SCAN_PARTIAL and failures:
                 scan.error = failures[0]

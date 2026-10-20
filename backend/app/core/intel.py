@@ -177,11 +177,13 @@ def apply_netbios_macs(db: Session, devices: Iterable[Device], macs: dict[str, s
     return filled
 
 
-def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:
-    """Inside the scan's transaction, after apply_outcome. Returns the tag events created.
+def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> tuple[int, list[int]]:
+    """Inside the scan's transaction, after apply_outcome.
 
-    Tag changes are reported only for devices with a reported change in `changed` (the scan's
-    events): what the comparison recorded silently (baseline, first coverage) stays silent here."""
+    Returns (extra event count, extra event ids) for tags plus geo mismatches. Tag changes are
+    reported only for devices with a reported change in `changed`; geo events follow their own
+    baseline-silent gate.
+    """
     try:
         with db.begin_nested():
             ids = list(db.scalars(select(ScanHost.device_id).where(ScanHost.scan_id == scan.id)).all())
@@ -189,16 +191,22 @@ def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> int:
                 _enrich_open_services(db, ids, scan_id=scan.id)
             except Exception:
                 log.exception("scan %s: service enrichment failed", scan.id)
+            geo_ids: list[int] = []
+            try:
+                from .geo import check_devices_geo
+                geo_ids = [e.id for e in check_devices_geo(db, ids, scan_id=scan.id)]
+            except Exception:
+                log.exception("scan %s: geo check failed", scan.id)
             report = {e.device.id for e in changed if e.device is not None and e.device.id is not None}
             events = refresh_devices(db, ids, scan_id=scan.id, report_ids=report)
             try:
                 _enqueue_vuln_job_after_scan(db, scan, ids)
             except Exception:
                 log.exception("scan %s: could not enqueue vulnerability check job", scan.id)
-            return events
+            return events + len(geo_ids), geo_ids
     except Exception:
         log.exception("scan %s: tagging / exposure scoring failed", scan.id)
-        return 0
+        return 0, []
 
 
 def _enqueue_vuln_job_after_scan(db: Session, scan: Scan, device_ids: list[int]) -> None:

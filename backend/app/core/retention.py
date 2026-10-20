@@ -19,6 +19,7 @@ from ..models import (
     Device,
     DeviceRttSample,
     Event,
+    GeoLookupCache,
     Scan,
     ScanHost,
     Snapshot,
@@ -52,6 +53,7 @@ def purge_expired(db: Session, days: int, now: datetime | None = None,
         counts[name] = db.execute(stmt.execution_options(synchronize_session=False)).rowcount or 0
 
     _del("events", delete(Event).where(Event.created_at < cutoff))
+    _del("geo_lookup_cache", delete(GeoLookupCache).where(GeoLookupCache.expires_at < now))
     _del("scan_hosts", delete(ScanHost).where(ScanHost.created_at < cutoff))
     _del("device_rtt_samples", delete(DeviceRttSample).where(
         DeviceRttSample.sampled_at < now - timedelta(days=rtt_days)))

@@ -58,6 +58,11 @@ _SPECS: tuple[FieldSpec, ...] = (
     FieldSpec("location", HOST, "text", "Host", "Location (operator-entered)", "location:\"server room\""),
     FieldSpec("criticality", HOST, "exact", "Host", "low, medium, high or critical", "criticality:high"),
     FieldSpec("notes", HOST, "text", "Host", "Operator notes", "notes:decommission"),
+    FieldSpec("geo.mismatch", HOST, "bool", "Geo", "Public-IP country is outside the network's expected countries",
+              "geo.mismatch:true", ("geo_mismatch",)),
+    FieldSpec("geo.country", HOST, "exact", "Geo", "Observed public-IP ISO country code", "geo.country:AA"),
+    FieldSpec("geo.cdn", HOST, "bool", "Geo", "Observed public IP belongs to a known CDN/anycast ASN",
+              "geo.cdn:true"),
     # --- service ------------------------------------------------------------------------------------
     FieldSpec("port", PORT, "int", "Service", "Open port number, range or list (port:* = any)",
               "port:22,3389", history="port"),

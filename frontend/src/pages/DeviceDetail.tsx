@@ -156,6 +156,32 @@ export default function DeviceDetail() {
         </div>
       )}
       <ErrorBox error={vulnError} />
+      {d.geo_status === 'mismatch' && (
+        <div className="alert error" role="status">
+          Geo mismatch: public address {d.geo_ip ?? 'unknown'} is in {d.geo_country ?? '??'}
+          {d.expected_countries?.length ? ` (expected ${d.expected_countries.join(', ')})` : ''}.
+          {d.geo_name && <> Published name <span className="mono">{d.geo_name}</span>.</>}
+        </div>
+      )}
+      {d.geo_status === 'mismatch_cdn' && (
+        <div className="alert warn" role="status">
+          Geo mismatch: public address {d.geo_ip ?? 'unknown'} is in {d.geo_country ?? '??'}
+          {d.expected_countries?.length ? ` (expected ${d.expected_countries.join(', ')})` : ''}.
+          Behind CDN – location reflects CDN edge, not origin
+          {d.geo_as_org ? ` (${d.geo_as_org})` : d.geo_asn ? ` (AS${d.geo_asn})` : ''}.
+          {d.geo_name && <> Published name <span className="mono">{d.geo_name}</span>.</>}
+        </div>
+      )}
+      {d.geo_status === 'not_checked' && (
+        <div className="alert" role="status">
+          Geo not checked: no public IP was available to geolocate (private scan addresses are never treated as geography).
+        </div>
+      )}
+      {d.geo_status === 'unavailable' && (
+        <div className="alert warn" role="status">
+          Geo database is not loaded yet, so this device was not checked. Download DB-IP Lite from Settings → Geo.
+        </div>
+      )}
 
       <div className="grid two">
         <Card title={`Network exposure - ${open.length} open port${open.length === 1 ? '' : 's'}`} flush
@@ -218,6 +244,29 @@ export default function DeviceDetail() {
               )}
             </dd>
             <dt>Network</dt><dd>{d.network_name ?? '-'}{d.vpn_s2s && <span className="badge outline" style={{ marginLeft: 6 }} title="Reached over a site-to-site VPN: ARP and local discovery names do not cross the routed path. To get MACs, set the site's router as the ARP source in Settings > Networks.">VPN</span>}{d.zone && <span className="badge outline" style={{ marginLeft: 6 }}>zone: {d.zone}</span>}</dd>
+            <dt>Geo</dt>
+            <dd>
+              {!d.geo_status ? <span className="muted">-</span> : (
+                <>
+                  {d.geo_status === 'ok' && <span className="badge ok">ok</span>}
+                  {d.geo_status === 'mismatch' && <span className="badge high">mismatch</span>}
+                  {d.geo_status === 'mismatch_cdn' && <span className="badge medium">CDN edge</span>}
+                  {d.geo_status === 'not_checked' && <span className="badge outline">not checked</span>}
+                  {d.geo_status === 'unavailable' && <span className="badge outline">unavailable</span>}
+                  {d.geo_country && <span className="mono" style={{ marginLeft: 6 }}>{d.geo_country}</span>}
+                  {d.geo_ip && <span className="mono muted small" style={{ marginLeft: 6 }}>{d.geo_ip}</span>}
+                  {d.geo_asn != null && <span className="muted small" style={{ marginLeft: 6 }}>AS{d.geo_asn}{d.geo_as_org ? ` ${d.geo_as_org}` : ''}</span>}
+                  {d.geo_source && (
+                    <div className="muted small">
+                      {d.geo_source === 'published_name' ? 'published name' : 'device IP'}
+                      {d.geo_name ? ` · ${d.geo_name}` : ''}
+                    </div>
+                  )}
+                  {!d.geo_source && d.geo_name && <div className="muted small">{d.geo_name}</div>}
+                  {d.geo_checked_at && <div className="muted small">checked {relTime(d.geo_checked_at)}</div>}
+                </>
+              )}
+            </dd>
             <dt>Device type</dt>
             <dd>
               {d.type === 'unknown' ? <span className="muted">Unknown (low confidence)</span> : d.type ?? '-'}

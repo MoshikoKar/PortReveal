@@ -209,6 +209,17 @@ def _web(f: DeviceFacts) -> str | None:
     return f"web service {s.service} on {s.label}" if s else None
 
 
+def _geo_mismatch(f: DeviceFacts) -> str | None:
+    if not f.device.geo_mismatch:
+        return None
+    country = f.device.geo_country or "??"
+    ip = f.device.geo_ip or ""
+    extra = f" ({ip})" if ip else ""
+    if f.device.geo_cdn:
+        return f"public IP geo {country}{extra} is behind a CDN edge"
+    return f"public IP geo {country}{extra} is outside the network's expected countries"
+
+
 def _printer_weak_ports(f: DeviceFacts) -> str | None:
     """515/631 only count as printer when the service fingerprint is printer-like (not tcpwrapped)."""
     for s in f.services:
@@ -274,6 +285,7 @@ RULES: tuple[Rule, ...] = (
     Rule("remote-access", ports=(3389, 5900, 22), services=("ms-wbt-server", "vnc", "ssh")),
     Rule("web-vnc", "remote-access", 55, http=("novnc", "guacamole", "websockify"),
          check=lambda f: next((f"web VNC UI on {s.label}" for s in f.services if getattr(s, "web_vnc", False)), None)),
+    Rule("geo-mismatch", check=_geo_mismatch),
 )
 
 

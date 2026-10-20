@@ -84,7 +84,7 @@ export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
   | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
   | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed'
-  | 'os_changed' | 'monitor_change';
+  | 'os_changed' | 'monitor_change' | 'geo_mismatch';
 
 export interface ChangeEvent {
   id: number;
@@ -105,6 +105,7 @@ export interface ChangeEvent {
 }
 
 export type DeviceStatus = 'active' | 'unknown' | 'not_detected';
+export type GeoStatus = 'ok' | 'mismatch' | 'mismatch_cdn' | 'not_checked' | 'unavailable';
 
 export interface DeviceSummary {
   uuid: string;
@@ -139,6 +140,10 @@ export interface DeviceSummary {
   superseded_by?: { uuid: string; label: string } | null;
   open_port_count: number;
   open_ports: { port: number; protocol: string; service: string | null; product: string | null; version: string | null }[];
+  geo_mismatch?: boolean;
+  geo_status?: GeoStatus | null;
+  geo_country?: string | null;
+  geo_cdn?: boolean;
 }
 
 export interface DevicePort {
@@ -220,6 +225,17 @@ export interface DeviceDetail extends DeviceSummary {
   classified_at: string | null;
   zone: string | null;
   vpn_s2s: boolean;
+  expected_countries: string[];
+  geo_status: GeoStatus | null;
+  geo_country: string | null;
+  geo_ip: string | null;
+  geo_asn: number | null;
+  geo_as_org: string | null;
+  geo_cdn: boolean;
+  geo_source: 'published_name' | 'device_ip' | null;
+  geo_name: string | null;
+  geo_checked_at: string | null;
+  geo_mismatch: boolean;
   tags: DeviceTag[];
   profile: DeviceProfile;
 }
@@ -477,6 +493,7 @@ export interface Network {
   enabled: boolean;
   zone: string | null;
   vpn_s2s: boolean;
+  expected_countries: string[];
   arp_snmp: ArpSnmp | null;
   baseline_scan_id: number | null;
   baseline_at: string | null;
@@ -630,6 +647,33 @@ export interface DiscoverySettings {
   ssdp: boolean;
   netbios: boolean;
   timeout_seconds: number;
+}
+
+export interface CdnAsnEntry {
+  asn: number;
+  label: string;
+}
+
+export interface GeoFeedStatus {
+  source: string;
+  last_synced_at: string | null;
+  file_month: string | null;
+  last_error: string | null;
+}
+
+export interface GeoSettings {
+  cache_ttl_hours: number;
+  offline_mode: boolean;
+  maxmind_country_path: string;
+  cdn_asns: CdnAsnEntry[];
+  attribution: string;
+  license: string;
+  country_db_loaded: boolean;
+  asn_db_loaded: boolean;
+  maxmind_loaded: boolean;
+  files_ready: boolean;
+  sync_running: boolean;
+  feeds: GeoFeedStatus[];
 }
 
 export type VulnMatchState = 'confirmed' | 'potential' | 'dismissed';

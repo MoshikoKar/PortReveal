@@ -274,6 +274,55 @@ class VulnSettings(BaseModel):
         return _hhmm(v, "sync_time")
 
 
+class CdnAsnEntry(BaseModel):
+    """One known CDN / anycast ASN used to label (not suppress) geo mismatches."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    asn: int = Field(ge=1, le=4_294_967_295)
+    label: str = Field("", max_length=80)
+
+
+def _default_cdn_asns() -> list[CdnAsnEntry]:
+    return [
+        CdnAsnEntry(asn=13335, label="Cloudflare"),
+        CdnAsnEntry(asn=20940, label="Akamai"),
+        CdnAsnEntry(asn=16625, label="Akamai"),
+        CdnAsnEntry(asn=54113, label="Fastly"),
+        CdnAsnEntry(asn=16509, label="CloudFront"),
+        CdnAsnEntry(asn=14618, label="CloudFront"),
+        CdnAsnEntry(asn=15169, label="Google"),
+        CdnAsnEntry(asn=8068, label="Microsoft"),
+        CdnAsnEntry(asn=19551, label="Imperva"),
+        CdnAsnEntry(asn=60068, label="BunnyCDN"),
+    ]
+
+
+class GeoSettings(BaseModel):
+    """Public-IP geolocation vs a network's expected countries. Default DBs are DB-IP Lite (no key)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cache_ttl_hours: int = Field(24, ge=1, le=168)
+    offline_mode: bool = False  # skip outbound MMDB downloads; use files already on disk
+    # Optional MaxMind GeoLite2 Country MMDB (operator-supplied path, relative to the data dir or absolute).
+    maxmind_country_path: str = Field("", max_length=1000)
+    cdn_asns: list[CdnAsnEntry] = Field(default_factory=_default_cdn_asns)
+
+    @field_validator("cdn_asns")
+    @classmethod
+    def _cdn_asns(cls, v: list[CdnAsnEntry]) -> list[CdnAsnEntry]:
+        seen: set[int] = set()
+        out: list[CdnAsnEntry] = []
+        for entry in v:
+            if entry.asn in seen:
+                continue
+            seen.add(entry.asn)
+            label = (entry.label or "").strip()[:80]
+            out.append(CdnAsnEntry(asn=entry.asn, label=label))
+        return out
+
+
 class DiscoverySettings(BaseModel):
     """Local-only mDNS/SSDP/NetBIOS device-naming channel (spec section 9.2).
 
@@ -301,6 +350,7 @@ SECTIONS: dict[str, type[BaseModel]] = {
     "web_capture": WebCaptureSettings,
     "vuln": VulnSettings,
     "discovery": DiscoverySettings,
+    "geo": GeoSettings,
 }
 
 T = TypeVar("T", bound=BaseModel)

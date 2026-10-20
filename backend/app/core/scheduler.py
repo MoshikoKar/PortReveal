@@ -22,6 +22,7 @@ from ..models import (
     Scan,
 )
 from ..settings_store import (
+    GeoSettings,
     NotificationSettings,
     PresenceSettings,
     RetentionSettings,
@@ -32,6 +33,9 @@ from ..settings_store import (
     get_value,
     set_value,
 )
+from .geo_sync import sync_due as geo_sync_due
+from .geo_sync import sync_running as geo_sync_running
+from .geo_sync import trigger_background_sync as trigger_geo_sync
 from .manager import create_scan, manager, network_has_active_scan
 from .notify import send_daily_digest
 from .presence import evaluate_absence, presence_scan_active
@@ -220,6 +224,11 @@ def tick(now: datetime | None = None) -> None:
         if sync_due(db, vuln_cfg, now=now) and not sync_running():
             log.info("vulnerability feed sync is due: starting in the background")
             trigger_background_sync(vuln_cfg)
+
+        geo_cfg = get_section(db, GeoSettings)
+        if geo_sync_due(db, geo_cfg, now=now) and not geo_sync_running():
+            log.info("geo feed sync is due: starting in the background")
+            trigger_geo_sync(geo_cfg)
 
         notify_cfg = get_section(db, NotificationSettings)
         if notify_cfg.enabled and state.get("last_notification_date") != today:
