@@ -1,10 +1,11 @@
 import type { Breakpoint, DashboardPrefs, KpiId, LayoutItem, Layouts, WidgetId, WidgetMeta } from './types';
 
-export const DASHBOARD_SCHEMA_VERSION = 1;
+export const DASHBOARD_SCHEMA_VERSION = 2;
 
 export const BREAKPOINTS: Record<Breakpoint, number> = { lg: 1200, md: 768, sm: 0 };
-export const COLS: Record<Breakpoint, number> = { lg: 12, md: 10, sm: 1 };
-export const ROW_HEIGHT = 36;
+// Fine grid (v2): 24/20 columns and 4px rows, so a resize step is 20px tall (row + margin).
+export const COLS: Record<Breakpoint, number> = { lg: 24, md: 20, sm: 1 };
+export const ROW_HEIGHT = 4;
 export const GRID_MARGIN: [number, number] = [16, 16];
 
 export const KPI_IDS: KpiId[] = [
@@ -25,17 +26,29 @@ export const KPI_LABELS: Record<KpiId, string> = {
 
 export const WIDGET_CATALOG: WidgetMeta[] = [
   // maxH is generous so users can fill the viewport; sparse content still truncates / Fit shrinks.
-  { id: 'kpis', title: 'Overview KPIs', limits: { minW: 4, minH: 2, maxW: 12, maxH: 8 }, defaultSize: { w: 12, h: 2 } },
-  { id: 'recent_changes', title: 'Recent changes', limits: { minW: 3, minH: 4, maxW: 12, maxH: 48 }, defaultSize: { w: 7, h: 10 } },
-  { id: 'scan_status', title: 'Scan status', limits: { minW: 3, minH: 3, maxW: 12, maxH: 24 }, defaultSize: { w: 5, h: 5 } },
-  { id: 'changes_by_type', title: 'Changes by type', limits: { minW: 3, minH: 3, maxW: 12, maxH: 36 }, defaultSize: { w: 5, h: 5 } },
-  { id: 'exposure_scores', title: 'Exposure scores', limits: { minW: 3, minH: 4, maxW: 12, maxH: 36 }, defaultSize: { w: 4, h: 8 } },
-  { id: 'device_types', title: 'Device types', limits: { minW: 3, minH: 3, maxW: 12, maxH: 36 }, defaultSize: { w: 4, h: 8 } },
-  { id: 'watch_alerts', title: 'Watch alerts', limits: { minW: 3, minH: 4, maxW: 12, maxH: 48 }, defaultSize: { w: 4, h: 8 } },
-  { id: 'exposure_trend', title: 'Exposure trend', limits: { minW: 3, minH: 3, maxW: 12, maxH: 24 }, defaultSize: { w: 4, h: 5 } },
-  { id: 'networks', title: 'Networks', limits: { minW: 3, minH: 3, maxW: 12, maxH: 36 }, defaultSize: { w: 4, h: 5 } },
-  { id: 'top_ports', title: 'Most exposed ports', limits: { minW: 3, minH: 3, maxW: 12, maxH: 36 }, defaultSize: { w: 4, h: 8 } },
-  { id: 'top_services', title: 'Exposed services', limits: { minW: 3, minH: 3, maxW: 12, maxH: 36 }, defaultSize: { w: 4, h: 8 } },
+  // The KPI strip sizes its own height to its tiles (autoHeight); users only change its width.
+  { id: 'kpis', title: 'KPI strip', description: 'Headline counts: hosts, ports, exposure, and alerts.',
+    limits: { minW: 8, minH: 4, maxW: 24, maxH: 32 }, defaultSize: { w: 24, h: 8 }, autoHeight: true },
+  { id: 'recent_changes', title: 'Recent changes', description: 'Latest events across every network.',
+    limits: { minW: 6, minH: 10, maxW: 24, maxH: 125 }, defaultSize: { w: 14, h: 26 } },
+  { id: 'scan_status', title: 'Scan status', description: 'Running scan progress, last result, and next schedule.',
+    limits: { minW: 6, minH: 8, maxW: 24, maxH: 62 }, defaultSize: { w: 10, h: 13 } },
+  { id: 'changes_by_type', title: 'Changes by type', description: 'Seven-day event counts by change type.',
+    limits: { minW: 6, minH: 8, maxW: 24, maxH: 94 }, defaultSize: { w: 10, h: 13 } },
+  { id: 'exposure_scores', title: 'Exposure scores', description: 'Hosts per exposure level and the riskiest hosts.',
+    limits: { minW: 6, minH: 10, maxW: 24, maxH: 94 }, defaultSize: { w: 8, h: 21 } },
+  { id: 'device_types', title: 'Device types', description: 'Host counts by classified device type.',
+    limits: { minW: 6, minH: 8, maxW: 24, maxH: 94 }, defaultSize: { w: 8, h: 21 } },
+  { id: 'watch_alerts', title: 'Watch alerts', description: 'Watch matches and policy violations from the last 7 days.',
+    limits: { minW: 6, minH: 10, maxW: 24, maxH: 125 }, defaultSize: { w: 8, h: 21 } },
+  { id: 'exposure_trend', title: 'Exposure trend', description: 'Thirty-day chart of hosts and open ports.',
+    limits: { minW: 6, minH: 8, maxW: 24, maxH: 62 }, defaultSize: { w: 8, h: 13 }, fit: false },
+  { id: 'networks', title: 'Networks', description: 'Configured networks with active hosts and baseline state.',
+    limits: { minW: 6, minH: 8, maxW: 24, maxH: 94 }, defaultSize: { w: 8, h: 13 } },
+  { id: 'top_ports', title: 'Most exposed ports', description: 'Ports open on the most hosts.',
+    limits: { minW: 6, minH: 8, maxW: 24, maxH: 94 }, defaultSize: { w: 8, h: 21 } },
+  { id: 'top_services', title: 'Exposed services', description: 'Services detected on the most hosts.',
+    limits: { minW: 6, minH: 8, maxW: 24, maxH: 94 }, defaultSize: { w: 8, h: 21 } },
 ];
 
 export const WIDGET_BY_ID: Record<WidgetId, WidgetMeta> = Object.fromEntries(
@@ -45,17 +58,17 @@ export const WIDGET_BY_ID: Record<WidgetId, WidgetMeta> = Object.fromEntries(
 /** Default lg layout mirroring the previous fixed dashboard structure. */
 function defaultLg(): LayoutItem[] {
   return [
-    item('kpis', 0, 0, 12, 2),
-    item('recent_changes', 0, 2, 7, 10),
-    item('scan_status', 7, 2, 5, 5),
-    item('changes_by_type', 7, 7, 5, 5),
-    item('exposure_scores', 0, 12, 4, 8),
-    item('device_types', 4, 12, 4, 8),
-    item('watch_alerts', 8, 12, 4, 8),
-    item('exposure_trend', 0, 20, 4, 5),
-    item('networks', 0, 25, 4, 5),
-    item('top_ports', 4, 20, 4, 10),
-    item('top_services', 8, 20, 4, 10),
+    item('kpis', 0, 0, 24, 8),
+    item('recent_changes', 0, 8, 14, 26),
+    item('scan_status', 14, 8, 10, 13),
+    item('changes_by_type', 14, 21, 10, 13),
+    item('exposure_scores', 0, 34, 8, 21),
+    item('device_types', 8, 34, 8, 21),
+    item('watch_alerts', 16, 34, 8, 21),
+    item('exposure_trend', 0, 55, 8, 13),
+    item('networks', 0, 68, 8, 13),
+    item('top_ports', 8, 55, 8, 26),
+    item('top_services', 16, 55, 8, 26),
   ];
 }
 
@@ -94,8 +107,11 @@ function scaleToMd(source: LayoutItem[]): LayoutItem[] {
   return source.map((it) => {
     const meta = WIDGET_BY_ID[it.i as WidgetId];
     const lim = meta?.limits;
-    const w = Math.max(lim ? Math.min(lim.minW, to) : 1, Math.round((it.w / from) * to));
-    const x = Math.min(Math.round((it.x / from) * to), Math.max(0, to - w));
+    // Round the edges, not x and w separately, so neighbours that touched still touch (no overlap).
+    const left = Math.round((it.x / from) * to);
+    const right = Math.round(((it.x + it.w) / from) * to);
+    const w = Math.max(lim ? Math.min(lim.minW, to) : 1, right - left);
+    const x = Math.min(left, Math.max(0, to - w));
     return {
       i: it.i, x, y: it.y, w, h: it.h,
       minW: lim ? Math.min(lim.minW, to) : 1,

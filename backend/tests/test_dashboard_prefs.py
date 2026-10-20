@@ -29,11 +29,11 @@ def setup_admin(c: TestClient):
 
 def _valid_dashboard(**overrides):
     dash = {
-        "v": 1,
+        "v": 2,
         "layouts": {
-            "lg": [{"i": "kpis", "x": 0, "y": 0, "w": 12, "h": 2}],
-            "md": [{"i": "kpis", "x": 0, "y": 0, "w": 10, "h": 2}],
-            "sm": [{"i": "kpis", "x": 0, "y": 0, "w": 1, "h": 2}],
+            "lg": [{"i": "kpis", "x": 0, "y": 0, "w": 24, "h": 8}],
+            "md": [{"i": "kpis", "x": 0, "y": 0, "w": 20, "h": 8}],
+            "sm": [{"i": "kpis", "x": 0, "y": 0, "w": 1, "h": 8}],
         },
         "hidden": ["networks"],
         "kpiVisible": ["known_hosts", "active"],
@@ -51,7 +51,7 @@ def test_preferences_round_trip(client):
     r = client.put("/api/auth/me/preferences", json=body, headers=csrf(client))
     assert r.status_code == 200, r.text
     saved = r.json()["user"]["preferences"]
-    assert saved["dashboard"]["v"] == 1
+    assert saved["dashboard"]["v"] == 2
     assert saved["dashboard"]["hidden"] == ["networks"]
     assert saved["dashboard"]["kpiVisible"] == ["known_hosts", "active"]
     assert saved["dashboard"]["layouts"]["lg"][0]["i"] == "kpis"
@@ -63,7 +63,7 @@ def test_preferences_round_trip(client):
 def test_rejects_unknown_widget_id(client):
     setup_admin(client)
     body = _valid_dashboard()
-    body["dashboard"]["layouts"]["lg"].append({"i": "not_a_widget", "x": 0, "y": 2, "w": 4, "h": 4})
+    body["dashboard"]["layouts"]["lg"].append({"i": "not_a_widget", "x": 0, "y": 8, "w": 8, "h": 10})
     r = client.put("/api/auth/me/preferences", json=body, headers=csrf(client))
     assert r.status_code == 422
     assert "widget" in r.json()["detail"].lower() or "unknown" in r.json()["detail"].lower()
@@ -73,8 +73,8 @@ def test_rejects_duplicate_ids(client):
     setup_admin(client)
     body = _valid_dashboard()
     body["dashboard"]["layouts"]["lg"] = [
-        {"i": "kpis", "x": 0, "y": 0, "w": 12, "h": 2},
-        {"i": "kpis", "x": 0, "y": 2, "w": 6, "h": 2},
+        {"i": "kpis", "x": 0, "y": 0, "w": 24, "h": 8},
+        {"i": "kpis", "x": 0, "y": 8, "w": 12, "h": 8},
     ]
     r = client.put("/api/auth/me/preferences", json=body, headers=csrf(client))
     assert r.status_code == 422
@@ -84,9 +84,16 @@ def test_rejects_duplicate_ids(client):
 def test_rejects_out_of_bounds(client):
     setup_admin(client)
     body = _valid_dashboard()
-    body["dashboard"]["layouts"]["lg"] = [{"i": "kpis", "x": 10, "y": 0, "w": 12, "h": 2}]
+    body["dashboard"]["layouts"]["lg"] = [{"i": "kpis", "x": 20, "y": 0, "w": 24, "h": 8}]
     r = client.put("/api/auth/me/preferences", json=body, headers=csrf(client))
     assert r.status_code == 422
+
+
+def test_rejects_v1_schema(client):
+    setup_admin(client)
+    r = client.put("/api/auth/me/preferences", json=_valid_dashboard(v=1), headers=csrf(client))
+    assert r.status_code == 422
+    assert "version" in r.json()["detail"].lower()
 
 
 def test_rejects_unknown_keys(client):
@@ -111,7 +118,7 @@ def test_rejects_oversized_payload(client):
     # Pad via a huge hidden list is blocked by allowlist; use raw oversized by monkeypatching size check path.
     # Build a valid-looking payload that exceeds the byte limit after encoding.
     body["dashboard"]["layouts"]["lg"] = [
-        {"i": "recent_changes", "x": 0, "y": 0, "w": 6, "h": 4},
+        {"i": "recent_changes", "x": 0, "y": 0, "w": 12, "h": 10},
     ]
     # Force size via many repeated layout items isn't allowed (duplicates). Patch limit instead.
     from app import dashboard_prefs as dp

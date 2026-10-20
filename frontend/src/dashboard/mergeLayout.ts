@@ -1,6 +1,7 @@
 import { COLS, DASHBOARD_SCHEMA_VERSION, WIDGET_BY_ID, WIDGET_CATALOG, defaultDashboardPrefs, withLimits } from './defaults';
 import type { Breakpoint, DashboardPrefs, KpiId, LayoutItem, Layouts, WidgetId } from './types';
 import { KPI_IDS } from './defaults';
+import { placeWidget, resolveOverlaps } from './layoutOps';
 
 function isWidgetId(v: unknown): v is WidgetId {
   return typeof v === 'string' && v in WIDGET_BY_ID;
@@ -36,6 +37,29 @@ export function mergeBreakpointLayout(
     y += meta.defaultSize.h;
   }
   return withLimits(out, cols);
+}
+
+// v1 used 12/10 columns and 36px rows (52px per row step); v2 uses 24/20 columns and 4px rows (20px).
+const V1_COLS: Record<Breakpoint, number> = { lg: 12, md: 10, sm: 1 };
+const V1_ROW_STEP = 52;
+const V2_ROW_STEP = 20;
+
+/** Convert a v1 layout to v2 units: same columns share, same pixel positions and heights. */
+export function migrateV1Layouts(layouts: Partial<Layouts>): Partial<Layouts> {
+  const out: Partial<Layouts> = {};
+  for (const bp of Object.keys(COLS) as Breakpoint[]) {
+    const items = layouts[bp];
+    if (!Array.isArray(items)) continue;
+    const xScale = COLS[bp] / V1_COLS[bp];
+    out[bp] = resolveOverlaps(items.map((it) => ({
+      i: it.i,
+      x: Math.round(it.x * xScale),
+      w: Math.round(it.w * xScale),
+      y: Math.round((it.y * V1_ROW_STEP) / V2_ROW_STEP),
+      h: Math.round((it.h * V1_ROW_STEP) / V2_ROW_STEP),
+    })));
+  }
+  return out;
 }
 
 export function mergeLayouts(layouts: Partial<Layouts> | undefined, hidden: WidgetId[]): Layouts {
@@ -77,14 +101,15 @@ export function loadDashboardPrefs(raw: unknown): DashboardPrefs {
   if (dash == null || typeof dash !== 'object') return defaults;
   const d = dash as Record<string, unknown>;
   const v = d.v;
-  if (typeof v === 'number' && v !== DASHBOARD_SCHEMA_VERSION) {
+  if (typeof v === 'number' && v !== DASHBOARD_SCHEMA_VERSION && v !== 1) {
     if (import.meta.env?.DEV) {
       console.warn(`[dashboard] unsupported prefs version ${v}; using defaults`);
     }
     return defaults;
   }
   const hidden = sanitizeHidden(d.hidden);
-  const layoutsIn = (d.layouts && typeof d.layouts === 'object' ? d.layouts : {}) as Partial<Layouts>;
+  const stored = (d.layouts && typeof d.layouts === 'object' ? d.layouts : {}) as Partial<Layouts>;
+  const layoutsIn = v === 1 ? migrateV1Layouts(stored) : stored;
   return {
     v: DASHBOARD_SCHEMA_VERSION,
     layouts: mergeLayouts(layoutsIn, hidden),
@@ -118,14 +143,8 @@ export function hideWidget(prefs: DashboardPrefs, id: WidgetId): DashboardPrefs 
   return { ...prefs, hidden: [...prefs.hidden, id], layouts };
 }
 
-export function showWidget(prefs: DashboardPrefs, id: WidgetId, breakpoint: Breakpoint): DashboardPrefs {
-  const hidden = prefs.hidden.filter((h) => h !== id);
-  const layouts = mergeLayouts(
-    {
-      ...prefs.layouts,
-      [breakpoint]: prefs.layouts[breakpoint].filter((it) => it.i !== id),
-    },
-    hidden,
-  );
-  return { ...prefs, hidden, layouts };
+/** Bring a hidden widget back at its default size, in the first free spot of each breakpoint. */
+export function showWidget(prefs: DashboardPrefs, id: WidgetId): DashboardPrefs {
+  if (!prefs.hidden.includes(id)) return prefs;
+  return { ...prefs, hidden: prefs.hidden.filter((h) => h !== id), layouts: placeWidget(prefs.layouts, id) };
 }

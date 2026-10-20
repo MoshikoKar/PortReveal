@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { put } from '../api';
 import { useApp } from '../context';
@@ -27,6 +27,8 @@ function SearchBox() {
   );
 }
 
+const prefsKey = (p: DashboardPrefs) => JSON.stringify(prefsForSave(p));
+
 export default function Dashboard() {
   const { data, error, reload } = useApi<DashboardData>('/dashboard', undefined, 10000);
   const { user, setUser } = useApp();
@@ -37,6 +39,8 @@ export default function Dashboard() {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const { prefs, commit, reset, undo, redo, canUndo, canRedo } = history;
+  const dirty = useMemo(() => editing && prefsKey(prefs) !== prefsKey(baseline), [editing, prefs, baseline]);
+  const isDefault = useMemo(() => prefsKey(prefs) === prefsKey(defaultDashboardPrefs()), [prefs]);
 
   // Re-sync when stored preferences change outside edit mode (e.g. re-login).
   useEffect(() => {
@@ -55,18 +59,22 @@ export default function Dashboard() {
     setEditing(true);
   };
 
-  const cancelEdit = () => {
+  const cancelEdit = useCallback(() => {
     reset(baseline);
     setEditing(false);
     setSaveState('idle');
     setSaveError(null);
-  };
+  }, [baseline, reset]);
 
   const resetLayout = () => {
     commit(defaultDashboardPrefs());
   };
 
   const save = useCallback(async () => {
+    if (!dirty) {
+      setEditing(false);
+      return;
+    }
     setSaveState('saving');
     setSaveError(null);
     try {
@@ -79,13 +87,56 @@ export default function Dashboard() {
       setSaveState('saved');
       setEditing(false);
     } catch (ex: any) {
+      // Keep the user's edits and stay in edit mode so they can retry.
       setSaveState('error');
       setSaveError(ex.message || 'Failed to save layout');
-      reset(baseline);
     }
-  }, [baseline, prefs, reset, setUser]);
+  }, [dirty, prefs, reset, setUser]);
+
+  // Ctrl/Cmd+Z undo, Ctrl+Shift+Z / Ctrl+Y redo, Escape leaves edit mode when nothing changed.
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+      } else if (mod && key === 'y') {
+        e.preventDefault();
+        redo();
+      } else if (key === 'escape' && !dirty && !document.querySelector('details[open]')) {
+        cancelEdit();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editing, dirty, undo, redo, cancelEdit]);
+
+  // Warn before closing or reloading the tab with unsaved layout edits.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
 
   if (!data) return <>{error ? <ErrorBox error={error} /> : <Loading />}</>;
+
+  const editActions = (
+    <>
+      <button type="button" className="btn sm" disabled={!canUndo} onClick={undo} title="Undo (Ctrl+Z)">Undo</button>
+      <button type="button" className="btn sm" disabled={!canRedo} onClick={redo} title="Redo (Ctrl+Shift+Z)">Redo</button>
+      <button type="button" className="btn sm" disabled={isDefault} onClick={resetLayout}
+        title="Restore the default widgets, sizes, and KPIs (undoable)">Reset to default</button>
+      <button type="button" className="btn sm" onClick={cancelEdit}>{dirty ? 'Discard' : 'Cancel'}</button>
+      <button type="button" className="btn sm primary" disabled={saveState === 'saving'} onClick={save}>
+        {saveState === 'saving' ? 'Saving…' : dirty ? 'Save layout' : 'Done'}
+      </button>
+    </>
+  );
 
   return (
     <div className="dashboard">
@@ -95,21 +146,9 @@ export default function Dashboard() {
           <p>What exists on the network, what it exposes, and what changed.</p>
         </div>
         <div className="row wrap" style={{ gap: 8 }}>
-          {!editing ? (
-            <button type="button" className="btn" onClick={startEdit}>Customize layout</button>
-          ) : (
-            <>
-              <button type="button" className="btn sm" disabled={!canUndo} onClick={undo}>Undo</button>
-              <button type="button" className="btn sm" disabled={!canRedo} onClick={redo}>Redo</button>
-              <button type="button" className="btn sm" onClick={resetLayout}>Reset layout</button>
-              <button type="button" className="btn" onClick={cancelEdit}>Cancel changes</button>
-              <button type="button" className="btn primary" disabled={saveState === 'saving'} onClick={save}>
-                {saveState === 'saving' ? 'Saving…' : 'Save'}
-              </button>
-            </>
-          )}
-          {saveState === 'saved' && !editing && <span className="muted small">Saved</span>}
+          {saveState === 'saved' && !editing && <span className="muted small">Layout saved</span>}
           {saveState === 'error' && saveError && <span className="small" style={{ color: 'var(--high)' }}>{saveError}</span>}
+          {!editing && <button type="button" className="btn" onClick={startEdit}>Customize layout</button>}
         </div>
       </div>
       <ErrorBox error={error} />
@@ -120,6 +159,7 @@ export default function Dashboard() {
         editing={editing}
         onPrefsCommit={commit}
         reload={reload}
+        editActions={editActions}
       />
     </div>
   );

@@ -141,7 +141,7 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
         expect(page.locator(".dashboard-rgl")).to_be_visible(timeout=15_000)
 
         page.get_by_role("button", name="Customize layout").click()
-        expect(page.get_by_role("button", name="Save")).to_be_visible()
+        expect(page.get_by_role("button", name="Done")).to_be_visible()
 
         card = page.locator('[data-grid-id="recent_changes"]')
         expect(card).to_be_visible()
@@ -151,12 +151,12 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
         assert box is not None
         page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
         page.mouse.down()
-        # Grow height and width past the default (w=7, h=10).
+        # Grow height and width past the default (w=14, h=26).
         page.mouse.move(box["x"] + 180, box["y"] + 220, steps=12)
         page.mouse.up()
 
-        page.get_by_role("button", name="Save").click()
-        expect(page.get_by_text("Saved", exact=True)).to_be_visible(timeout=10_000)
+        page.get_by_role("button", name="Save layout").click()
+        expect(page.get_by_text("Layout saved", exact=True)).to_be_visible(timeout=10_000)
 
         prefs = page.evaluate(
             """async () => {
@@ -167,7 +167,7 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
         )
         assert prefs and prefs.get("dashboard"), prefs
         recent = next(it for it in prefs["dashboard"]["layouts"]["lg"] if it["i"] == "recent_changes")
-        assert recent["h"] > 10 or recent["w"] > 7, recent
+        assert recent["h"] > 26 or recent["w"] > 14, recent
 
         page.reload()
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)

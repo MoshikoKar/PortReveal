@@ -54,7 +54,13 @@ export interface WidgetLimits {
 export interface WidgetMeta {
   id: WidgetId;
   title: string;
+  /** One line for the widget library. */
+  description: string;
   limits: WidgetLimits;
   /** Default size on lg; md/sm derived when missing. */
   defaultSize: { w: number; h: number };
+  /** Height follows the rendered content; only width is user-resizable. */
+  autoHeight?: boolean;
+  /** Whether "Fit height to content" makes sense (false for charts that fill any height). */
+  fit?: boolean;
 }

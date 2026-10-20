@@ -190,21 +190,121 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 }
 
 /* Customizable dashboard grid (react-grid-layout) */
-.dashboard-grid-wrap { width: 100%; min-height: 120px; }
+/* clip (not hidden): no sideways page scroll from grid overflow, without making a scroll container that would trap the sticky edit bar. */
+.dashboard-grid-wrap { width: 100%; min-height: 120px; overflow-x: clip; }
 .dashboard-grid-item { height: 100%; }
 .dashboard-widget { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .dashboard-widget > .card-body { flex: 1 1 0; min-height: 0; overflow: hidden; }
-.dashboard-drag-handle {
-  cursor: grab; flex: 0 0 auto; padding: 2px 6px; line-height: 1; color: var(--muted);
-  font-size: 14px; letter-spacing: -2px; user-select: none;
+.dashboard-widget-actions { margin-inline-start: auto; gap: 4px; flex-wrap: nowrap; min-width: 0; }
+/* KPI strip: plain tiles on the page outside edit mode; its cell height follows the tiles. */
+.dashboard-widget.bare { background: transparent; border-color: transparent; }
+/* Centered: the cell snaps to whole grid rows, so split the leftover evenly above and below. */
+.dashboard-widget.bare > .card-body { padding: 0; }
+.kpis-widget > .card-body { overflow: visible; display: flex; flex-direction: column; justify-content: center; }
+.dashboard-kpis { align-items: stretch; }
+.dashboard-kpis > .kpi-slot { position: relative; min-width: 0; display: flex; }
+.dashboard-kpis > .kpi-slot > .kpi { flex: 1 1 auto; }
+.kpi-slot.editable { cursor: grab; }
+.kpi-slot.editable:active { cursor: grabbing; }
+.kpi-slot.dragging { opacity: 0.4; }
+.kpi-slot.drop-target > .kpi { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.kpi-slot-tools {
+  position: absolute; top: 4px; right: 4px; display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s;
+  background: var(--panel); border-radius: var(--radius-md);
 }
-.dashboard-drag-handle:active { cursor: grabbing; }
-.dashboard-grid-wrap.is-editing .dashboard-widget { outline: 1px dashed var(--border-2); }
+.kpi-slot:hover .kpi-slot-tools, .kpi-slot:focus-within .kpi-slot-tools { opacity: 1; }
+.kpi-slot-tools .btn { padding: 1px 7px; }
+.kpi-add { display: flex; }
+.kpi-add > summary {
+  flex: 1; min-height: 80px; justify-content: center; align-items: center; border-style: dashed;
+  background: transparent; color: var(--text-2);
+}
+/* Edit mode: the header is the drag handle; bodies are inert so a drag never follows a link. */
+.dashboard-grid-wrap.is-editing .dashboard-widget { outline: 1px dashed var(--border-2); outline-offset: -1px; }
+.dashboard-grid-wrap.is-editing .dashboard-widget > .card-head { cursor: grab; user-select: none; min-height: 49px; }
+.dashboard-grid-wrap.is-editing .dashboard-widget > .card-head:active { cursor: grabbing; }
+.dashboard-grid-wrap.is-editing .dashboard-widget:not(.kpis-widget) > .card-body { pointer-events: none; user-select: none; }
+.dashboard-grid-wrap.is-editing .react-grid-item:hover .dashboard-widget { outline-color: var(--accent); }
+.dashboard-grip { display: inline-flex; color: var(--muted); margin-right: -4px; }
+.dashboard-grip svg { width: 16px; height: 16px; }
+.dashboard-grid-wrap.is-editing .dashboard-widget > .card-head > h2 { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dashboard-widget-actions { flex-shrink: 0; }
+.dashboard-width-panel { left: auto; right: 0; min-width: 150px; padding: 4px; }
+.dashboard-remove:hover:not(:disabled) { color: var(--high); }
+/* Fit: let the card take its natural height for one measurement pass. */
+.dashboard-grid-item.is-measuring .dashboard-widget { height: auto; }
+.dashboard-grid-item.is-measuring .dashboard-widget > .card-body { flex: none; overflow: visible; }
+.dashboard-grid-item.is-new .dashboard-widget { animation: dash-pulse 1.6s ease-out; }
+@keyframes dash-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(14, 208, 217, 0.55); }
+  100% { box-shadow: 0 0 0 14px rgba(14, 208, 217, 0); }
+}
 .dashboard-chart-fill { width: 100%; height: 100%; min-height: 100px; }
 .dashboard-chart-fill .trend-wrap { height: 100%; }
 .dashboard-chart-fill .trend { height: 100%; display: block; }
 .react-grid-item.react-grid-placeholder { background: var(--accent); opacity: 0.15; border-radius: var(--radius-lg); }
-.react-resizable-handle::after { border-color: var(--muted) !important; }
+.react-grid-item.react-draggable-dragging { z-index: 6; }
+.react-grid-item.react-draggable-dragging .dashboard-widget { box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); }
+.react-grid-item:has(details[open]) { z-index: 7; }
+/* Resize handles: a bottom-right corner grip plus right/bottom edge strips that light up on hover.
+   Selectors out-rank react-grid-layout's own `.react-grid-item > .react-resizable-handle.react-resizable-handle-*`. */
+.dashboard-rgl > .react-grid-item > .react-resizable-handle {
+  background-image: none; z-index: 3; padding: 0; margin: 0; transform: none; opacity: 1;
+}
+.dashboard-rgl > .react-grid-item > .react-resizable-handle::after { display: none; }
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-se {
+  right: 2px; bottom: 2px; width: 18px; height: 18px; margin: 0; transform: none; cursor: se-resize;
+}
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-se::before {
+  content: ''; position: absolute; right: 4px; bottom: 4px; width: 8px; height: 8px;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); border-bottom-right-radius: 2px;
+}
+.dashboard-rgl > .react-grid-item:hover > .react-resizable-handle.react-resizable-handle-se::before { border-color: var(--accent); }
+/* Edge strips sit inside the card (nothing pokes past the page edge) and are never rotated —
+   the library's rule rotates e/s handles and loads after this sheet. */
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-e {
+  top: 12px; bottom: 22px; right: 0; width: 8px; height: auto; margin: 0; transform: none; cursor: ew-resize;
+}
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-s {
+  left: 12px; right: 22px; bottom: 0; width: auto; height: 8px; margin: 0; transform: none; cursor: ns-resize;
+}
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-e::before,
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-s::before {
+  content: ''; position: absolute; border-radius: 2px; background: var(--accent); opacity: 0; transition: opacity 0.12s;
+}
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-e::before { top: 35%; bottom: 35%; right: 2px; width: 3px; }
+.dashboard-rgl > .react-grid-item > .react-resizable-handle.react-resizable-handle-s::before { left: 35%; right: 35%; bottom: 2px; height: 3px; }
+.dashboard-rgl > .react-grid-item > .react-resizable-handle:hover::before { opacity: 0.9; }
+/* Sticky edit bar under the top bar. */
+.dashboard-editbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: var(--space-4); background: var(--panel); border: 1px solid var(--accent);
+  border-radius: var(--radius-lg); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); z-index: 4;
+}
+@media (min-width: 901px) { .dashboard-editbar { position: sticky; top: 58px; } }
+.dashboard-editbar-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dashboard-editbar-tools { gap: 6px; align-items: center; }
+.dashboard-editbar-sep { width: 1px; align-self: stretch; background: var(--border-2); margin: 0 4px; }
+.dash-count {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 11px;
+  background: var(--accent); color: var(--accent-ink);
+}
+/* Popovers (widget library, add KPI). */
+.dash-popover { position: relative; }
+.dash-popover > summary { list-style: none; }
+.dash-popover > summary::-webkit-details-marker { display: none; }
+.dash-popover-panel {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 20; min-width: 220px; max-width: calc(100vw - 32px);
+  background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius-lg); padding: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); cursor: default;
+}
+.dash-popover-item { justify-content: flex-start; width: 100%; text-align: left; }
+.widget-library-panel { left: auto; right: 0; width: 380px; max-height: min(70vh, 520px); overflow-y: auto; padding: 4px; }
+.widget-library-list { list-style: none; margin: 0; padding: 0; }
+.widget-library-list li { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: var(--radius-md); }
+.widget-library-list li:hover { background: var(--panel-2); }
+.widget-library-text { flex: 1; min-width: 0; }
+.widget-library-title { font-weight: 600; font-size: 13px; }
 
 /* Narrow viewports: the sidebar collapses into a sticky top bar (brand, current page, menu toggle);
    the toggle drops the nav and account footer down beneath it. */

@@ -2,12 +2,14 @@ import { useLayoutEffect, useState, type RefObject } from 'react';
 
 /**
  * How many row elements matching `rowSelector` fit in the scroll parent of `ref`.
- * Returns null until measured (or when the body has no fixed height yet).
+ * Returns null until measured (or when the body has no fixed height yet), and while `disabled`
+ * so "Fit height" can measure the widget's full, untruncated content.
  */
 export function useFittingRows(
   ref: RefObject<HTMLElement | null>,
   count: number,
   rowSelector = '.bar-row, tr, .event-row',
+  disabled = false,
 ): number | null {
   const [fit, setFit] = useState<number | null>(null);
   useLayoutEffect(() => {
@@ -29,8 +31,8 @@ export function useFittingRows(
     const ro = new ResizeObserver(measure);
     ro.observe(body);
     return () => ro.disconnect();
-  }, [ref, count, rowSelector]);
-  return fit;
+  }, [ref, count, rowSelector, disabled]);
+  return disabled ? null : fit;
 }
 
 /** Track width/height of an element for charts that must fill the card. */

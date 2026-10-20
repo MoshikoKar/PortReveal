@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 # Breakpoint → column count (must match the frontend Responsive grid).
-BREAKPOINT_COLS: dict[str, int] = {"lg": 12, "md": 10, "sm": 1}
+BREAKPOINT_COLS: dict[str, int] = {"lg": 24, "md": 20, "sm": 1}
 BREAKPOINTS = tuple(BREAKPOINT_COLS.keys())
 
 WIDGET_IDS = frozenset({
@@ -38,20 +38,21 @@ KPI_IDS = frozenset({
 # minW, minH, maxW, maxH per widget (maxW None = cols of breakpoint).
 # minW, minH, maxW, maxH — keep in sync with frontend/src/dashboard/defaults.ts
 WIDGET_LIMITS: dict[str, tuple[int, int, int | None, int]] = {
-    "kpis": (4, 2, 12, 8),
-    "recent_changes": (3, 4, 12, 48),
-    "scan_status": (3, 3, 12, 24),
-    "changes_by_type": (3, 3, 12, 36),
-    "exposure_scores": (3, 4, 12, 36),
-    "device_types": (3, 3, 12, 36),
-    "watch_alerts": (3, 4, 12, 48),
-    "exposure_trend": (3, 3, 12, 24),
-    "networks": (3, 3, 12, 36),
-    "top_ports": (3, 3, 12, 36),
-    "top_services": (3, 3, 12, 36),
+    "kpis": (8, 4, 24, 32),
+    "recent_changes": (6, 10, 24, 125),
+    "scan_status": (6, 8, 24, 62),
+    "changes_by_type": (6, 8, 24, 94),
+    "exposure_scores": (6, 10, 24, 94),
+    "device_types": (6, 8, 24, 94),
+    "watch_alerts": (6, 10, 24, 125),
+    "exposure_trend": (6, 8, 24, 62),
+    "networks": (6, 8, 24, 94),
+    "top_ports": (6, 8, 24, 94),
+    "top_services": (6, 8, 24, 94),
 }
 
-DASHBOARD_SCHEMA_VERSION = 1
+# v2: fine grid (24/20 columns, 4px rows). v1 prefs already stored are migrated by the frontend on load.
+DASHBOARD_SCHEMA_VERSION = 2
 MAX_PREFERENCES_BYTES = 64 * 1024
 ALLOWED_PREFERENCE_KEYS = frozenset({"dashboard"})
 ALLOWED_DASHBOARD_KEYS = frozenset({"v", "layouts", "hidden", "kpiVisible"})
