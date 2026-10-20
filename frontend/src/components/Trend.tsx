@@ -1,20 +1,10 @@
 // Minimal dependency-free dual-axis line chart for the 30-day snapshot trend.
 // Left axis = active hosts, right axis = open ports; hover (or arrow keys) shows a day's values.
 import { useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { fmtTick, niceMax } from '../chartAxis';
 import { Empty } from './ui';
 
 interface Point { date: string; hosts_active: number; open_ports: number }
-
-// Smallest "round" value >= v so the 0 / half / max ticks read cleanly (568 → 600, 4891 → 5000).
-function niceMax(v: number) {
-  if (v <= 2) return 2;
-  const mag = 10 ** Math.floor(Math.log10(v));
-  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * mag >= v) return m * mag;
-  return 10 * mag;
-}
-
-const fmt = (v: number) =>
-  v >= 1000 ? `${+(v / 1000).toFixed(1)}k` : `${+v.toFixed(1)}`;
 
 export function Trend({ points }: { points: Point[] }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -71,8 +61,8 @@ export function Trend({ points }: { points: Point[] }) {
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
             <line x1={L} x2={W - R} y1={T + plotH * f} y2={T + plotH * f} stroke="var(--border)" />
-            <text className="ax-h" x={L - 6} y={T + plotH * f + 3} textAnchor="end">{fmt(maxH * (1 - f))}</text>
-            <text className="ax-p" x={W - R + 6} y={T + plotH * f + 3}>{fmt(maxP * (1 - f))}</text>
+            <text className="ax-h" x={L - 6} y={T + plotH * f + 3} textAnchor="end">{fmtTick(maxH * (1 - f))}</text>
+            <text className="ax-p" x={W - R + 6} y={T + plotH * f + 3}>{fmtTick(maxP * (1 - f))}</text>
           </g>
         ))}
         {xTicks.map((ms, k) => (

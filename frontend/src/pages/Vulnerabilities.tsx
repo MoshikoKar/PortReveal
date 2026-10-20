@@ -156,14 +156,14 @@ export default function Vulnerabilities() {
       )}
       {!data ? (!error && <Loading />) : (
         <>
-          {/* Same toggle affordance as the KPI row (.kpi.active + aria-pressed); full width as the most urgent figure. */}
-          <Kpi label="Actively exploited (CISA KEV)"
-            value={<span style={{ color: data.kev_count > 0 ? 'var(--high)' : undefined }}>{data.kev_count}</span>}
-            sub="Known to be exploited in the wild - the most urgent findings on this network."
-            color={data.kev_count > 0 ? 'var(--high)' : undefined}
-            active={filters.kev === 'true'} onClick={() => toggle('kev', 'true')} />
-
-          <div className="grid kpis">
+          {/* Five columns: KEV + severities on the first row, the remaining figures on the second. */}
+          <div className="grid kpis five">
+            {/* First tile as the most urgent figure; value tinted red when any KEV findings exist. */}
+            <Kpi label="Actively exploited (CISA KEV)"
+              value={<span style={{ color: data.kev_count > 0 ? 'var(--high)' : undefined }}>{data.kev_count}</span>}
+              sub="Known to be exploited in the wild - the most urgent findings."
+              color={data.kev_count > 0 ? 'var(--high)' : undefined}
+              active={filters.kev === 'true'} onClick={() => toggle('kev', 'true')} />
             <Kpi label="Critical" value={severity.critical} color={SEVERITY_COLOR.critical}
               active={filters.severity === 'critical'} onClick={() => toggle('severity', 'critical')} />
             <Kpi label="High" value={severity.high} color={SEVERITY_COLOR.high}
@@ -189,27 +189,24 @@ export default function Vulnerabilities() {
               active={filters.state === 'potential'} onClick={() => toggle('state', 'potential')} />
           </div>
 
-          <Card title="Vulnerability feed">
+          {/* One status line rather than a card: the API only exposes the oldest/newest enabled-source sync. */}
+          <div className="row wrap gap-2 small muted">
+            <span>
+              Vulnerability feed - oldest enabled-source sync{' '}
+              {data.feed.oldest_synced_at
+                ? <>{fmtTime(data.feed.oldest_synced_at)} ({relTime(data.feed.oldest_synced_at)})</>
+                : 'never'}
+              {' · '}most recent{' '}
+              {data.feed.newest_synced_at
+                ? <>{fmtTime(data.feed.newest_synced_at)} ({relTime(data.feed.newest_synced_at)})</>
+                : 'never'}
+            </span>
             {data.feed.stale && (
-              <div className="badge high" style={{ marginBottom: 'var(--space-3)' }}>
+              <span className="badge high">
                 Stale - oldest enabled source hasn&apos;t synced in over {data.feed.stale_threshold_hours}h
-              </div>
+              </span>
             )}
-            <dl className="dl">
-              <dt>Oldest enabled-source sync</dt>
-              <dd>
-                {data.feed.oldest_synced_at
-                  ? <>{fmtTime(data.feed.oldest_synced_at)} <span className="muted">({relTime(data.feed.oldest_synced_at)})</span></>
-                  : <span className="muted">never synced</span>}
-              </dd>
-              <dt>Most recent enabled-source sync</dt>
-              <dd>
-                {data.feed.newest_synced_at
-                  ? <>{fmtTime(data.feed.newest_synced_at)} <span className="muted">({relTime(data.feed.newest_synced_at)})</span></>
-                  : <span className="muted">never synced</span>}
-              </dd>
-            </dl>
-          </Card>
+          </div>
 
           <div className="grid three">
             <Card title="New vs. resolved vs. dismissed (weekly)">
