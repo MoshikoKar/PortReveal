@@ -132,7 +132,9 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
     """Customize → resize a card → Save → reload → layout still applied."""
     from playwright.sync_api import expect
 
-    page = browser.new_page(viewport={"width": 1400, "height": 900})
+    # 1600px so the grid content width stays at the lg breakpoint (≥1200); 1400 leaves
+    # ~1118px of grid and saves into layouts.md after breakpointFor landed.
+    page = browser.new_page(viewport={"width": 1600, "height": 900})
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
@@ -147,6 +149,9 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
         expect(card).to_be_visible()
         handle = card.locator(".react-resizable-handle-se")
         expect(handle).to_be_visible()
+        # Edit bar / tall cards can push the SE handle below the viewport; mouse.drag needs
+        # on-screen coordinates even when Playwright still considers the handle "visible".
+        handle.scroll_into_view_if_needed()
         box = handle.bounding_box()
         assert box is not None
         page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
@@ -155,6 +160,8 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
         page.mouse.move(box["x"] + 180, box["y"] + 220, steps=12)
         page.mouse.up()
 
+        # Dirty tracking: Save appears only after a real resize.
+        expect(page.get_by_role("button", name="Save layout")).to_be_visible(timeout=5_000)
         page.get_by_role("button", name="Save layout").click()
         expect(page.get_by_text("Layout saved", exact=True)).to_be_visible(timeout=10_000)
 
