@@ -1,4 +1,5 @@
 """Observability: request ids, liveness, structured log fields, safe diagnostics and enrichment signals."""
+
 from __future__ import annotations
 
 import json
@@ -42,7 +43,7 @@ def test_request_id_is_generated_and_echoed(client):
     assert client.get("/api/nosuch", headers={"X-Request-Id": "ui-err"}).headers["X-Request-Id"] == "ui-err"
 
 
-@pytest.mark.parametrize("bad", ["has space", "x" * 65, "line\nbreak", "quote\"", ""])
+@pytest.mark.parametrize("bad", ["has space", "x" * 65, "line\nbreak", 'quote"', ""])
 def test_unsafe_client_request_ids_are_replaced(bad):
     rid = request_id_from(bad)
     assert rid != bad and len(rid) == 32
@@ -171,16 +172,19 @@ def test_image_soft_fail_is_counted(db):
 
 
 # --- admin diagnostics return classified messages --------------------------------------------------------
-@pytest.mark.parametrize("exc,expected", [
-    (SmtpConfigError("No recipients configured"), "No recipients configured"),
-    (smtplib.SMTPAuthenticationError(535, b"5.7.8 bad credentials for alice@corp.example"), "authentication failed"),
-    (smtplib.SMTPRecipientsRefused({"ops@corp.example": (550, b"no such user")}), "refused the recipient"),
-    (ssl.SSLCertVerificationError("certificate verify failed: mail.corp.example"), "TLS"),
-    (TimeoutError("timed out"), "timed out"),
-    (ConnectionRefusedError(10061, "refused"), "refused the connection"),
-    (OSError("network unreachable"), "could not connect"),
-    (ValueError("internal detail"), "unexpected error"),
-])
+@pytest.mark.parametrize(
+    "exc,expected",
+    [
+        (SmtpConfigError("No recipients configured"), "No recipients configured"),
+        (smtplib.SMTPAuthenticationError(535, b"5.7.8 bad credentials for alice@corp.example"), "authentication failed"),
+        (smtplib.SMTPRecipientsRefused({"ops@corp.example": (550, b"no such user")}), "refused the recipient"),
+        (ssl.SSLCertVerificationError("certificate verify failed: mail.corp.example"), "TLS"),
+        (TimeoutError("timed out"), "timed out"),
+        (ConnectionRefusedError(10061, "refused"), "refused the connection"),
+        (OSError("network unreachable"), "could not connect"),
+        (ValueError("internal detail"), "unexpected error"),
+    ],
+)
 def test_smtp_failures_are_classified(exc, expected):
     reason = smtp_failure_reason(exc)
     assert expected in reason
@@ -201,8 +205,12 @@ def test_smtp_test_endpoint_hides_raw_error_from_ui_and_audit(client, monkeypatc
     message = "Sending failed: authentication failed (check username and password)."
     assert r.json() == {"code": "smtp_send_failed", "message": message, "detail": message}
     entry = client.get("/api/audit", params={"q": "smtp_test"}).json()["items"][0]
-    assert json.loads(entry["details"]) == {"ok": False, "error": "authentication failed (check username and password)",
-                                "error_type": "SMTPAuthenticationError"}
+    assert json.loads(entry["details"]) == {
+        "ok": False,
+        "error": "authentication failed (check username and password)",
+        "error_type": "SMTPAuthenticationError",
+        "persisted": False,
+    }
     assert "corp.example" not in json.dumps(entry)
 
 
@@ -227,8 +235,9 @@ def test_scan_crash_stores_a_safe_error(client, monkeypatch, caplog):
 
     h = admin(client)
     net = client.post("/api/networks", json={"name": "Lab", "cidr": "10.99.0.0/24"}, headers=h).json()
-    scan_id = client.post("/api/scans", json={"scan_type": "standard", "network_ids": [net["id"]]},
-                          headers=h).json()["scans"][0]["id"]
+    scan_id = client.post("/api/scans", json={"scan_type": "standard", "network_ids": [net["id"]]}, headers=h).json()["scans"][0][
+        "id"
+    ]
 
     def crash(*_a, **_k):
         raise RuntimeError(SECRET_DETAIL)
@@ -270,25 +279,27 @@ def test_webhook_failures_are_warned_and_counted(db, monkeypatch, caplog):
     from app.core import webhooks
     from app.models import Event, WebhookEndpoint
 
-    db.add_all([
-        WebhookEndpoint(name="down", url="https://siem.example.test/hook?token=s3cr3t", enabled=True),
-        WebhookEndpoint(name="error", url="https://error.example.test/hook", enabled=True),
-        WebhookEndpoint(name="ok", url="https://ok.example.test/hook", enabled=True),
-    ])
-    event = Event(event_type="port_opened", severity="medium", ip="192.0.2.5", port=22, protocol="tcp",
-                  message="port opened")
+    db.add_all(
+        [
+            WebhookEndpoint(name="down", url="https://siem.example.test/hook?token=s3cr3t", enabled=True),
+            WebhookEndpoint(name="error", url="https://error.example.test/hook", enabled=True),
+            WebhookEndpoint(name="ok", url="https://ok.example.test/hook", enabled=True),
+        ]
+    )
+    event = Event(event_type="port_opened", severity="medium", ip="192.0.2.5", port=22, protocol="tcp", message="port opened")
     db.add(event)
     db.flush()
 
-    def post(url, **_k):
+    def post(url, body, headers, *, deadline=8.0):
         if "siem" in url:
             raise httpx.ConnectError("connection refused to siem.example.test?token=s3cr3t")
-        return httpx.Response(503 if "error" in url else 204)
+        return 503 if "error" in url else 204
 
-    monkeypatch.setattr(webhooks.httpx, "post", post)
+    monkeypatch.setattr(webhooks, "_http_post", post)
     metrics.reset()
+    db.commit()  # durable event + hooks before deliver_event_ids opens its own sessions
     with caplog.at_level(logging.WARNING, logger="app.core.webhooks"):
-        webhooks.deliver_event(db, event)
+        webhooks.deliver_event_ids([event.id])
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 2
     assert any("siem.example.test" in w and "ConnectError" in w for w in warnings)

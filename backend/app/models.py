@@ -1,4 +1,5 @@
 """Database schema (one logical schema for SQLite and PostgreSQL)."""
+
 from __future__ import annotations
 
 import uuid as uuidlib
@@ -29,8 +30,8 @@ ROLE_VIEWER = "viewer"
 ROLES = (ROLE_ADMIN, ROLE_VIEWER)
 USER_SOURCES = ("local", "ldap")
 
-DEVICE_ACTIVE = "active"            # seen in the latest scan that covered it
-DEVICE_UNKNOWN = "unknown"          # missed by a scan, not yet confirmed gone
+DEVICE_ACTIVE = "active"  # seen in the latest scan that covered it
+DEVICE_UNKNOWN = "unknown"  # missed by a scan, not yet confirmed gone
 DEVICE_NOT_DETECTED = "not_detected"  # missed by N consecutive complete scans
 DEVICE_STATUSES = (DEVICE_ACTIVE, DEVICE_UNKNOWN, DEVICE_NOT_DETECTED)
 
@@ -57,7 +58,7 @@ SCAN_TYPES = (SCAN_DISCOVERY, SCAN_STANDARD, SCAN_FULL)
 
 TRIGGER_MANUAL = "manual"
 TRIGGER_SCHEDULED = "scheduled"  # night inventory schedule
-TRIGGER_PRESENCE = "presence"    # daytime discovery-only presence schedule
+TRIGGER_PRESENCE = "presence"  # daytime discovery-only presence schedule
 SCAN_TRIGGERS = (TRIGGER_MANUAL, TRIGGER_SCHEDULED, TRIGGER_PRESENCE)
 
 EV_DEVICE_DISCOVERED = "device_discovered"
@@ -148,7 +149,7 @@ VULN_STATE_POTENTIAL = "potential"
 VULN_STATE_DISMISSED = "dismissed"
 VULN_STATES = (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL, VULN_STATE_DISMISSED)
 
-VULN_SOURCE_CACHE = "cache"        # local NVD/KEV/EPSS cache match (core/vuln/match.py)
+VULN_SOURCE_CACHE = "cache"  # local NVD/KEV/EPSS cache match (core/vuln/match.py)
 VULN_SOURCE_NMAP_SCRIPT = "nmap_script"  # phase 4: SCRIPT_ALLOWLIST finding (e.g. smb-vuln-ms17-010)
 VULN_SOURCES = (VULN_SOURCE_CACHE, VULN_SOURCE_NMAP_SCRIPT)
 
@@ -161,7 +162,12 @@ VULN_JOB_FAILED = "failed"
 VULN_JOB_CANCELLED = "cancelled"
 VULN_JOB_ACTIVE_STATES = (VULN_JOB_QUEUED, VULN_JOB_RUNNING)
 VULN_JOB_STATUSES = (
-    VULN_JOB_QUEUED, VULN_JOB_RUNNING, VULN_JOB_COMPLETED, VULN_JOB_PARTIAL, VULN_JOB_FAILED, VULN_JOB_CANCELLED,
+    VULN_JOB_QUEUED,
+    VULN_JOB_RUNNING,
+    VULN_JOB_COMPLETED,
+    VULN_JOB_PARTIAL,
+    VULN_JOB_FAILED,
+    VULN_JOB_CANCELLED,
 )
 VULN_JOB_TRIGGER_AFTER_SCAN = "after_scan"
 VULN_JOB_TRIGGER_MANUAL = "manual"
@@ -379,12 +385,8 @@ class Device(Base):
     ips: Mapped[list[DeviceIP]] = relationship(
         back_populates="device", cascade="all, delete-orphan", order_by="DeviceIP.last_seen.desc()"
     )
-    tags: Mapped[list[DeviceTag]] = relationship(
-        back_populates="device", cascade="all, delete-orphan", order_by="DeviceTag.tag"
-    )
-    profile: Mapped[DeviceProfile | None] = relationship(
-        back_populates="device", cascade="all, delete-orphan", uselist=False
-    )
+    tags: Mapped[list[DeviceTag]] = relationship(back_populates="device", cascade="all, delete-orphan", order_by="DeviceTag.tag")
+    profile: Mapped[DeviceProfile | None] = relationship(back_populates="device", cascade="all, delete-orphan", uselist=False)
     network: Mapped[Network | None] = relationship()
 
 
@@ -436,14 +438,12 @@ class DevicePort(Base):
     opened_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     device: Mapped[Device] = relationship(back_populates="ports")
-    http: Mapped[PortHttp | None] = relationship(cascade="all, delete-orphan", uselist=False,
-                                                 back_populates="port_row")
-    tls: Mapped[PortTls | None] = relationship(cascade="all, delete-orphan", uselist=False,
-                                               back_populates="port_row")
-    snmp: Mapped[PortSnmp | None] = relationship(cascade="all, delete-orphan", uselist=False,
-                                                 back_populates="port_row")
+    http: Mapped[PortHttp | None] = relationship(cascade="all, delete-orphan", uselist=False, back_populates="port_row")
+    tls: Mapped[PortTls | None] = relationship(cascade="all, delete-orphan", uselist=False, back_populates="port_row")
+    snmp: Mapped[PortSnmp | None] = relationship(cascade="all, delete-orphan", uselist=False, back_populates="port_row")
     banners: Mapped[list[ServiceBanner]] = relationship(
-        cascade="all, delete-orphan", order_by="ServiceBanner.seen_at.desc()",
+        cascade="all, delete-orphan",
+        order_by="ServiceBanner.seen_at.desc()",
     )
     cpes: Mapped[list[PortCpe]] = relationship(cascade="all, delete-orphan")
 
@@ -712,7 +712,11 @@ class CveWatchlistAlert(Base):
     __tablename__ = "cve_watchlist_alerts"
     __table_args__ = (
         UniqueConstraint(
-            "watch_id", "cve_id", "device_uuid", "port", "protocol",
+            "watch_id",
+            "cve_id",
+            "device_uuid",
+            "port",
+            "protocol",
             name="uq_cve_watchlist_alert_hit",
         ),
     )
@@ -746,7 +750,12 @@ class PortSnmp(Base):
 
 
 class WebhookEndpoint(Base):
-    """Outbound event webhook (SIEM / automation)."""
+    """Outbound event webhook (SIEM / automation).
+
+    By default only events with ``notify=True`` (alert mode) are delivered. Set
+    ``include_record_events`` to also receive ``notify=False`` (record) events that match
+    the hook's event-type filter. Silent network modes never create Event rows.
+    """
 
     __tablename__ = "webhook_endpoints"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -755,6 +764,8 @@ class WebhookEndpoint(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     secret_enc: Mapped[str | None] = mapped_column(String(500))
     event_types: Mapped[list | None] = mapped_column(JSON)  # None / empty = all
+    # When False (default), skip events with notify=False — same safety as the email digest.
+    include_record_events: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_error: Mapped[str | None] = mapped_column(Text)
@@ -981,9 +992,7 @@ class WebCapture(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     mock_mode: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    pages: Mapped[list[WebPage]] = relationship(
-        back_populates="capture", cascade="all, delete-orphan", order_by="WebPage.id"
-    )
+    pages: Mapped[list[WebPage]] = relationship(back_populates="capture", cascade="all, delete-orphan", order_by="WebPage.id")
 
 
 class WebPage(Base):

@@ -597,10 +597,37 @@ export interface NotificationSettings {
   event_types: EventType[];
   digest_time: string;
   available_event_types: EventType[];
+  /** Event types always included in the daily digest (locked in the Email tab). */
+  always_notify_types: EventType[];
+  /** Master switch for outbound webhooks (all sources). In-app events are always on. */
+  webhooks_enabled: boolean;
   /** Immediate email when a watched CVE is found (does not wait for the daily digest). */
   watchlist_email_enabled: boolean;
   /** Deliver cve_watch_match through configured webhooks. */
   watchlist_webhooks_enabled: boolean;
+}
+
+export interface WebhookEndpoint {
+  id: number;
+  name: string;
+  url: string;
+  enabled: boolean;
+  has_secret: boolean;
+  event_types: EventType[];
+  include_record_events: boolean;
+  created_at: string;
+  last_success_at: string | null;
+  last_error: string | null;
+  /** Present only immediately after create or rotate; never stored client-side after dismiss. */
+  secret?: string;
+}
+
+export interface WebhookTestResult {
+  ok: boolean;
+  status_code: number | null;
+  error: string | null;
+  latency_ms: number;
+  host: string;
 }
 
 export type CveWatchlistStatus = 'pending' | 'not_found' | 'found' | 'only_dismissed';

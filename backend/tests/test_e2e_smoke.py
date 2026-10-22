@@ -698,3 +698,77 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
     finally:
         page.close()
     assert errors == []
+
+
+def test_notifications_tabs_and_webhook_crud(live_app, browser):
+    """Open each Notifications inner tab; add, test, edit, and delete a webhook."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from playwright.sync_api import expect
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    httpd = HTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    hook_url = f"http://127.0.0.1:{port}/hook"
+
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        page.get_by_role("link", name="Settings", exact=True).click()
+        page.get_by_role("navigation").get_by_role("link", name="Notifications", exact=True).click()
+        expect(page).to_have_url(f"{base}/settings/notifications/general", timeout=15_000)
+        expect(page.get_by_role("heading", name="Channels")).to_be_visible()
+
+        nav = page.get_by_role("navigation", name="Notification settings")
+        for link_name, section, heading in (
+            ("Email", "email", "Email digest"),
+            ("Webhooks", "webhooks", "Webhooks"),
+            ("CVE Watchlist", "cve-watchlist", "CVE watchlist alerts"),
+        ):
+            nav.get_by_role("link", name=link_name, exact=True).click()
+            expect(page).to_have_url(f"{base}/settings/notifications/{section}")
+            expect(page.get_by_role("heading", name=heading)).to_be_visible(timeout=10_000)
+
+        # Back to Webhooks for CRUD
+        nav.get_by_role("link", name="Webhooks", exact=True).click()
+        page.get_by_role("button", name="Add webhook").click()
+        page.get_by_label("Name", exact=True).fill("e2e-hook")
+        page.get_by_label("URL", exact=True).fill(hook_url)
+        page.get_by_role("button", name="Save").click()
+        expect(page.get_by_text("e2e-hook", exact=True)).to_be_visible(timeout=10_000)
+        # Secret reveal banner (generated on create)
+        expect(page.get_by_text("Copy it now", exact=False)).to_be_visible(timeout=5_000)
+        page.get_by_role("button", name="Done").click()
+
+        page.get_by_role("button", name="Send test").click()
+        expect(page.get_by_text("Test: OK", exact=False)).to_be_visible(timeout=10_000)
+
+        page.get_by_role("button", name="Edit").click()
+        page.get_by_label("Name", exact=True).fill("e2e-hook-renamed")
+        page.get_by_role("button", name="Save").click()
+        expect(page.get_by_text("e2e-hook-renamed", exact=True)).to_be_visible(timeout=10_000)
+
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.get_by_role("button", name="Delete").click()
+        expect(page.get_by_text("No webhooks yet.")).to_be_visible(timeout=10_000)
+    finally:
+        page.close()
+        httpd.shutdown()
+    assert errors == []

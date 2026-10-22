@@ -525,6 +525,26 @@ described in [`docs/api/conventions.md`](docs/api/conventions.md). Every respons
 an `X-Request-Id` header, which also appears in JSON logs (`LOG_FORMAT=json`, recommended
 for production).
 
+### Outbound webhooks
+
+Configure endpoints under **Settings → Notifications → Webhooks**. Delivery runs on a
+background dispatcher with a small per-hook pool (scan / scheduler threads are never blocked;
+one stuck endpoint does not delay others). Each POST is signed with `X-NF-Signature`
+(HMAC-SHA256 hex of the raw body) when a secret is set, and is subject to an **8s whole-request
+wall-clock deadline** (connect up to ~3s; the remainder may be spent on the response).
+
+**Payload shapes**
+
+| Case | Body |
+|---|---|
+| Single event | One event object: `{id, type, severity, ip, port, protocol, message, created_at, old_value, new_value, notify, ...}` |
+| Multiple events | Batch envelope (≤50 events per POST; larger deliveries are split): `{"batch": true, "count": N, "events": [...]}` |
+| CVE watchlist | Same batch envelope with `"matches"` instead of `"events"`, plus `"type": "cve_watch_match"` (see Settings → CVE Watchlist) |
+| Send test | `{"id": 0, "type": "webhook_test", "test": true, ...}` |
+
+By default only alert events (`notify=true`) are delivered; enable **Include record events**
+on an endpoint to also receive `notify=false` rows. The General tab master switch must be on.
+
 ### Behaviour notes
 
 **Scan profiles** (fixed argument lists):

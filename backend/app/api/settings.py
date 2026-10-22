@@ -1,4 +1,5 @@
 """Centralized runtime settings (admin only). Secrets are write-only."""
+
 from __future__ import annotations
 
 import logging
@@ -15,7 +16,15 @@ from ..core.notify import format_sample_digest, send_email, smtp_failure_reason
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
 from ..db import get_db
-from ..models import EV_CVE_WATCH_MATCH, EVENT_TYPES, GeoFeedState, User, Vulnerability, VulnFeedState
+from ..models import (
+    ALWAYS_NOTIFY_TYPES,
+    EV_CVE_WATCH_MATCH,
+    EVENT_TYPES,
+    GeoFeedState,
+    User,
+    Vulnerability,
+    VulnFeedState,
+)
 from ..security import encrypt_secret
 from ..settings_store import (
     CdnAsnEntry,
@@ -54,8 +63,7 @@ def get_schedule(db: Session = Depends(get_db), user: User = Depends(require_adm
 
 
 @router.put("/schedule")
-def put_schedule(body: ScheduleSettings, request: Request, db: Session = Depends(get_db),
-                 user: User = Depends(require_admin)):
+def put_schedule(body: ScheduleSettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     put_section(db, body)
     audit(db, user.username, "settings.schedule", None, body.model_dump(), _ip(request))
     db.commit()
@@ -74,8 +82,7 @@ def get_presence(db: Session = Depends(get_db), user: User = Depends(require_adm
 
 
 @router.put("/presence")
-def put_presence(body: PresenceSettings, request: Request, db: Session = Depends(get_db),
-                 user: User = Depends(require_admin)):
+def put_presence(body: PresenceSettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     put_section(db, body)
     audit(db, user.username, "settings.presence", None, body.model_dump(), _ip(request))
     db.commit()
@@ -89,8 +96,7 @@ def get_scan_settings(db: Session = Depends(get_db), user: User = Depends(requir
 
 
 @router.put("/scan")
-def put_scan_settings(body: ScanSettings, request: Request, db: Session = Depends(get_db),
-                      user: User = Depends(require_admin)):
+def put_scan_settings(body: ScanSettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     put_section(db, body)
     audit(db, user.username, "settings.scan_profile", None, body.model_dump(), _ip(request))
     db.commit()
@@ -104,8 +110,9 @@ def get_web_capture_settings(db: Session = Depends(get_db), user: User = Depends
 
 
 @router.put("/web-capture")
-def put_web_capture_settings(body: WebCaptureSettings, request: Request, db: Session = Depends(get_db),
-                             user: User = Depends(require_admin)):
+def put_web_capture_settings(
+    body: WebCaptureSettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)
+):
     put_section(db, body)
     audit(db, user.username, "settings.web_capture", None, body.model_dump(), _ip(request))
     db.commit()
@@ -138,8 +145,7 @@ class VulnIn(BaseModel):
 
 
 @router.put("/vuln")
-def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_db),
-                      user: User = Depends(require_admin)):
+def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     current = get_section(db, VulnSettings)
     data = body.model_dump(exclude={"nvd_api_key"})
     data["nvd_api_key_enc"] = encrypt_secret(body.nvd_api_key) if body.nvd_api_key is not None else current.nvd_api_key_enc
@@ -151,13 +157,20 @@ def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_
     # Display-floor / potential settings change which findings the summary counts — bust cache now
     # so /api/vulns/summary does not lag the list for up to the 30s TTL.
     from ..core.vuln.summary import invalidate_vuln_summary_cache
+
     invalidate_vuln_summary_cache()
-    audit(db, user.username, "settings.vuln", None,
-          {k: v for k, v in data.items() if k != "nvd_api_key_enc"} | {"api_key_changed": body.nvd_api_key is not None},
-          _ip(request))
+    audit(
+        db,
+        user.username,
+        "settings.vuln",
+        None,
+        {k: v for k, v in data.items() if k != "nvd_api_key_enc"} | {"api_key_changed": body.nvd_api_key is not None},
+        _ip(request),
+    )
     db.commit()
     if cfg.enabled and not cfg.offline_mode:
         from ..core.vuln.sync import sync_due, sync_running, trigger_background_sync
+
         if sync_due(db, cfg) and not sync_running():
             trigger_background_sync(cfg)
     return vuln_out(cfg)
@@ -174,11 +187,16 @@ def vuln_feed_status(db: Session = Depends(get_db), user: User = Depends(require
 
     feed_rows = db.scalars(select(VulnFeedState).order_by(VulnFeedState.source)).all()
     feeds = [
-        {"source": f.source, "last_synced_at": f.last_synced_at, "record_count": f.record_count or 0,
-         "last_error": f.last_error,
-         "mirror_complete": f.mirror_complete if f.source == "nvd" else None,
-         "mirror_next_year": (f.mirror_next_year or NVD_MIRROR_START_YEAR)
-         if f.source == "nvd" and not f.mirror_complete else None}
+        {
+            "source": f.source,
+            "last_synced_at": f.last_synced_at,
+            "record_count": f.record_count or 0,
+            "last_error": f.last_error,
+            "mirror_complete": f.mirror_complete if f.source == "nvd" else None,
+            "mirror_next_year": (f.mirror_next_year or NVD_MIRROR_START_YEAR)
+            if f.source == "nvd" and not f.mirror_complete
+            else None,
+        }
         for f in feed_rows
     ]
     # Heartbeat-aware: a browser refresh must not flip the badge to "idle" while ingest is active.
@@ -226,8 +244,9 @@ def get_discovery_settings(db: Session = Depends(get_db), user: User = Depends(r
 
 
 @router.put("/discovery")
-def put_discovery_settings(body: DiscoverySettings, request: Request, db: Session = Depends(get_db),
-                           user: User = Depends(require_admin)):
+def put_discovery_settings(
+    body: DiscoverySettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)
+):
     put_section(db, body)
     audit(db, user.username, "settings.discovery", None, body.model_dump(), _ip(request))
     db.commit()
@@ -245,9 +264,9 @@ def _geo_out(cfg: GeoSettings, db: Session) -> dict:
         maxmind_country_path,
         sync_running,
     )
+
     feeds = [
-        {"source": f.source, "last_synced_at": f.last_synced_at, "file_month": f.file_month,
-         "last_error": f.last_error}
+        {"source": f.source, "last_synced_at": f.last_synced_at, "file_month": f.file_month, "last_error": f.last_error}
         for f in db.scalars(select(GeoFeedState).order_by(GeoFeedState.source)).all()
     ]
     mm = maxmind_country_path(cfg)
@@ -278,8 +297,7 @@ class GeoIn(BaseModel):
 
 
 @router.put("/geo")
-def put_geo_settings(body: GeoIn, request: Request, db: Session = Depends(get_db),
-                     user: User = Depends(require_admin)):
+def put_geo_settings(body: GeoIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     try:
         cfg = GeoSettings.model_validate(body.model_dump())
     except ValueError as exc:
@@ -307,17 +325,23 @@ def sync_geo_now(request: Request, db: Session = Depends(get_db), user: User = D
 
 # --- notifications --------------------------------------------------------------
 class NotificationIn(BaseModel):
-    enabled: bool = False
-    smtp_host: str = Field("", max_length=255)
-    smtp_port: int = Field(25, ge=1, le=65535)
-    security: str = Field("none", pattern="^(none|starttls|ssl)$")
-    username: str = Field("", max_length=255)
+    """Partial update: omitted (null) fields keep their stored values.
+
+    The Setup wizard and per-tab Settings forms may send only the fields they edit.
+    Full bodies from older clients remain valid.
+    """
+
+    enabled: bool | None = None
+    smtp_host: str | None = Field(None, max_length=255)
+    smtp_port: int | None = Field(None, ge=1, le=65535)
+    security: str | None = Field(None, pattern="^(none|starttls|ssl)$")
+    username: str | None = Field(None, max_length=255)
     password: str | None = Field(None, max_length=1024, description="omit to keep the stored password")
-    sender: str = Field("network-monitor@localhost", max_length=255)
-    recipients: list[str] = Field(default_factory=list, max_length=100)
-    event_types: list[str] = Field(default_factory=list)
-    digest_time: str = Field("08:00", max_length=5)
-    # Optional: omit (null) to preserve the stored watchlist delivery toggles on partial updates.
+    sender: str | None = Field(None, max_length=255)
+    recipients: list[str] | None = Field(None, max_length=100)
+    event_types: list[str] | None = None
+    digest_time: str | None = Field(None, max_length=5)
+    webhooks_enabled: bool | None = None
     watchlist_email_enabled: bool | None = None
     watchlist_webhooks_enabled: bool | None = None
 
@@ -325,9 +349,10 @@ class NotificationIn(BaseModel):
 def notifications_out(cfg: NotificationSettings) -> dict:
     data = cfg.model_dump(exclude={"password_enc"})
     data["password_set"] = bool(cfg.password_enc)
-    # Digest "Notify on" checkboxes: CVE watchlist is always included via ALWAYS_NOTIFY_TYPES and
-    # has its own delivery toggles — omit it from the generic event-type list.
+    # Digest "Notify on" checkboxes: ALWAYS_NOTIFY_TYPES are always included in the digest
+    # (locked in the UI). CVE watchlist also has its own delivery toggles — omit it here.
     data["available_event_types"] = [t for t in EVENT_TYPES if t != EV_CVE_WATCH_MATCH]
+    data["always_notify_types"] = list(ALWAYS_NOTIFY_TYPES)
     return data
 
 
@@ -337,15 +362,16 @@ def get_notifications(db: Session = Depends(get_db), user: User = Depends(requir
 
 
 @router.put("/notifications")
-def put_notifications(body: NotificationIn, request: Request, db: Session = Depends(get_db),
-                      user: User = Depends(require_admin)):
+def put_notifications(body: NotificationIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     current = get_section(db, NotificationSettings)
-    data = body.model_dump(exclude={"password"})
-    data["password_enc"] = encrypt_secret(body.password) if body.password is not None else current.password_enc
-    if body.watchlist_email_enabled is None:
-        data["watchlist_email_enabled"] = current.watchlist_email_enabled
-    if body.watchlist_webhooks_enabled is None:
-        data["watchlist_webhooks_enabled"] = current.watchlist_webhooks_enabled
+    data = current.model_dump()
+    patch = body.model_dump(exclude={"password"}, exclude_unset=False)
+    for key, value in patch.items():
+        if value is not None:
+            data[key] = value
+    # password is write-only: omit keeps stored; empty string clears.
+    if body.password is not None:
+        data["password_enc"] = encrypt_secret(body.password)
     try:
         cfg = NotificationSettings.model_validate(data)
     except ValueError as exc:
@@ -353,35 +379,81 @@ def put_notifications(body: NotificationIn, request: Request, db: Session = Depe
     if cfg.enabled and (not cfg.smtp_host or not cfg.recipients):
         raise HTTPException(422, "SMTP host and at least one recipient are required to enable notifications")
     put_section(db, cfg)
-    audit(db, user.username, "settings.smtp", cfg.smtp_host,
-          {k: v for k, v in data.items() if k != "password_enc"} | {"password_changed": body.password is not None},
-          _ip(request))
+    audit(
+        db,
+        user.username,
+        "settings.smtp",
+        cfg.smtp_host,
+        {k: v for k, v in data.items() if k != "password_enc"} | {"password_changed": body.password is not None},
+        _ip(request),
+    )
     db.commit()
     return notifications_out(cfg)
 
 
 class TestEmailIn(BaseModel):
+    """Test SMTP using on-screen values without persisting. Omitted fields use stored settings.
+
+    ``password`` omitted → use the stored password; empty string clears auth for this test only.
+    """
+
     recipient: str | None = Field(None, max_length=255)
+    smtp_host: str | None = Field(None, max_length=255)
+    smtp_port: int | None = Field(None, ge=1, le=65535)
+    security: str | None = Field(None, pattern="^(none|starttls|ssl)$")
+    username: str | None = Field(None, max_length=255)
+    password: str | None = Field(None, max_length=1024)
+    sender: str | None = Field(None, max_length=255)
+    recipients: list[str] | None = Field(None, max_length=100)
 
 
 @router.post("/notifications/test")
-def test_notifications(body: TestEmailIn, request: Request, db: Session = Depends(get_db),
-                       user: User = Depends(require_admin)):
-    cfg = get_section(db, NotificationSettings)
-    if body.recipient:
-        cfg = cfg.model_copy(update={"recipients": [body.recipient.strip()]})
-    db.commit()  # end the read transaction: no DB connection is held during SMTP I/O (up to the 20 s timeout)
+def test_notifications(body: TestEmailIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    current = get_section(db, NotificationSettings)
+    updates: dict = {}
+    if body.smtp_host is not None:
+        updates["smtp_host"] = body.smtp_host
+    if body.smtp_port is not None:
+        updates["smtp_port"] = body.smtp_port
+    if body.security is not None:
+        updates["security"] = body.security
+    if body.username is not None:
+        updates["username"] = body.username
+    if body.sender is not None:
+        updates["sender"] = body.sender
+    if body.recipients is not None:
+        updates["recipients"] = body.recipients
+    elif body.recipient:
+        updates["recipients"] = [body.recipient.strip()]
+    if body.password is not None:
+        updates["password_enc"] = encrypt_secret(body.password)
+    # Ensure enabled so send_email does not refuse; this does not persist.
+    updates["enabled"] = True
+    try:
+        cfg = current.model_copy(update=updates)
+        NotificationSettings.model_validate(cfg.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not cfg.smtp_host or not cfg.recipients:
+        raise HTTPException(422, "SMTP host and at least one recipient are required to send a test")
+    db.commit()  # end the read transaction: no DB connection is held during SMTP I/O
     try:
         subject, plain, html_body = format_sample_digest()
         send_email(cfg, subject, plain + f"\nSent by: {user.username}\n", html_body)
     except Exception as exc:
         reason = smtp_failure_reason(exc)
         log.warning("SMTP test via %s:%s failed (%s): %s", cfg.smtp_host, cfg.smtp_port, type(exc).__name__, exc)
-        audit(db, user.username, "settings.smtp_test", cfg.smtp_host,
-              {"ok": False, "error": reason, "error_type": type(exc).__name__}, _ip(request))
+        audit(
+            db,
+            user.username,
+            "settings.smtp_test",
+            cfg.smtp_host,
+            {"ok": False, "error": reason, "error_type": type(exc).__name__, "persisted": False},
+            _ip(request),
+        )
         db.commit()
         raise ApiError(502, f"Sending failed: {reason}.", "smtp_send_failed") from exc
-    audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": True}, _ip(request))
+    audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": True, "persisted": False}, _ip(request))
     db.commit()
     return {"ok": True, "message": f"Test email sent to {', '.join(cfg.recipients)}"}
 
@@ -429,8 +501,14 @@ def put_ldap(body: LdapIn, request: Request, db: Session = Depends(get_db), user
     if cfg.enabled and (not cfg.server_uri or not cfg.user_base_dn):
         raise HTTPException(422, "Server URI and user base DN are required to enable LDAP")
     put_section(db, cfg)
-    audit(db, user.username, "settings.ldap", cfg.server_uri,
-          ldap_out(cfg) | {"password_changed": body.bind_password is not None}, _ip(request))
+    audit(
+        db,
+        user.username,
+        "settings.ldap",
+        cfg.server_uri,
+        ldap_out(cfg) | {"password_changed": body.bind_password is not None},
+        _ip(request),
+    )
     db.commit()
     return ldap_out(cfg)
 
@@ -447,8 +525,11 @@ def test_ldap(body: LdapTestIn, request: Request, db: Session = Depends(get_db),
     result = {"ok": ok, "message": msg}
     if ok and body.test_username and body.test_password:
         res = ldap_authenticate(cfg.model_copy(update={"enabled": True}), body.test_username, body.test_password)
-        result = {"ok": res.ok, "message": f"{msg} User test: " + (
-            f"authenticated as {res.display_name}, role {res.role}." if res.ok else f"failed ({res.error}).")}
+        result = {
+            "ok": res.ok,
+            "message": f"{msg} User test: "
+            + (f"authenticated as {res.display_name}, role {res.role}." if res.ok else f"failed ({res.error})."),
+        }
     audit(db, user.username, "settings.ldap_test", cfg.server_uri, {"ok": result["ok"]}, _ip(request))
     db.commit()
     return result
@@ -461,8 +542,7 @@ def get_retention(db: Session = Depends(get_db), user: User = Depends(require_ad
 
 
 @router.put("/retention")
-def put_retention(body: RetentionSettings, request: Request, db: Session = Depends(get_db),
-                  user: User = Depends(require_admin)):
+def put_retention(body: RetentionSettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     put_section(db, body)
     audit(db, user.username, "settings.retention", None, body.model_dump(), _ip(request))
     db.commit()
