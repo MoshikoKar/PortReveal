@@ -13,6 +13,7 @@ from app.netutils import (
     NETWORK_NAME_EMPTY_MSG,
     NETWORK_NAME_MAX,
     NETWORK_NAME_MAX_MSG,
+    NETWORK_NAME_RAW_MAX,
     trim_network_name,
     validate_network_name,
 )
@@ -72,6 +73,23 @@ def test_trim_network_name_matches_js_string_trim():
     assert trim_network_name("\x85Lab\x85") == "\x85Lab\x85"
 
 
+def test_trim_network_name_is_linear_for_large_padding():
+    """Index-scan trim must stay fast on tens of thousands of leading spaces (no O(n^2) slices)."""
+    import time
+
+    padded = (" " * 80_000) + "Lab" + (" " * 80_000)
+    t0 = time.perf_counter()
+    assert trim_network_name(padded) == "Lab"
+    assert time.perf_counter() - t0 < 0.25
+
+
+def test_validate_rejects_raw_length_before_trim():
+    with pytest.raises(ValueError, match="At most"):
+        validate_network_name(" " * (NETWORK_NAME_RAW_MAX + 1))
+    with pytest.raises(ValueError, match="At most"):
+        validate_network_name("a" * (NETWORK_NAME_RAW_MAX + 1))
+
+
 def test_create_accepts_valid_name(client):
     setup_admin(client)
     h = csrf(client)
@@ -124,6 +142,17 @@ def test_create_rejects_oversized_raw_name_with_plain_422(client):
     setup_admin(client)
     h = csrf(client)
     r = client.post("/api/networks", json={"name": "x" * 1001, "cidr": "10.11.4.0/24"}, headers=h)
+    assert_plain_422(r, NETWORK_NAME_MAX_MSG)
+
+
+def test_create_rejects_raw_over_guard_with_plain_422(client):
+    setup_admin(client)
+    h = csrf(client)
+    r = client.post(
+        "/api/networks",
+        json={"name": " " * (NETWORK_NAME_RAW_MAX + 1), "cidr": "10.11.5.0/24"},
+        headers=h,
+    )
     assert_plain_422(r, NETWORK_NAME_MAX_MSG)
 
 

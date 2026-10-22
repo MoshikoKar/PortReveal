@@ -83,10 +83,10 @@ class NetworkIn(BaseModel):
     enabled: bool = True
     zone: str | None = None
     vpn_s2s: bool = False
-    expected_countries: list[str] = Field(
-        default_factory=list, description="ISO 3166-1 alpha-2 codes this network is expected to live in"
-    )
-    arp_snmp: ArpSnmpIn | None = Field(None, description="Read MACs from this gateway's ARP table over SNMP; null removes it")
+    expected_countries: list[str] = Field(default_factory=list,
+                                          description="ISO 3166-1 alpha-2 codes this network is expected to live in")
+    arp_snmp: ArpSnmpIn | None = Field(None, description="Read MACs from this gateway's ARP table over SNMP; "
+                                                         "null removes it")
 
     @field_validator("zone")
     @classmethod
@@ -99,8 +99,8 @@ class NetworkIn(BaseModel):
     @field_validator("name")
     @classmethod
     def _name(cls, v: str) -> str:
-        # Trim only here; create/rename validate charset so legacy names can stay unchanged.
-        return trim_network_name(v)
+        # Keep raw: create/update run validate_network_name (raw-length guard, then trim/charset).
+        return v
 
     @field_validator("cidr")
     @classmethod
@@ -151,17 +151,16 @@ def _audit_body(body: NetworkIn) -> dict:
 
 def _counts(db: Session):
     ok = device_visible(db, include_archived=True)
-    total = dict(db.execute(select(Device.network_id, func.count(Device.id)).where(ok).group_by(Device.network_id)).all())
-    active = dict(
-        db.execute(
-            select(Device.network_id, func.count(Device.id)).where(Device.status == DEVICE_ACTIVE, ok).group_by(Device.network_id)
-        ).all()
-    )
+    total = dict(db.execute(select(Device.network_id, func.count(Device.id)).where(ok)
+                            .group_by(Device.network_id)).all())
+    active = dict(db.execute(select(Device.network_id, func.count(Device.id)).where(Device.status == DEVICE_ACTIVE, ok)
+                             .group_by(Device.network_id)).all())
     return total, active
 
 
 @router.get("", response_model=list[Row], description=UNPAGED_LIST)
-def list_networks(include_archived: bool = False, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def list_networks(include_archived: bool = False, db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
     total, active = _counts(db)
     q = select(Network).order_by(Network.name)
     if not include_archived:
@@ -194,19 +193,13 @@ def _require_network_name(name: str) -> str:
 
 
 @router.post("", status_code=201)
-def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
     name = _require_network_name(body.name)
     _check_name(db, name)
-    net = Network(
-        name=name,
-        cidr=body.cidr,
-        description=body.description,
-        enabled=body.enabled,
-        zone=body.zone,
-        vpn_s2s=body.vpn_s2s,
-        expected_countries=body.expected_countries or None,
-        arp_snmp=_arp_snmp_stored(body.arp_snmp, None),
-    )
+    net = Network(name=name, cidr=body.cidr, description=body.description, enabled=body.enabled,
+                  zone=body.zone, vpn_s2s=body.vpn_s2s, expected_countries=body.expected_countries or None,
+                  arp_snmp=_arp_snmp_stored(body.arp_snmp, None))
     db.add(net)
     db.flush()
     audit(db, user.username, "network.create", net.name, _audit_body(body), client_ip(request))
@@ -215,26 +208,19 @@ def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_
 
 
 @router.put("/{network_id}", description=FULL_REPLACE)
-def update_network(
-    network_id: int, body: NetworkIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)
-):
+def update_network(network_id: int, body: NetworkIn, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
     net = _active_network(db, network_id)
     # Compare trimmed values: imported legacy names may have trailing spaces the form trims away.
     # Renames must pass the charset; keeping a legacy name while editing other fields must not.
-    if body.name != trim_network_name(net.name):
+    if trim_network_name(body.name) != trim_network_name(net.name):
         name = _require_network_name(body.name)
     else:
         name = net.name
     _check_name(db, name, network_id)
-    before = {
-        "name": net.name,
-        "cidr": net.cidr,
-        "enabled": net.enabled,
-        "zone": net.zone,
-        "vpn_s2s": net.vpn_s2s,
-        "expected_countries": list(net.expected_countries or []),
-        "arp_snmp_host": (net.arp_snmp or {}).get("host"),
-    }
+    before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled, "zone": net.zone,
+              "vpn_s2s": net.vpn_s2s, "expected_countries": list(net.expected_countries or []),
+              "arp_snmp_host": (net.arp_snmp or {}).get("host")}
     if net.cidr != body.cidr:
         # A different scope needs a fresh baseline, otherwise every host in the new range would alert
         net.baseline_scan_id = None
@@ -245,7 +231,8 @@ def update_network(
     net.arp_snmp = _arp_snmp_stored(body.arp_snmp, net.arp_snmp)
     zone_changed = net.zone != body.zone
     net.zone = body.zone
-    audit(db, user.username, "network.update", net.name, {"before": before, "after": _audit_body(body)}, client_ip(request))
+    audit(db, user.username, "network.update", net.name, {"before": before, "after": _audit_body(body)},
+          client_ip(request))
     if zone_changed:
         db.flush()
         refresh_devices(db, db.scalars(select(Device.id).where(Device.network_id == net.id)).all())
@@ -254,12 +241,11 @@ def update_network(
     return network_out(net, total.get(net.id, 0), active.get(net.id, 0))
 
 
-@router.post(
-    "/{network_id}/arp-snmp/test",
-    description="Reads the saved gateway's ARP table once. Returns how many usable entries it "
-    "has and how many fall inside this network; nothing is stored.",
-)
-def probe_arp_snmp(network_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+@router.post("/{network_id}/arp-snmp/test",
+             description="Reads the saved gateway's ARP table once. Returns how many usable entries it "
+                         "has and how many fall inside this network; nothing is stored.")
+def probe_arp_snmp(network_id: int, request: Request, db: Session = Depends(get_db),
+                  user: User = Depends(require_admin)):
     net = _active_network(db, network_id)
     target = target_from_config(net.arp_snmp)
     if target is None:
@@ -275,7 +261,8 @@ def probe_arp_snmp(network_id: int, request: Request, db: Session = Depends(get_
 
 
 @router.post("/{network_id}/reset-baseline")
-def reset_baseline(network_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+def reset_baseline(network_id: int, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
     net = _active_network(db, network_id)
     net.baseline_scan_id = None
     net.baseline_at = None
@@ -284,13 +271,11 @@ def reset_baseline(network_id: int, request: Request, db: Session = Depends(get_
     return {"ok": True}
 
 
-@router.delete(
-    "/{network_id}",
-    status_code=204,
-    description="Archives the network: it stops being scanned and its devices, events and "
-    "scans are kept but hidden from default views. Restore with POST .../restore.",
-)
-def delete_network(network_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+@router.delete("/{network_id}", status_code=204,
+               description="Archives the network: it stops being scanned and its devices, events and "
+                           "scans are kept but hidden from default views. Restore with POST .../restore.")
+def delete_network(network_id: int, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
     net = _active_network(db, network_id)
     audit(db, user.username, "network.archive", net.name, {"cidr": net.cidr}, client_ip(request))
     net.archived_at = utcnow()
@@ -301,7 +286,8 @@ def delete_network(network_id: int, request: Request, db: Session = Depends(get_
 
 
 @router.post("/{network_id}/restore")
-def restore_network(network_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+def restore_network(network_id: int, request: Request, db: Session = Depends(get_db),
+                    user: User = Depends(require_admin)):
     net = db.get(Network, network_id)
     if net is None:
         raise HTTPException(404, "Network not found")

@@ -7,7 +7,6 @@ Accepted target syntax (comma, semicolon, whitespace or newline separated):
     10.0.0.10-50            last-octet range
     server01.corp.local     hostname (ad-hoc scan targets only; resolved once)
 """
-
 from __future__ import annotations
 
 import bisect
@@ -19,6 +18,7 @@ from collections.abc import Iterable, Iterator
 MAX_SCAN_ADDRESSES = 65536
 MIN_NETWORK_PREFIX = 16
 NETWORK_NAME_MAX = 120
+NETWORK_NAME_RAW_MAX = 10_000  # reject before trim so huge padding cannot burn CPU
 NETWORK_NAME_EMPTY_MSG = "Name must not be empty"
 NETWORK_NAME_MAX_MSG = f"At most {NETWORK_NAME_MAX} characters"
 NETWORK_NAME_CHARS_MSG = "Use English letters, numbers, spaces and - _ . ( ) only"
@@ -32,7 +32,9 @@ _JS_TRIM_CHARS = frozenset(
     "\u2028\u2029\u202f\u205f\u3000\ufeff"
 )
 
-_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$")
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
+)
 _SPLIT_RE = re.compile(r"[\s,;]+")
 
 
@@ -41,17 +43,22 @@ class TargetError(ValueError):
 
 
 def trim_network_name(name: str) -> str:
-    """Strip the same characters as JavaScript String.prototype.trim."""
+    """Strip the same characters as JavaScript String.prototype.trim (O(n) index scan)."""
     s = name or ""
-    while s and s[0] in _JS_TRIM_CHARS:
-        s = s[1:]
-    while s and s[-1] in _JS_TRIM_CHARS:
-        s = s[:-1]
-    return s
+    n = len(s)
+    start = 0
+    while start < n and s[start] in _JS_TRIM_CHARS:
+        start += 1
+    end = n
+    while end > start and s[end - 1] in _JS_TRIM_CHARS:
+        end -= 1
+    return s[start:end]
 
 
 def validate_network_name(name: str) -> str:
     """Trim and enforce the allowed character set for creating or renaming a network."""
+    if len(name or "") > NETWORK_NAME_RAW_MAX:
+        raise ValueError(NETWORK_NAME_MAX_MSG)
     name = trim_network_name(name)
     if not name:
         raise ValueError(NETWORK_NAME_EMPTY_MSG)
@@ -217,7 +224,10 @@ class AddressSet:
     def to_cidrs(self) -> list[str]:
         out: list[str] = []
         for s, e in self._iv:
-            out.extend(str(n) for n in ipaddress.summarize_address_range(ipaddress.IPv4Address(s), ipaddress.IPv4Address(e)))
+            out.extend(
+                str(n)
+                for n in ipaddress.summarize_address_range(ipaddress.IPv4Address(s), ipaddress.IPv4Address(e))
+            )
         return out
 
     def chunks(self, size: int) -> list[list[str]]:
