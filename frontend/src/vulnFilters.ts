@@ -293,6 +293,19 @@ export function formatVulnFilterSummary(
   return parts.length ? parts.join(' · ') : 'All networks (no filters)';
 }
 
+/** Print-report filter line including search / only-hidden notes. */
+export function formatVulnPrintFilterLine(
+  filters: VulnFilters,
+  ctx: VulnFilterLabelContext = {},
+  opts: { searchQ?: string; onlyHidden?: boolean } = {},
+): string {
+  const base = formatVulnFilterSummary(filters, ctx);
+  const searchQ = opts.searchQ?.trim();
+  if (!searchQ) return base;
+  const bits = [`Search: "${searchQ}"`, opts.onlyHidden ? 'Only hidden' : 'Includes hidden'];
+  return base === 'All networks (no filters)' ? bits.join(' · ') : `${base} · ${bits.join(' · ')}`;
+}
+
 /** Sanitize a token for download filenames (matches backend ``sanitize_filename_part`` intent). */
 export function sanitizeFilenamePart(value: string, maxLen = 40): string {
   const slug = value

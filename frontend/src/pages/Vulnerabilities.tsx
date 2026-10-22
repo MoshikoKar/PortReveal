@@ -511,6 +511,7 @@ export default function Vulnerabilities() {
         error={printError}
         preview={previewOpen}
         searchQ={q || undefined}
+        onlyHidden={onlyHidden}
       />
 
       <div className="vuln-screen no-print">

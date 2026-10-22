@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildVulnQuery, clearVulnFindingsHash, clearVulnFilters, formatVulnFilterChip,
-  formatVulnFilterSummary, formatVulnFilterValue, localFilenameDay, parseVulnFilters,
-  setVulnFilter, shouldScrollVulnFindingsHash, splitVendorProductKey, toggleHeatmapCell,
-  toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter, vendorProductFacetActive,
-  vulnExportFilename, vulnFilterLink, VULN_FINDINGS_HASH,
+  formatVulnFilterSummary, formatVulnFilterValue, formatVulnPrintFilterLine, localFilenameDay,
+  parseVulnFilters, setVulnFilter, shouldScrollVulnFindingsHash, splitVendorProductKey,
+  toggleHeatmapCell, toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter,
+  vendorProductFacetActive, vulnExportFilename, vulnFilterLink, VULN_FINDINGS_HASH,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -195,6 +195,18 @@ describe('formatVulnFilterSummary / vulnExportFilename / toggleNetworkFilter', (
       { network_id: '1', kev: 'true' },
       { networkNames: { '1': 'Lab Alpha' } },
     )).toBe('network: Lab Alpha · KEV: yes');
+  });
+
+  it('notes Includes hidden / Only hidden on the print filter line when searching', () => {
+    expect(formatVulnPrintFilterLine({}, {}, { searchQ: 'openssh' }))
+      .toBe('Search: "openssh" · Includes hidden');
+    expect(formatVulnPrintFilterLine({}, {}, { searchQ: 'openssh', onlyHidden: true }))
+      .toBe('Search: "openssh" · Only hidden');
+    expect(formatVulnPrintFilterLine(
+      { network_id: '1' },
+      { networkNames: { '1': 'Lab Alpha' } },
+      { searchQ: '2024', onlyHidden: true },
+    )).toBe('network: Lab Alpha · Search: "2024" · Only hidden');
   });
 
   it('builds a sanitized CSV filename with filter context', () => {

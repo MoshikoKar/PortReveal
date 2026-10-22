@@ -124,6 +124,39 @@ def test_dismiss_and_undismiss_invalidate_summary_cache(admin, db):
     assert after_undo["generated_at"] != after_dismiss["generated_at"]
 
 
+def test_vuln_settings_save_invalidates_summary_cache(admin, db):
+    """Raising min_cvss_display must refresh summary immediately (not wait for the 30s TTL)."""
+    net = make_network(db)
+    scan(
+        ScriptedScanner([host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01")]),
+        network_id=net.id,
+    )
+    d = device_by_ip(db, "10.0.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-FLOOR", cvss_base=5.0, kev=False))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-FLOOR", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=0.0, include_potential=True))
+    db.commit()
+    invalidate_vuln_summary_cache()
+
+    before = admin.get("/api/vulns/summary").json()
+    assert before["findings_total"] == 1
+    assert before["severity_counts"]["medium"] == 1
+    generated_at = before["generated_at"]
+
+    cur = admin.get("/api/settings/vuln").json()
+    body = {k: v for k, v in cur.items() if k != "nvd_api_key_set"}
+    body["min_cvss_display"] = 6.0
+    assert admin.put("/api/settings/vuln", json=body, headers=csrf(admin)).status_code == 200
+
+    after = admin.get("/api/vulns/summary").json()
+    assert after["findings_total"] == 0
+    assert after["severity_counts"]["medium"] == 0
+    assert after["generated_at"] != generated_at
+    assert admin.get("/api/vulns").json()["total"] == 0
+
+
 def test_viewer_can_read_summary(db, client):
     make_network(db)
     assert client.post("/api/setup/admin", json={"username": "owner", "password": "correct-horse-1"}).status_code == 200

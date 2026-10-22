@@ -1,7 +1,7 @@
 import type { VulnFindingListItem, VulnSummary } from '../types';
 import { fmtTime } from '../util';
 import {
-  formatVulnFilterSummary, type VulnFilterLabelContext, type VulnFilters,
+  formatVulnPrintFilterLine, type VulnFilterLabelContext, type VulnFilters,
 } from '../vulnFilters';
 import { formatCvss, formatEpssPct } from '../vulnFormat';
 
@@ -16,7 +16,7 @@ function severityClass(sev: string | null | undefined): string {
 
 /** Print-only vulnerability findings report: filter summary, executive counts, full findings table. */
 export function VulnPrintReport({
-  filters, labelCtx, summary, findings, loading, error, preview = false, searchQ,
+  filters, labelCtx, summary, findings, loading, error, preview = false, searchQ, onlyHidden = false,
 }: {
   filters: VulnFilters;
   labelCtx: VulnFilterLabelContext;
@@ -28,14 +28,11 @@ export function VulnPrintReport({
   preview?: boolean;
   /** Active free-text search term (not part of VulnFilters). */
   searchQ?: string;
+  /** When searching, restrict to normally-hidden findings (`only_hidden=1`). */
+  onlyHidden?: boolean;
 }) {
   const generatedAt = new Date();
-  const baseSummary = formatVulnFilterSummary(filters, labelCtx);
-  const filterSummary = searchQ
-    ? (baseSummary === 'All networks (no filters)'
-      ? `Search: "${searchQ}"`
-      : `${baseSummary} · Search: "${searchQ}"`)
-    : baseSummary;
+  const filterSummary = formatVulnPrintFilterLine(filters, labelCtx, { searchQ, onlyHidden });
   const kevCount = summary?.kev_count ?? findings.filter((f) => f.kev).length;
   const deviceCount = new Set(findings.map((f) => f.device_uuid)).size;
   const sev = summary?.severity_counts;
@@ -146,13 +143,15 @@ export function VulnPrintReport({
                       <td className="small vuln-print-title vuln-print-clip">
                         {(f.summary || '').replace(/\s+/g, ' ').trim() || '—'}
                       </td>
-                      <td className="vuln-print-host">
-                        <span className="mono">{f.device_ip}</span>
-                        {f.device_hostname && (
-                          <span className="vuln-print-hostname vuln-print-clip">
-                            {' '}· {f.device_hostname}
-                          </span>
-                        )}
+                      <td>
+                        <div className="vuln-print-host">
+                          <span className="mono">{f.device_ip}</span>
+                          {f.device_hostname && (
+                            <span className="vuln-print-hostname vuln-print-clip">
+                              {' '}· {f.device_hostname}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td>{f.network ?? 'Unassigned'}</td>
                       <td className="small vuln-print-clip">
@@ -161,14 +160,14 @@ export function VulnPrintReport({
                         {[f.product, f.version].filter(Boolean).join(' ') || f.service || ''}
                       </td>
                       <td className="vuln-print-state">
-                        <span>{f.state}</span>
+                        <div className="vuln-print-state-main">{f.state}</div>
                         {(f.hidden_reasons ?? []).map((reason) => (
-                          <span key={reason} className="badge outline vuln-print-hidden-reason">
+                          <div key={reason} className="badge outline vuln-print-hidden-reason">
                             {reason}
-                          </span>
+                          </div>
                         ))}
                       </td>
-                      <td className="small">{fmtTime(f.first_seen_at ?? f.matched_at)}</td>
+                      <td className="small nowrap">{fmtTime(f.first_seen_at ?? f.matched_at)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -828,27 +828,37 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
   .vuln-print-table th:nth-child(5), .vuln-print-table td:nth-child(5) { width: 13%; }  /* CVE — full id */
   .vuln-print-table th:nth-child(6), .vuln-print-table td:nth-child(6) { width: 14%; }  /* Title (clip) */
   .vuln-print-table th:nth-child(7), .vuln-print-table td:nth-child(7) { width: 14%; }  /* Device */
-  .vuln-print-table th:nth-child(8), .vuln-print-table td:nth-child(8) { width: 8%; }   /* Network */
-  .vuln-print-table th:nth-child(9), .vuln-print-table td:nth-child(9) { width: 10%; }  /* Port (clip) */
-  .vuln-print-table th:nth-child(10), .vuln-print-table td:nth-child(10) { width: 10%; } /* State + hidden tags */
+  .vuln-print-table th:nth-child(8), .vuln-print-table td:nth-child(8) { width: 7%; }   /* Network */
+  .vuln-print-table th:nth-child(9), .vuln-print-table td:nth-child(9) { width: 9%; }   /* Port (clip) */
+  .vuln-print-table th:nth-child(10), .vuln-print-table td:nth-child(10) { width: 12%; } /* State + hidden tags */
   .vuln-print-table th:nth-child(11), .vuln-print-table td:nth-child(11) { width: 10%; } /* First seen */
 
+  /* Flex on an inner div — never on the <td> (breaks table-cell layout / clips hostnames). */
   .vuln-print-host {
     display: flex;
     align-items: baseline;
     gap: 0;
     min-width: 0;
+    max-width: 100%;
   }
   .vuln-print-host > .mono { flex: 0 0 auto; }
   .vuln-print-host > .vuln-print-hostname { flex: 1 1 auto; min-width: 0; }
   .vuln-print-state {
     white-space: normal;
-    line-height: 1.15;
+    line-height: 1.2;
+    overflow: hidden;
   }
+  .vuln-print-state-main { white-space: nowrap; }
   .vuln-print-state .vuln-print-hidden-reason {
-    display: inline-block;
-    margin-inline-start: 2px;
-    font-size: 6.5pt;
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    margin: 1px 0 0;
+    font-size: 6pt;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   /* Severity / KEV badges must stay readable on paper. */
