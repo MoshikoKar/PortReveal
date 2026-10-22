@@ -518,6 +518,7 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
                  user: User = Depends(require_admin)):
     """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
     from ..core.vuln.display import normalize_cve_id
+    from ..core.vuln.watchlist import clear_alerts_for_device_cve
 
     cve_id = normalize_cve_id(cve_id)
     d = _get(db, uuid)
@@ -534,6 +535,8 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
                 row.state if row.state in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
             )
             row.state = VULN_STATE_DISMISSED
+    # Owner: dismiss is a reopen baseline — clear alert rows so a later undismiss re-alerts.
+    clear_alerts_for_device_cve(db, device_uuid=d.uuid, cve_id=cve_id)
     _after_vuln_state_change(db, d.id)
     audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
           {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))

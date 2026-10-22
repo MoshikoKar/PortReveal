@@ -696,7 +696,9 @@ def sync_and_rescore(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = 
     from .watchlist import check_watchlist_safe, schedule_watchlist_delivery
     wl = check_watchlist_safe(db, now=now)
     db.commit()
-    schedule_watchlist_delivery(wl.get("event_ids") or [])
+    # Sync often runs in a child process that exits when this returns; wait so delivery
+    # finishes before the process dies (daemon threads would be killed).
+    schedule_watchlist_delivery(wl.get("event_ids") or [], wait=True)
     return results
 
 

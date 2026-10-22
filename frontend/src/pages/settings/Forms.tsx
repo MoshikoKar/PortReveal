@@ -353,7 +353,7 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
                     <label className="check small" title={!emailReady ? 'Turn on email notifications and configure SMTP first' : undefined}>
                       <input
                         type="checkbox"
-                        checked={s.watchlist_email_enabled}
+                        checked={emailReady ? s.watchlist_email_enabled : false}
                         disabled={!emailReady}
                         onChange={(e) => set({ watchlist_email_enabled: e.target.checked })}
                       />

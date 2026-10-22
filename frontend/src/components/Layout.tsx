@@ -19,6 +19,8 @@ const ICONS = {
   remote: 'M2 6h20v10H2zM8 20h8M12 16v4',
   scans: 'M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12l7-7',
   vulnerabilities: 'M12 2 4 5v6c0 5 3.5 9 8 11 4.5-2 8-6 8-11V5zM12 8v4M12 16h.01',
+  // Distinct from the shield: checklist for subscribed CVE IDs.
+  watchlist: 'M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2M9 14l2 2 4-4',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5',
   watches: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   reports: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
@@ -27,13 +29,15 @@ const ICONS = {
   settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
 };
 
-const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean }[] = [
+type NavItem = { to: string; label: string; icon: keyof typeof ICONS; end?: boolean; nest?: boolean };
+
+const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', end: true },
   { to: '/scans', label: 'Scans', icon: 'scans' },
   { to: '/devices', label: 'Devices', icon: 'devices' },
   { to: '/ports', label: 'Ports', icon: 'ports' },
-  { to: '/vulnerabilities/watchlist', label: 'CVE Watchlist', icon: 'vulnerabilities' },
   { to: '/vulnerabilities', label: 'Vulnerabilities', icon: 'vulnerabilities' },
+  { to: '/vulnerabilities/watchlist', label: 'CVE Watchlist', icon: 'watchlist', nest: true },
   { to: '/changes', label: 'Changes', icon: 'changes' },
   { to: '/watches', label: 'Watches', icon: 'watches' },
   { to: '/search', label: 'Search', icon: 'search' },
@@ -42,6 +46,18 @@ const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean 
   { to: '/reports', label: 'Reports', icon: 'reports' },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
+
+function navItemActive(n: NavItem, path: string): boolean {
+  if (n.to === '/vulnerabilities/watchlist') {
+    return path === n.to || path.startsWith(`${n.to}/`);
+  }
+  if (n.to === '/vulnerabilities') {
+    // Keep CVE detail under Vulnerabilities; exclude the watchlist sub-route.
+    return path === n.to || (path.startsWith(`${n.to}/`) && !path.startsWith('/vulnerabilities/watchlist'));
+  }
+  if (n.end) return path === n.to;
+  return path === n.to || path.startsWith(`${n.to}/`);
+}
 
 export function Logo() {
   return <img className="brand-logo" src={logoMark} width={106} height={120} alt="" aria-hidden />;
@@ -113,7 +129,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
   // A device's web preview (/devices/:uuid/web) belongs to the Web section, not Devices.
   const navPath = /^\/devices\/[^/]+\/web$/.test(pathname) ? '/web' : pathname;
-  const activeNav = NAV.find((n) => (n.end ? navPath === n.to : navPath === n.to || navPath.startsWith(`${n.to}/`)));
+  const activeNav = NAV.find((n) => navItemActive(n, navPath));
   useEffect(() => setNavOpen(false), [pathname]);
   useEffect(() => {
     if (!navOpen) return;
@@ -147,7 +163,12 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="sidebar-drawer">
           <nav className="nav" id="main-nav">
             {NAV.map((n) => (
-              <Link key={n.to} to={n.to} className={n === activeNav ? 'active' : undefined} aria-current={n === activeNav ? 'page' : undefined}>
+              <Link
+                key={n.to}
+                to={n.to}
+                className={`${n === activeNav ? 'active' : ''}${n.nest ? ' nav-sub' : ''}`.trim() || undefined}
+                aria-current={n === activeNav ? 'page' : undefined}
+              >
                 <Icon d={ICONS[n.icon]} />{n.label}
               </Link>
             ))}

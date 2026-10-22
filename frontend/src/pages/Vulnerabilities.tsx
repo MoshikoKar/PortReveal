@@ -65,6 +65,14 @@ export default function Vulnerabilities() {
   const [exportError, setExportError] = useState<string | null>(null);
   const labelCtx = useMemo(() => labelContextFromSummary(data), [data]);
 
+  // Deep links from the watchlist (`?cve_id=…#vuln-findings`) should scroll once findings exist.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.location.hash !== '#vuln-findings') return;
+    const t = window.setTimeout(() => scrollToVulnFindings(), 50);
+    return () => window.clearTimeout(t);
+  }, [searchKey, data]);
+
   const applySp = (next: URLSearchParams, scroll = true) => {
     setFilters(parseVulnFilters(next));
     setSp(next);

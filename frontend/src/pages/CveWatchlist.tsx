@@ -38,13 +38,14 @@ function deviceCell(entry: CveWatchlistEntry) {
   if (entry.status !== 'found' || !entry.affected_devices) {
     return <span className="muted">-</span>;
   }
-  const parts: string[] = [];
-  if (entry.confirmed_count) parts.push(`${entry.confirmed_count} confirmed`);
-  if (entry.potential_count) parts.push(`${entry.potential_count} potential`);
+  const stateBits: string[] = [];
+  if (entry.confirmed_count) stateBits.push(`${entry.confirmed_count} confirmed`);
+  if (entry.potential_count) stateBits.push(`${entry.potential_count} potential`);
+  const stateSuffix = stateBits.length ? ` (${stateBits.join(', ')})` : '';
+  const label = `${entry.affected_devices} device${entry.affected_devices === 1 ? '' : 's'} · ${entry.finding_count} finding${entry.finding_count === 1 ? '' : 's'}${stateSuffix}`;
   return (
-    <Link to={findingsHref(entry.cve_id)} title={parts.join(', ') || undefined}>
-      {entry.affected_devices}
-      {parts.length > 0 && <div className="muted small">{parts.join(' · ')}</div>}
+    <Link to={findingsHref(entry.cve_id)} title={label}>
+      {label}
     </Link>
   );
 }

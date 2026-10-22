@@ -235,7 +235,8 @@ def cmd_vuln_import(args) -> int:
     except Exception as exc:
         print(f"vuln-import failed: {exc}", file=sys.stderr)
         return 1
-    schedule_watchlist_delivery(event_ids)
+    # CLI exits immediately after return — deliver synchronously so webhooks are not lost.
+    schedule_watchlist_delivery(event_ids, wait=True)
     print(json.dumps(result, indent=2, default=str))
     return 0
 

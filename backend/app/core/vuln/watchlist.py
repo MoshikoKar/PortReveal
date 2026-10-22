@@ -21,7 +21,7 @@ from datetime import datetime
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from ...db import session_scope, utcnow
+from ...db import SessionLocal, get_engine, session_scope, utcnow
 from ...models import (
     EV_CVE_WATCH_MATCH,
     EVENT_SEVERITY,
@@ -291,8 +291,12 @@ def check_watchlist_safe(
         return {"checked": 0, "alerted": 0, "pruned": 0, "event_ids": [], "error": True}
 
 
-def schedule_watchlist_delivery(event_ids: list[int]) -> None:
-    """Best-effort background delivery after the creating transaction has committed."""
+def schedule_watchlist_delivery(event_ids: list[int], *, wait: bool = False) -> None:
+    """Deliver after the creating transaction has committed.
+
+    ``wait=True`` runs delivery on this thread (CLI / sync child must finish before exit).
+    ``wait=False`` (default) uses a daemon background thread for API/job request paths.
+    """
     ids = [i for i in event_ids if i]
     if not ids:
         return
@@ -303,57 +307,157 @@ def schedule_watchlist_delivery(event_ids: list[int]) -> None:
         except Exception:
             log.exception("CVE watchlist background delivery failed")
 
+    if wait:
+        _run()
+        return
     threading.Thread(target=_run, name="cve-watchlist-delivery", daemon=True).start()
 
 
-def deliver_watchlist_alerts(event_ids: list[int]) -> None:
-    """Send immediate email (if enabled) and webhooks for committed watchlist events.
+def clear_alerts_for_device_cve(db: Session, *, device_uuid: str, cve_id: str) -> int:
+    """Drop watchlist alert rows for a device/CVE so a later undismiss can re-alert (reopen)."""
+    result = db.execute(
+        delete(CveWatchlistAlert).where(
+            CveWatchlistAlert.device_uuid == device_uuid,
+            CveWatchlistAlert.cve_id == cve_id,
+        )
+    )
+    return int(result.rowcount or 0)
 
-    Immediate success marks ``notified_at`` so the daily digest will not re-send. Failures leave
-    ``notified_at`` null so the digest can still pick them up via ALWAYS_NOTIFY_TYPES.
+
+def deliver_watchlist_alerts(event_ids: list[int]) -> None:
+    """Send immediate email (if enabled) and one batched webhook per hook.
+
+    HTTP / SMTP run with **no open write transaction** so slow or unreachable hooks cannot hold
+    the SQLite write lock. Short sessions: (1) read plan, (2) mark ``notified_at`` after email,
+    (3) record hook success/error after POSTs.
     """
     if not event_ids:
         return
     try:
-        with session_scope() as db:
-            cfg = get_section(db, NotificationSettings)
-            if cfg.watchlist_email_enabled:
-                _send_immediate_email(db, cfg, event_ids, now=utcnow())
-            if cfg.watchlist_webhooks_enabled:
-                from ..webhooks import deliver_event
-
-                for ev in db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)):
-                    try:
-                        deliver_event(db, ev)
-                    except Exception:
-                        log.exception("CVE watchlist webhook delivery failed for event %s", ev.id)
+        plan = _load_delivery_plan(event_ids)
     except Exception:
-        log.exception("CVE watchlist delivery session failed")
-
-
-def _send_immediate_email(
-    db: Session, cfg: NotificationSettings, event_ids: list[int], *, now: datetime,
-) -> None:
-    if not cfg.enabled or not cfg.smtp_host or not cfg.recipients:
+        log.exception("CVE watchlist delivery plan load failed")
         return
-    try:
-        from ..notify import SUBJECT_PREFIX, send_email
+    if not plan:
+        return
 
+    if plan["email_enabled"]:
+        _deliver_immediate_email(plan)
+
+    if plan["webhooks_enabled"] and plan["hooks"]:
+        _deliver_batched_webhooks(plan)
+
+
+def _load_delivery_plan(event_ids: list[int]) -> dict | None:
+    """Read everything needed for delivery, then close the session (no writes)."""
+    from ...models import WebhookEndpoint
+    from ...security import decrypt_secret
+
+    get_engine()
+    db = SessionLocal()
+    try:
+        cfg = get_section(db, NotificationSettings)
         events = list(
             db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all()
         )
-        # Only events not already emailed (e.g. digest raced); skip already-notified.
-        pending = [ev for ev in events if ev.notified_at is None]
-        if not pending:
-            return
+        if not events:
+            return None
+        event_snaps = [_event_delivery_snap(ev) for ev in events]
+        hooks: list[dict] = []
+        if cfg.watchlist_webhooks_enabled:
+            for hook in db.scalars(select(WebhookEndpoint).where(WebhookEndpoint.enabled.is_(True))).all():
+                types = hook.event_types or []
+                if types and EV_CVE_WATCH_MATCH not in types:
+                    continue
+                hooks.append({
+                    "id": hook.id,
+                    "url": hook.url,
+                    "secret": decrypt_secret(hook.secret_enc) if hook.secret_enc else "",
+                })
+        return {
+            "event_ids": [s["id"] for s in event_snaps],
+            "events": event_snaps,
+            "email_enabled": bool(
+                cfg.watchlist_email_enabled and cfg.enabled and cfg.smtp_host and cfg.recipients
+            ),
+            "webhooks_enabled": bool(cfg.watchlist_webhooks_enabled),
+            "smtp": {
+                "enabled": cfg.enabled,
+                "smtp_host": cfg.smtp_host,
+                "smtp_port": cfg.smtp_port,
+                "security": cfg.security,
+                "username": cfg.username,
+                "password_enc": cfg.password_enc,
+                "sender": cfg.sender,
+                "recipients": list(cfg.recipients),
+            } if cfg.watchlist_email_enabled else None,
+            "hooks": hooks,
+        }
+    finally:
+        db.close()
+
+
+def _event_delivery_snap(ev: Event) -> dict:
+    detail: dict = {}
+    if ev.old_value:
+        try:
+            parsed = json.loads(ev.old_value)
+            if isinstance(parsed, dict):
+                detail = parsed
+        except (TypeError, ValueError, json.JSONDecodeError):
+            detail = {}
+    return {
+        "id": ev.id,
+        "notified_at": ev.notified_at,
+        "message": ev.message,
+        "new_value": ev.new_value,
+        "ip": ev.ip,
+        "port": ev.port,
+        "protocol": ev.protocol,
+        "severity": ev.severity,
+        "created_at": ev.created_at.isoformat() if ev.created_at else None,
+        "old_value": ev.old_value,
+        "cve_id": detail.get("cve_id"),
+        "device_uuid": detail.get("device_uuid"),
+        "hostname": detail.get("hostname"),
+        "state": detail.get("state"),
+        "cvss": detail.get("cvss"),
+        "kev": detail.get("kev"),
+        "detail_ip": detail.get("ip"),
+        "detail_port": detail.get("port"),
+        "detail_protocol": detail.get("protocol"),
+    }
+
+
+def _deliver_immediate_email(plan: dict) -> None:
+    smtp = plan.get("smtp")
+    if not smtp:
+        return
+    pending = [ev for ev in plan["events"] if ev["notified_at"] is None]
+    if not pending:
+        return
+    try:
+        from ...settings_store import NotificationSettings
+        from ..notify import SUBJECT_PREFIX, send_email
+
+        cfg = NotificationSettings(
+            enabled=True,
+            smtp_host=smtp["smtp_host"],
+            smtp_port=smtp["smtp_port"],
+            security=smtp["security"],
+            username=smtp["username"],
+            password_enc=smtp["password_enc"],
+            sender=smtp["sender"],
+            recipients=smtp["recipients"],
+        )
         n = len(pending)
         subject = f"{SUBJECT_PREFIX} CVE watchlist - {n} match{'es' if n != 1 else ''}"
         lines = ["PortReveal CVE watchlist alert", "", f"{n} new match{'es' if n != 1 else ''}:", ""]
         html_items: list[str] = []
         for ev in pending:
-            line = ev.message or ev.new_value or EV_CVE_WATCH_MATCH
-            if ev.ip:
-                line = f"{ev.ip}: {line}"
+            line = ev["message"] or ev["new_value"] or EV_CVE_WATCH_MATCH
+            if ev["ip"]:
+                line = f"{ev['ip']}: {line}"
             lines.append(f"  • {line}")
             html_items.append(f"<li>{_esc(line)}</li>")
         plain = "\n".join(lines) + "\n"
@@ -364,14 +468,108 @@ def _send_immediate_email(
             "<p style=\"color:#64748b;font-size:12px;\">Full detail is in the Changes page.</p>"
             "</body></html>"
         )
+        # SMTP with no DB session open.
         send_email(cfg, subject, plain, html_body)
-        for ev in pending:
-            ev.notified_at = now
-        db.flush()
-        log.info("Sent immediate CVE watchlist email for %d event(s)", n)
     except Exception as exc:
         from ..notify import smtp_failure_reason as _reason
         log.error("Immediate CVE watchlist email failed: %s", _reason(exc))
+        return
+
+    # Short write: mark notified_at so the digest does not re-send.
+    now = utcnow()
+    pending_ids = [ev["id"] for ev in pending]
+    try:
+        with session_scope() as db:
+            for ev in db.scalars(select(Event).where(Event.id.in_(pending_ids), Event.notified_at.is_(None))):
+                ev.notified_at = now
+        log.info("Sent immediate CVE watchlist email for %d event(s)", len(pending_ids))
+    except Exception:
+        log.exception("Failed to record notified_at after watchlist email")
+
+
+def _deliver_batched_webhooks(plan: dict) -> None:
+    """One HTTP POST per hook listing all hits; DB writes only after each POST finishes."""
+    import httpx
+
+    from ... import metrics
+    from ...models import WebhookEndpoint
+    from ..webhooks import _host, _sign
+
+    matches = []
+    for ev in plan["events"]:
+        match = {
+            "id": ev["id"],
+            "type": EV_CVE_WATCH_MATCH,
+            "severity": ev["severity"],
+            "message": ev["message"],
+            "created_at": ev["created_at"],
+            "old_value": ev["old_value"],
+            "new_value": ev["new_value"],
+            "ip": ev["detail_ip"] if ev["detail_ip"] is not None else ev["ip"],
+            "port": ev["detail_port"] if ev["detail_port"] is not None else ev["port"],
+            "protocol": ev["detail_protocol"] if ev["detail_protocol"] is not None else ev["protocol"],
+            "cve_id": ev["cve_id"],
+            "device_uuid": ev["device_uuid"],
+            "hostname": ev["hostname"],
+            "state": ev["state"],
+            "cvss": ev["cvss"],
+            "kev": ev["kev"],
+        }
+        matches.append({k: v for k, v in match.items() if v is not None})
+
+    payload = {
+        "type": EV_CVE_WATCH_MATCH,
+        "batch": True,
+        "count": len(matches),
+        "matches": matches,
+    }
+    # Convenience top-level fields when there is exactly one hit (SIEM filters).
+    if len(matches) == 1:
+        for key in ("cve_id", "device_uuid", "hostname", "ip", "port", "protocol", "state", "cvss", "kev"):
+            if key in matches[0]:
+                payload[key] = matches[0][key]
+    body = json.dumps(payload, default=str).encode()
+
+    for hook in plan["hooks"]:
+        headers = {"Content-Type": "application/json", "User-Agent": "PortReveal-Webhook/1.0"}
+        if hook["secret"]:
+            headers["X-NF-Signature"] = _sign(hook["secret"], body)
+        ok = False
+        err: str | None = None
+        try:
+            # No DB session open during the HTTP call (timeout bound per hook, not per event).
+            r = httpx.post(hook["url"], content=body, headers=headers, timeout=8.0)
+            if r.status_code >= 400:
+                err = f"HTTP {r.status_code}"
+                metrics.observe_webhook_delivery("http_error")
+                log.warning(
+                    "webhook %s (%s) answered HTTP %s for watchlist batch (%d matches)",
+                    hook["id"], _host(hook["url"]), r.status_code, len(matches),
+                )
+            else:
+                ok = True
+                metrics.observe_webhook_delivery("ok")
+        except Exception as exc:
+            err = str(exc)[:500]
+            metrics.observe_webhook_delivery("network_error")
+            log.warning(
+                "webhook %s (%s) watchlist batch failed: %s",
+                hook["id"], _host(hook["url"]), type(exc).__name__,
+            )
+
+        # Short separate transaction per hook result so writers are never blocked by HTTP.
+        try:
+            with session_scope() as db:
+                row = db.get(WebhookEndpoint, hook["id"])
+                if row is None:
+                    continue
+                if ok:
+                    row.last_success_at = utcnow()
+                    row.last_error = None
+                else:
+                    row.last_error = err
+        except Exception:
+            log.exception("Failed to record webhook %s delivery result", hook["id"])
 
 
 def _esc(value: str) -> str:

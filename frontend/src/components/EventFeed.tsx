@@ -67,6 +67,7 @@ export function EventDetail({ ev }: { ev: ChangeEvent }) {
     case 'policy_violation':
       return <span>{ev.new_value ?? ev.message}</span>;
     case 'cve_watch_match': {
+      // Device is shown by the parent feed / Changes Device column — do not duplicate it here.
       const detail = parseWatchDetail(ev);
       const cveId = detail?.cve_id;
       const stateLabel = detail?.state === 'potential' ? 'potential' : 'confirmed';
@@ -85,14 +86,6 @@ export function EventDetail({ ev }: { ev: ChangeEvent }) {
               )}
               {detail.cvss != null && <span className="muted"> · CVSS {detail.cvss}</span>}
               {detail.kev && <span className="badge high" style={{ marginLeft: 6 }}>KEV</span>}
-              {detail.device_uuid && (
-                <>
-                  <span className="muted"> · </span>
-                  <Link to={`/devices/${detail.device_uuid}`}>
-                    {detail.hostname || detail.ip || 'device'}
-                  </Link>
-                </>
-              )}
             </>
           )}
           {!detail && ev.new_value && <span className="muted"> · {ev.new_value}</span>}
