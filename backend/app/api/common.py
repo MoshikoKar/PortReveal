@@ -243,9 +243,10 @@ def scan_out(s: Scan, network_name: str | None = None) -> dict:
 
 
 def vuln_finding_out(dpv: DevicePortVuln, port: DevicePort, device: Device, vuln: Vulnerability,
-                     network_name: str | None, first_seen_at) -> dict:
+                     network_name: str | None, first_seen_at,
+                     hidden_reasons: list[str] | None = None) -> dict:
     """One row of the CVE-centric finding list (GET /api/vulns): a (device, port, cve) match."""
-    return {
+    out = {
         "cve_id": vuln.cve_id,
         "device_uuid": device.uuid,
         "device_ip": device.current_ip,
@@ -272,6 +273,9 @@ def vuln_finding_out(dpv: DevicePortVuln, port: DevicePort, device: Device, vuln
         "matched_at": dpv.matched_at,
         "first_seen_at": first_seen_at,
     }
+    if hidden_reasons is not None:
+        out["hidden_reasons"] = hidden_reasons
+    return out
 
 
 def cve_out(vuln: Vulnerability, affected_devices: list[dict], first_seen_at) -> dict:

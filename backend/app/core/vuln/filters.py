@@ -1,9 +1,9 @@
 """Shared finding-list filters for GET /api/vulns, /export, and /summary.
 
-Kept in one place so list, CSV export, and dashboard summary share one filter object.
-A free-text ``q`` field is reserved on the dataclass for structural readiness; routes must
-not accept/ignore a ``q`` query param here (that lands in a parallel PR).
+Kept in one place so list, CSV export, and dashboard summary share one filter object —
+including free-text ``q`` (search includes normally-hidden rows) and ``only_hidden``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
@@ -37,22 +37,29 @@ class FindingFilters:
     device_uuid: str | None = None
     # first_seen/matched_at >= last completed scan ("scan") or newest enabled feed sync ("db").
     new_since: str | None = None
-    # Structural placeholder only — do not wire as a Query param on this PR's routes.
+    # Free-text search; when set, the display floor (dismissed / potential / min_cvss) is skipped.
     q: str | None = None
+    # When searching, restrict to rows that would be hidden by the default display rules.
+    only_hidden: bool = False
+
+
+def search_term(f: FindingFilters | None) -> str | None:
+    """Non-empty stripped ``q``, or None when search is inactive."""
+    if f is None or not f.q:
+        return None
+    term = f.q.strip()
+    return term or None
 
 
 def filters_active(f: FindingFilters | None) -> bool:
-    """True when any filter field is set (summary cache must be bypassed).
-
-    Ignores the reserved ``q`` placeholder so an unset free-text field never affects caching.
-    """
+    """True when any filter field is set (summary cache must be bypassed)."""
     if f is None:
         return False
-    return any(
-        getattr(f, field.name) is not None
-        for field in fields(f)
-        if field.name != "q"
-    )
+    if search_term(f) is not None:
+        return True
+    if f.only_hidden:
+        return True
+    return any(getattr(f, field.name) is not None for field in fields(f) if field.name not in ("q", "only_hidden"))
 
 
 def parse_network_id_param(raw: str | None) -> str | None:
@@ -74,6 +81,7 @@ def parse_network_id_param(raw: str | None) -> str | None:
 def sanitize_filename_part(value: str, *, max_len: int = 40, ascii_only: bool = False) -> str:
     """Lowercase slug for CSV filenames (network name, cve id, …).
 
+    Underscores are preserved so ``vulns_<slug>_<yyyymmdd>.csv`` stays underscore-delimited.
     When ``ascii_only`` is True, non-ASCII letters are dropped so the result is safe for a
     latin-1 ``Content-Disposition: filename=`` fallback.
     """
@@ -82,16 +90,22 @@ def sanitize_filename_part(value: str, *, max_len: int = 40, ascii_only: bool = 
         if ascii_only:
             if ("a" <= ch <= "z") or ("0" <= ch <= "9"):
                 out.append(ch)
-            elif ch in (" ", "-", "_", "."):
+            elif ch == "_":
+                out.append("_")
+            elif ch in (" ", "-", "."):
                 out.append("-")
             continue
         if ch.isalnum():
             out.append(ch)
-        elif ch in (" ", "-", "_", "."):
+        elif ch == "_":
+            out.append("_")
+        elif ch in (" ", "-", "."):
             out.append("-")
-    slug = "".join(out).strip("-")
+    slug = "".join(out).strip("-_")
     while "--" in slug:
         slug = slug.replace("--", "-")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
     return (slug or "filtered")[:max_len]
 
 
@@ -99,13 +113,12 @@ def content_disposition_attachment(filename: str) -> str:
     """``filename=`` ASCII fallback plus RFC 5987 ``filename*=UTF-8''…`` for Unicode names.
 
     Starlette/uvicorn encode response headers as latin-1; a raw Hebrew ``filename="…"`` 500s.
+    Underscores in the ASCII fallback are preserved (``vulns_net_YYYYMMDD.csv``).
     """
-    # Prefer an ASCII slug of the same stem; keep a .csv extension when present.
     stem, ext = (filename.rsplit(".", 1) + [""])[:2] if "." in filename else (filename, "")
     ascii_stem = sanitize_filename_part(stem, max_len=80, ascii_only=True)
     ascii_name = f"{ascii_stem}.{ext}" if ext else ascii_stem
     ascii_name = ascii_name.replace("\\", "_").replace('"', "_")
-    # Percent-encode the full UTF-8 filename for filename*.
     encoded = quote(filename, safe="")
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
 

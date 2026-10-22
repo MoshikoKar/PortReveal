@@ -5,6 +5,7 @@ scanner, throwaway SQLite database). Marked `e2e` and excluded from the default 
 with `npm run test:e2e`, which builds the frontend first. Skips when frontend/dist or Playwright's
 Chromium is missing.
 """
+
 from __future__ import annotations
 
 import os
@@ -48,7 +49,7 @@ def _wait_healthy(base: str, proc: subprocess.Popen) -> None:
 
 
 @pytest.fixture(scope="module")
-def live_app_env(tmp_path_factory) -> Iterator[dict]:
+def live_app(tmp_path_factory) -> Iterator[dict]:
     if not (DIST / "index.html").is_file():
         pytest.skip("frontend/dist is missing; run `npm run build` (npm run test:e2e does)")
     work = tmp_path_factory.mktemp("e2e")
@@ -73,12 +74,15 @@ def live_app_env(tmp_path_factory) -> Iterator[dict]:
     log = (work / "app.log").open("wb")
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=BACKEND, env=env, stdout=log, stderr=subprocess.STDOUT,
+        cwd=BACKEND,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     try:
         _wait_healthy(base, proc)
-        yield {"base": base, "db_url": db_url}
+        yield {"base": base, "database_url": db_url}
     finally:
         proc.terminate()
         try:
@@ -89,31 +93,89 @@ def live_app_env(tmp_path_factory) -> Iterator[dict]:
 
 
 @pytest.fixture(scope="module")
-def live_app(live_app_env) -> str:
-    return live_app_env["base"]
-
-
-@pytest.fixture(scope="module")
 def browser():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as p:
         try:
             b = p.chromium.launch(headless=True)
         except Exception as exc:  # browser binary not installed for this user
-            pytest.skip(f"Playwright Chromium unavailable ({exc.__class__.__name__}); "
-                        "run: python -m playwright install chromium")
+            pytest.skip(f"Playwright Chromium unavailable ({exc.__class__.__name__}); run: python -m playwright install chromium")
         yield b
         b.close()
 
 
-def _sign_in(page, live_app: str) -> None:
-    page.goto(live_app)
+def _sign_in(page, base: str) -> None:
+    page.goto(base)
     page.get_by_label("Username").fill("admin")
     page.get_by_label("Password").fill(PASSWORD)
     page.get_by_role("button", name="Sign in").click()
 
 
-def _seed_vuln_networks(db_url: str) -> tuple[str, str]:
+def _seed_below_floor_finding(database_url: str, cve_id: str = "CVE-2024-99901") -> None:
+    """Insert a non-KEV CVSS-5.0 finding. Caller raises min_cvss_display via the live HTTP API
+    (process-local settings cache is not cleared by a foreign SQLite writer)."""
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from app.db import utcnow
+    from app.models import VULN_STATE_CONFIRMED, DevicePort, DevicePortVuln, Vulnerability
+
+    engine = create_engine(database_url)
+    with Session(engine) as db:
+        port_row = db.scalars(select(DevicePort).limit(1)).first()
+        if port_row is None:
+            raise RuntimeError("e2e seed expected at least one device port from the mock scan")
+        if db.get(Vulnerability, cve_id) is None:
+            db.add(
+                Vulnerability(
+                    cve_id=cve_id,
+                    cvss_base=5.0,
+                    kev=False,
+                    summary="e2e below-floor finding for vulnerabilities search",
+                )
+            )
+            db.flush()
+        existing = db.scalars(
+            select(DevicePortVuln).where(
+                DevicePortVuln.device_port_id == port_row.id,
+                DevicePortVuln.cve_id == cve_id,
+            )
+        ).first()
+        if existing is None:
+            db.add(
+                DevicePortVuln(
+                    device_port_id=port_row.id,
+                    cve_id=cve_id,
+                    state=VULN_STATE_CONFIRMED,
+                    matched_at=utcnow(),
+                )
+            )
+        db.commit()
+    engine.dispose()
+
+
+def _set_min_cvss_display_via_api(page, floor: float = 6.0) -> None:
+    """PUT /api/settings/vuln so the running app drops its settings cache."""
+    status = page.evaluate(
+        """async (floor) => {
+          const m = document.cookie.match(/(?:^|; )nf_csrf=([^;]*)/);
+          const csrf = m ? decodeURIComponent(m[1]) : '';
+          const cur = await fetch('/api/settings/vuln', { credentials: 'same-origin' }).then((r) => r.json());
+          const { nvd_api_key_set, ...body } = cur;
+          const r = await fetch('/api/settings/vuln', {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ ...body, enabled: true, min_cvss_display: floor }),
+          });
+          return r.status;
+        }""",
+        floor,
+    )
+    assert status == 200, status
+
+
+def _seed_vuln_networks(database_url: str) -> tuple[str, str]:
     """Insert two placeholder networks with one finding each into the live e2e DB.
 
     Returns the display names (Lab Alpha / Lab Beta) for UI assertions.
@@ -133,7 +195,7 @@ def _seed_vuln_networks(db_url: str) -> tuple[str, str]:
     )
 
     name_a, name_b = "Lab Alpha", "Lab Beta"
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
     with Session(engine) as db:
         # Reuse Mock Lab devices from DEV_SEED when present; otherwise create lean stubs.
         net_a = db.scalar(select(Network).where(Network.name == name_a))
@@ -153,6 +215,7 @@ def _seed_vuln_networks(db_url: str) -> tuple[str, str]:
                 import uuid as _uuid
 
                 from app.models import DEVICE_ACTIVE
+
                 d = Device(
                     uuid=str(_uuid.uuid4()),
                     current_ip=ip,
@@ -169,8 +232,13 @@ def _seed_vuln_networks(db_url: str) -> tuple[str, str]:
             p = next((pp for pp in d.ports if pp.port == port_n), None)
             if p is None:
                 p = DevicePort(
-                    device_id=d.id, port=port_n, protocol="tcp", service=service,
-                    is_open=True, first_seen=utcnow(), last_seen=utcnow(),
+                    device_id=d.id,
+                    port=port_n,
+                    protocol="tcp",
+                    service=service,
+                    is_open=True,
+                    first_seen=utcnow(),
+                    last_seen=utcnow(),
                 )
                 db.add(p)
                 db.flush()
@@ -179,22 +247,24 @@ def _seed_vuln_networks(db_url: str) -> tuple[str, str]:
         pa = ensure_device("10.10.0.1", net_a.id, "00:11:22:33:10:01", 22, "ssh")
         pb = ensure_device("10.20.0.1", net_b.id, "00:11:22:33:20:01", 80, "http")
         if db.get(Vulnerability, "CVE-2024-ALPHA") is None:
-            db.add(Vulnerability(cve_id="CVE-2024-ALPHA", cvss_base=9.8, kev=True, epss=0.9,
-                                 summary="E2E critical placeholder"))
+            db.add(Vulnerability(cve_id="CVE-2024-ALPHA", cvss_base=9.8, kev=True, epss=0.9, summary="E2E critical placeholder"))
         if db.get(Vulnerability, "CVE-2024-BETA") is None:
-            db.add(Vulnerability(cve_id="CVE-2024-BETA", cvss_base=5.0, kev=False, epss=0.01,
-                                 summary="E2E medium placeholder"))
+            db.add(Vulnerability(cve_id="CVE-2024-BETA", cvss_base=5.0, kev=False, epss=0.01, summary="E2E medium placeholder"))
         db.flush()
-        if not db.scalar(select(DevicePortVuln).where(
-            DevicePortVuln.device_port_id == pa.id, DevicePortVuln.cve_id == "CVE-2024-ALPHA",
-        )):
-            db.add(DevicePortVuln(device_port_id=pa.id, cve_id="CVE-2024-ALPHA",
-                                  state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
-        if not db.scalar(select(DevicePortVuln).where(
-            DevicePortVuln.device_port_id == pb.id, DevicePortVuln.cve_id == "CVE-2024-BETA",
-        )):
-            db.add(DevicePortVuln(device_port_id=pb.id, cve_id="CVE-2024-BETA",
-                                  state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+        if not db.scalar(
+            select(DevicePortVuln).where(
+                DevicePortVuln.device_port_id == pa.id,
+                DevicePortVuln.cve_id == "CVE-2024-ALPHA",
+            )
+        ):
+            db.add(DevicePortVuln(device_port_id=pa.id, cve_id="CVE-2024-ALPHA", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+        if not db.scalar(
+            select(DevicePortVuln).where(
+                DevicePortVuln.device_port_id == pb.id,
+                DevicePortVuln.cve_id == "CVE-2024-BETA",
+            )
+        ):
+            db.add(DevicePortVuln(device_port_id=pb.id, cve_id="CVE-2024-BETA", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
         db.commit()
         sync_finding_lifecycle(db, now=utcnow())
         db.commit()
@@ -205,16 +275,17 @@ def _seed_vuln_networks(db_url: str) -> tuple[str, str]:
 def test_sign_in_dashboard_and_devices_list(live_app, browser):
     from playwright.sync_api import expect
 
+    base = live_app["base"]
     page = browser.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
-        _sign_in(page, live_app)
+        _sign_in(page, base)
 
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
 
         page.get_by_role("link", name="Devices", exact=True).click()
-        expect(page).to_have_url(f"{live_app}/devices")
+        expect(page).to_have_url(f"{base}/devices")
         expect(page.get_by_role("heading", name="Devices", exact=True)).to_be_visible()
         # The seeded mock scan runs in the background; its hosts (10.99.0.0/24) fill the list.
         expect(page.locator("tbody tr").filter(has_text="10.99.0.").first).to_be_visible(timeout=30_000)
@@ -228,13 +299,14 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
     """Customize → resize a card → Save → reload → layout still applied."""
     from playwright.sync_api import expect
 
+    base = live_app["base"]
     # 1600px so the grid content width stays at the lg breakpoint (≥1200); 1400 leaves
     # ~1118px of grid and saves into layouts.md after breakpointFor landed.
     page = browser.new_page(viewport={"width": 1600, "height": 900})
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
-        _sign_in(page, live_app)
+        _sign_in(page, base)
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
         expect(page.locator(".dashboard-rgl")).to_be_visible(timeout=15_000)
 
@@ -288,16 +360,130 @@ def test_dashboard_layout_resize_save_and_reload(live_app, browser):
     assert errors == []
 
 
-def test_vulnerabilities_network_facet_export_and_print(live_app_env, browser):
+def test_vulnerabilities_search_shows_below_floor_finding(live_app, browser):
+    """Search on /vulnerabilities includes findings hidden by min_cvss_display and badges them."""
+    from playwright.sync_api import expect
+
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    cve_id = "CVE-2024-99901"
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        # Wait until the mock scan has produced at least one port to attach a finding to.
+        page.get_by_role("link", name="Devices", exact=True).click()
+        expect(page.locator("tbody tr").filter(has_text="10.99.0.").first).to_be_visible(timeout=30_000)
+        _seed_below_floor_finding(live_app["database_url"], cve_id=cve_id)
+        _set_min_cvss_display_via_api(page, floor=6.0)
+
+        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
+        expect(page).to_have_url(f"{base}/vulnerabilities")
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible()
+        search = page.get_by_label("Search findings")
+        expect(search).to_be_visible(timeout=15_000)
+        findings = page.locator("#vuln-findings")
+
+        # Default findings table must not show the below-floor row (summary cards may lag cache).
+        expect(findings.get_by_role("link", name=cve_id)).to_have_count(0)
+
+        search.fill(cve_id)
+        page.wait_for_url(f"**/*q=*{cve_id}*", timeout=10_000)
+        expect(findings.get_by_role("link", name=cve_id)).to_be_visible(timeout=15_000)
+        expect(findings.get_by_text("Below CVSS floor", exact=True)).to_be_visible()
+    finally:
+        page.close()
+    assert errors == []
+
+
+def test_vulnerabilities_search_debounce_respects_clear_all_and_facet(live_app, browser):
+    """Debounce must read the live URL: Clear all / facet within 300ms must stick after 600ms.
+
+    Uses direct JS input/click (no Playwright auto-scroll delay) so the race is real.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from playwright.sync_api import expect
+
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        # --- Clear all must not be undone by a pending search debounce ---
+        page.goto(f"{base}/vulnerabilities?severity=high&q=openssh&only_hidden=1")
+        expect(page.get_by_label("Search findings")).to_be_visible(timeout=15_000)
+        # Schedule a debounce via a direct input event (no Playwright fill/scroll delay).
+        page.evaluate(
+            """() => {
+              const input = document.querySelector('[aria-label="Search findings"]');
+              const desc = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value');
+              desc.set.call(input, input.value + 'x');
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+            }"""
+        )
+        # Let React commit qInput + schedule the 300ms timer, then Clear all before it fires.
+        page.wait_for_timeout(50)
+        page.evaluate(
+            """() => {
+              const btn = [...document.querySelectorAll('button')]
+                .find((b) => b.textContent.replace(/\\s+/g, ' ').trim() === 'Clear all');
+              btn.click();
+            }"""
+        )
+        page.wait_for_timeout(600)
+        qs = parse_qs(urlparse(page.url).query)
+        assert "severity" not in qs, page.url
+        assert "q" not in qs, page.url
+        assert "only_hidden" not in qs, page.url
+
+        # --- Facet click during debounce must keep the facet in the final URL ---
+        page.goto(f"{base}/vulnerabilities")
+        expect(page.get_by_label("Search findings")).to_be_visible(timeout=15_000)
+        # Wait for summary KPIs (facet targets) to render.
+        expect(page.get_by_text("Critical", exact=True).first).to_be_visible(timeout=15_000)
+        page.evaluate(
+            """() => {
+              const input = document.querySelector('[aria-label="Search findings"]');
+              const desc = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value');
+              desc.set.call(input, 'openssh');
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+            }"""
+        )
+        page.wait_for_timeout(50)
+        page.evaluate(
+            """() => {
+              const kpi = [...document.querySelectorAll('.kpi[role="button"]')]
+                .find((el) => el.querySelector('.label')?.textContent.trim() === 'Critical');
+              kpi.click();
+            }"""
+        )
+        page.wait_for_timeout(600)
+        qs = parse_qs(urlparse(page.url).query)
+        assert qs.get("severity") == ["critical"], page.url
+        assert qs.get("q") == ["openssh"], page.url
+    finally:
+        page.close()
+    assert errors == []
+
+
+def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
     """Click a network facet row → filter; CSV only that network; print view shows filter summary."""
     from playwright.sync_api import expect
 
     from app.core.vuln.summary import invalidate_vuln_summary_cache
 
-    name_a, name_b = _seed_vuln_networks(live_app_env["db_url"])
+    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
     # Test-process cache clear is a no-op for the uvicorn worker; dismiss/undo below busts it.
     invalidate_vuln_summary_cache()
-    base = live_app_env["base"]
+    base = live_app["base"]
 
     page = browser.new_page()
     errors: list[str] = []
@@ -330,9 +516,7 @@ def test_vulnerabilities_network_facet_export_and_print(live_app_env, browser):
         expect(facet_btn).to_be_visible(timeout=30_000)
         facet_btn.click()
         expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
-        expect(page.get_by_role("button", name=re.compile(rf"network:\s*{re.escape(name_a)}"))).to_be_visible(
-            timeout=10_000
-        )
+        expect(page.get_by_role("button", name=re.compile(rf"network:\s*{re.escape(name_a)}"))).to_be_visible(timeout=10_000)
 
         # Export CSV for the active network filter; verify only Lab Alpha rows.
         with page.expect_download() as dl_info:
@@ -400,6 +584,86 @@ def test_vulnerabilities_network_facet_export_and_print(live_app_env, browser):
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
         assert page.evaluate("() => window.__pr_print_had_summary") is True
         assert page.evaluate("() => window.__pr_print_had_findings") is True
+    finally:
+        page.close()
+    assert errors == []
+
+
+def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, browser):
+    """Print stays disabled until the summary for the selected network arrives; report matches it."""
+    from playwright.sync_api import expect
+
+    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        page.evaluate(
+            """async () => {
+              const list = await fetch('/api/vulns?cve_id=CVE-2024-ALPHA', { credentials: 'same-origin' })
+                .then((r) => r.json());
+              if (!list.items || !list.items.length) return;
+              const d = list.items[0];
+              const m = document.cookie.match(/(?:^|;\\s*)nf_csrf=([^;]+)/);
+              const csrf = m ? decodeURIComponent(m[1]) : '';
+              const hdr = { 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'POST', credentials: 'same-origin', headers: hdr, body: '{}' });
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'DELETE', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf } });
+            }"""
+        )
+
+        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_label("Network filter: All networks")).to_be_visible(timeout=15_000)
+
+        # Delay filtered summary responses so the Print button observes the loading gate.
+        def handle_summary(route):
+            if "network_id=" in route.request.url and route.request.method == "GET":
+                time.sleep(1.2)
+            route.continue_()
+
+        page.route("**/api/vulns/summary*", handle_summary)
+
+        page.evaluate(
+            """() => {
+              window.__pr_print_calls = 0;
+              window.__pr_print_filter = '';
+              window.__pr_print_findings = 0;
+              window.print = () => {
+                const report = document.querySelector('.vuln-print-report');
+                const filters = report && report.querySelector('.vuln-print-filters');
+                const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+                window.__pr_print_filter = filters ? (filters.textContent || '') : '';
+                window.__pr_print_findings = rows ? rows.length : 0;
+                window.__pr_print_calls++;
+              };
+            }"""
+        )
+
+        net_select = page.get_by_label(re.compile(r"^Network filter:"))
+        net_select.select_option(label=name_b)
+        expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
+        expect(page.get_by_label(f"Network filter: {name_b}")).to_be_visible(timeout=5_000)
+
+        preparing = page.get_by_role("button", name="Preparing…")
+        expect(preparing).to_be_visible(timeout=5_000)
+        expect(preparing).to_be_disabled()
+
+        print_btn = page.get_by_role("button", name="Print / PDF report")
+        expect(print_btn).to_be_enabled(timeout=15_000)
+        print_btn.click()
+        page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
+        filt = page.evaluate("() => window.__pr_print_filter")
+        assert name_b in filt, filt
+        assert name_a not in filt, filt
+        assert page.evaluate("() => window.__pr_print_findings") == 1
+        page.unroute("**/api/vulns/summary*")
     finally:
         page.close()
     assert errors == []

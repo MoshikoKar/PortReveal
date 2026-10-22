@@ -150,6 +150,54 @@ describe('errors', () => {
     await expect(downloadBlob('/data/export', 'x.zip')).rejects.toBeInstanceOf(ApiError);
     expect(events).toEqual(['nf:unauthorized']);
   });
+
+  it('prefers RFC5987 filename* (UTF-8) over filename= for downloads', async () => {
+    const clicks: string[] = [];
+    vi.stubGlobal('URL', {
+      createObjectURL: () => 'blob:mock',
+      revokeObjectURL: () => undefined,
+    });
+    vi.stubGlobal('document', {
+      cookie: 'nf_csrf=tok',
+      createElement: () => {
+        const a: { href?: string; download?: string; click: () => void } = {
+          click() { clicks.push(a.download ?? ''); },
+        };
+        return a;
+      },
+    });
+    const hebrew = 'vulns_רשת-בדיקה_20261022.csv';
+    const cd = `attachment; filename="vulns_20261022.csv"; filename*=UTF-8''${encodeURIComponent(hebrew)}`;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['x']), {
+      status: 200,
+      headers: { 'Content-Disposition': cd },
+    })));
+    await downloadBlob('/vulns/export', 'fallback.csv');
+    expect(clicks).toEqual([hebrew]);
+  });
+
+  it('falls back to filename= when filename* is absent', async () => {
+    const clicks: string[] = [];
+    vi.stubGlobal('URL', {
+      createObjectURL: () => 'blob:mock',
+      revokeObjectURL: () => undefined,
+    });
+    vi.stubGlobal('document', {
+      cookie: 'nf_csrf=tok',
+      createElement: () => {
+        const a: { href?: string; download?: string; click: () => void } = {
+          click() { clicks.push(a.download ?? ''); },
+        };
+        return a;
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['x']), {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="vulns_network-a_20261022.csv"' },
+    })));
+    await downloadBlob('/vulns/export', 'fallback.csv');
+    expect(clicks).toEqual(['vulns_network-a_20261022.csv']);
+  });
 });
 
 describe('errorMessage', () => {

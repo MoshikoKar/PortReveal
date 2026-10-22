@@ -76,6 +76,13 @@ describe('clearVulnFilters', () => {
     expect(next.get('sort')).toBe('cvss');
     expect(next.get('page')).toBeNull();
   });
+
+  it('also clears the findings search q and only_hidden', () => {
+    const sp = new URLSearchParams('q=openssh&only_hidden=1');
+    const next = clearVulnFilters(sp);
+    expect(next.get('q')).toBeNull();
+    expect(next.get('only_hidden')).toBeNull();
+  });
 });
 
 describe('vulnFilterLink', () => {

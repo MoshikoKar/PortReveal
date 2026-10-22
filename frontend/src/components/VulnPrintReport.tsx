@@ -14,7 +14,7 @@ function severityClass(sev: string | null | undefined): string {
   return 'outline';
 }
 
-function truncateTitle(text: string | null | undefined, max = 48): string {
+function truncateTitle(text: string | null | undefined, max = 36): string {
   const t = (text || '').replace(/\s+/g, ' ').trim();
   if (!t) return '—';
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
@@ -22,7 +22,7 @@ function truncateTitle(text: string | null | undefined, max = 48): string {
 
 /** Print-only vulnerability findings report: filter summary, executive counts, full findings table. */
 export function VulnPrintReport({
-  filters, labelCtx, summary, findings, loading, error, preview = false,
+  filters, labelCtx, summary, findings, loading, error, preview = false, searchQ,
 }: {
   filters: VulnFilters;
   labelCtx: VulnFilterLabelContext;
@@ -32,9 +32,16 @@ export function VulnPrintReport({
   error: string | null;
   /** When true, show the report on-screen (before opening the system print dialog). */
   preview?: boolean;
+  /** Active free-text search term (not part of VulnFilters). */
+  searchQ?: string;
 }) {
   const generatedAt = new Date();
-  const filterSummary = formatVulnFilterSummary(filters, labelCtx);
+  const baseSummary = formatVulnFilterSummary(filters, labelCtx);
+  const filterSummary = searchQ
+    ? (baseSummary === 'All networks (no filters)'
+      ? `Search: "${searchQ}"`
+      : `${baseSummary} · Search: "${searchQ}"`)
+    : baseSummary;
   const kevCount = summary?.kev_count ?? findings.filter((f) => f.kev).length;
   const deviceCount = new Set(findings.map((f) => f.device_uuid)).size;
   const sev = summary?.severity_counts;
@@ -142,10 +149,12 @@ export function VulnPrintReport({
                       <td className="mono">{formatCvss(f.cvss_base)}</td>
                       <td className="mono small">{formatEpssPct(f.epss)}</td>
                       <td className="mono nowrap">{f.cve_id}</td>
-                      <td className="small vuln-print-title">{truncateTitle(f.summary)}</td>
-                      <td className="vuln-print-host">
+                      <td className="small vuln-print-title nowrap">{truncateTitle(f.summary)}</td>
+                      <td className="vuln-print-host nowrap">
                         <span className="mono">{f.device_ip}</span>
-                        {f.device_hostname && <div className="vuln-print-hostname">{f.device_hostname}</div>}
+                        {f.device_hostname && (
+                          <span className="vuln-print-hostname"> · {truncateTitle(f.device_hostname, 24)}</span>
+                        )}
                       </td>
                       <td>{f.network ?? 'Unassigned'}</td>
                       <td className="small">

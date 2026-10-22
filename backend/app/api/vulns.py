@@ -2,6 +2,7 @@
 card/facet/chart/top-list, the filterable/paginated finding list, and the per-CVE detail page.
 Report-only: dismiss/undismiss stay on the existing device-scoped endpoints in api/devices.py.
 """
+
 from __future__ import annotations
 
 import csv
@@ -18,7 +19,7 @@ from ..auth.deps import current_user
 from ..core.mockdata import device_visible
 from ..core.query.sqlfn import ipv4_int_expr
 from ..core.vuln.buckets import severity_bucket, severity_bucket_expr
-from ..core.vuln.display import is_visible, normalize_cve_id
+from ..core.vuln.display import hidden_reasons, is_visible, normalize_cve_id
 from ..core.vuln.filters import (
     NETWORK_UNASSIGNED,
     FindingFilters,
@@ -26,6 +27,7 @@ from ..core.vuln.filters import (
     csv_safe_cell,
     parse_network_id_param,
     sanitize_filename_part,
+    search_term,
 )
 from ..core.vuln.score import DEFAULT_CVSS, RISK_BANDS, RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 from ..core.vuln.summary import get_vuln_summary
@@ -48,7 +50,7 @@ from ..models import (
     VulnFindingLifecycle,
 )
 from ..settings_store import VulnSettings, get_section
-from .common import Paging, cve_out, paged, vuln_finding_out
+from .common import Paging, cve_out, like_pattern, paged, vuln_finding_out
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 
@@ -91,14 +93,30 @@ def _finding_filters_from_request(
     cve_id: str | None = None,
     device_uuid: str | None = None,
     new_since: str | None = None,
+    q: str | None = None,
+    only_hidden: bool = False,
 ) -> FindingFilters:
     """Shared query→FindingFilters mapping for list, export, and summary."""
     return FindingFilters(
-        severity=severity, kev=kev, epss_min=epss_min, network_id=_parse_network_id_param(network_id),
-        service=service, port=port, os_name=os_name, device_type=device_type,
-        state=state, cve_age=cve_age, exposure_duration=exposure_duration,
-        risk_band=risk_band, vendor=vendor, product=product,
-        cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
+        severity=severity,
+        kev=kev,
+        epss_min=epss_min,
+        network_id=_parse_network_id_param(network_id),
+        service=service,
+        port=port,
+        os_name=os_name,
+        device_type=device_type,
+        state=state,
+        cve_age=cve_age,
+        exposure_duration=exposure_duration,
+        risk_band=risk_band,
+        vendor=vendor,
+        product=product,
+        cve_id=cve_id,
+        device_uuid=device_uuid,
+        new_since=new_since,
+        q=q,
+        only_hidden=only_hidden,
     )
 
 
@@ -121,21 +139,38 @@ def vuln_summary_route(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
+    q: str | None = Query(None, max_length=200),
+    only_hidden: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
     """Severity/KEV/EPSS/confirmed-potential counts, high-risk device levels, feed staleness,
     facet breakdowns, the weekly new/resolved/dismissed trend and top-10 CVEs/devices.
 
-    Accepts the same filters as GET /api/vulns so the dashboard cards/charts scope with the page.
-    Unfiltered responses are cached; filtered responses recompute and leave the cache alone.
+    Accepts the same filters as GET /api/vulns (including ``q`` / ``only_hidden``) so the
+    dashboard cards/charts scope with the page. Unfiltered responses are cached; filtered
+    responses recompute and leave the cache alone.
     """
     filters = _finding_filters_from_request(
-        severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
-        service=service, port=port, os_name=os_name, device_type=device_type,
-        state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
-        vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid,
+        severity=severity,
+        kev=kev,
+        epss_min=epss_min,
+        network_id=network_id,
+        service=service,
+        port=port,
+        os_name=os_name,
+        device_type=device_type,
+        state=state,
+        cve_age=cve_age,
+        exposure_duration=exposure_duration,
+        risk_band=risk_band,
+        vendor=vendor,
+        product=product,
+        cve_id=cve_id,
+        device_uuid=device_uuid,
         new_since=new_since,
+        q=q,
+        only_hidden=only_hidden,
     )
     return get_vuln_summary(db, now=utcnow(), filters=filters)
 
@@ -145,16 +180,19 @@ def _new_since_cutoff(db: Session, kind: str) -> datetime | None:
         return db.scalar(
             select(Scan.finished_at)
             .where(Scan.status.in_((SCAN_COMPLETED, SCAN_PARTIAL)), Scan.finished_at.isnot(None))
-            .order_by(Scan.finished_at.desc()).limit(1)
+            .order_by(Scan.finished_at.desc())
+            .limit(1)
         )
     # "db": newest last_synced_at among the sources enabled in settings (same as summary feed).
     cfg = get_section(db, VulnSettings)
-    timestamps = list(db.scalars(
-        select(VulnFeedState.last_synced_at).where(
-            VulnFeedState.source.in_(cfg.sources),
-            VulnFeedState.last_synced_at.isnot(None),
+    timestamps = list(
+        db.scalars(
+            select(VulnFeedState.last_synced_at).where(
+                VulnFeedState.source.in_(cfg.sources),
+                VulnFeedState.last_synced_at.isnot(None),
+            )
         )
-    ))
+    )
     return max(timestamps) if timestamps else None
 
 
@@ -202,16 +240,98 @@ def _age_bucket_cond(col, bucket: str, now: datetime):
     return and_(col.isnot(None), col < d365)  # over_365d
 
 
+def _parse_port_query(term: str) -> tuple[str | None, int | None]:
+    """Split ``port:22`` (port-only) or a pure-digit term (exact port + substring elsewhere).
+
+    Returns ``(text_for_substring_fields, exact_port_or_None)``. For ``port:N``, text is None
+    so only the port column matches. For pure digits, text stays the digit string for IP/CVE/etc.
+    """
+    lower = term.lower()
+    if lower.startswith("port:"):
+        raw = term[5:].strip()
+        if raw.isdigit():
+            port_num = int(raw)
+            if 1 <= port_num <= 65535:
+                return None, port_num
+        return term, None
+    if term.isdigit():
+        port_num = int(term)
+        if 1 <= port_num <= 65535:
+            return term, port_num
+    return term, None
+
+
+def _search_match_cond(term: str):
+    """DB-side OR across CVE id/summary, device, product/vendor/CPE, and port (no CVE-cache scan).
+
+    Pure-digit terms match port by equality only (not ``LIKE '%22%'`` on port 122/220).
+    ``port:22`` matches only that port.
+    """
+    text, exact_port = _parse_port_query(term)
+    conds = []
+    if text is not None:
+        like = like_pattern(text)
+        cpe_vendor_product = (
+            select(VulnCpeMatch.id)
+            .where(
+                VulnCpeMatch.cve_id == DevicePortVuln.cve_id,
+                VulnCpeMatch.cpe23 == DevicePortVuln.matched_cpe,
+                VulnCpeMatch.vendor_product.ilike(like, escape="\\"),
+            )
+            .exists()
+        )
+        conds.extend(
+            [
+                Vulnerability.cve_id.ilike(like, escape="\\"),
+                Vulnerability.summary.ilike(like, escape="\\"),
+                Device.current_ip.ilike(like, escape="\\"),
+                Device.hostname.ilike(like, escape="\\"),
+                Device.vendor.ilike(like, escape="\\"),
+                DevicePort.product.ilike(like, escape="\\"),
+                DevicePort.service.ilike(like, escape="\\"),
+                DevicePortVuln.matched_cpe.ilike(like, escape="\\"),
+                cpe_vendor_product,
+            ]
+        )
+    if exact_port is not None:
+        conds.append(DevicePort.port == exact_port)
+    if not conds:
+        return literal_column("0") == 1
+    return or_(*conds)
+
+
+def _normally_hidden_cond(cfg: VulnSettings):
+    """SQL predicate matching rows the default list would exclude (no ``state=`` / no ``q``)."""
+    effective_cvss = func.coalesce(Vulnerability.cvss_base, literal_column(str(DEFAULT_CVSS)))
+    below_floor = and_(
+        DevicePortVuln.state != VULN_STATE_DISMISSED,
+        Vulnerability.kev.is_(False),
+        effective_cvss < cfg.min_cvss_display,
+    )
+    parts = [DevicePortVuln.state == VULN_STATE_DISMISSED, below_floor]
+    if not cfg.include_potential:
+        parts.append(DevicePortVuln.state == VULN_STATE_POTENTIAL)
+    return or_(*parts)
+
+
 def _apply_filters(q, db: Session, cfg: VulnSettings, f: FindingFilters, now: datetime):
     q = q.where(device_visible(db))
+    term = search_term(f)
+    searching = term is not None
     if f.state:
         q = q.where(DevicePortVuln.state == f.state)
-    else:
+    elif not searching:
+        # Default view: hide dismissed, optional potential, and below-floor (non-KEV) findings.
         q = q.where(DevicePortVuln.state != VULN_STATE_DISMISSED)
         if not cfg.include_potential:
             q = q.where(DevicePortVuln.state != VULN_STATE_POTENTIAL)
         effective_cvss = func.coalesce(Vulnerability.cvss_base, literal_column(str(DEFAULT_CVSS)))
         q = q.where(or_(Vulnerability.kev.is_(True), effective_cvss >= cfg.min_cvss_display))
+    # When searching with no explicit state=, include normally-hidden rows; facets still apply below.
+    if term is not None:
+        q = q.where(_search_match_cond(term))
+        if f.only_hidden:
+            q = q.where(_normally_hidden_cond(cfg))
     if f.severity:
         q = q.where(severity_bucket_expr(Vulnerability.cvss_base) == f.severity)
     if f.kev is not None:
@@ -327,6 +447,8 @@ def list_vulns(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
+    q: str | None = Query(None, max_length=200),
+    only_hidden: bool = False,
     sort: str = Query("risk", pattern=FINDING_SORT_PATTERN),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     paging: Paging = Depends(),
@@ -334,27 +456,76 @@ def list_vulns(
     user: User = Depends(current_user),
 ):
     """Filterable, sortable, paginated, CVE-centric finding list -- every card/facet on `/vulnerabilities`
-    links here with matching query params, so the URL is shareable (spec UX)."""
+    links here with matching query params, so the URL is shareable (spec UX).
+
+    With ``q``, the display floor is lifted so dismissed / potential / below-floor findings that
+    match the term are included; each row carries ``hidden_reasons`` for UI badges.
+    ``only_hidden`` (with ``q``) keeps only normally-hidden matches. Response adds ``hidden_total``
+    when searching.
+    """
     cfg = get_section(db, VulnSettings)
     now = utcnow()
     filters = _finding_filters_from_request(
-        severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
-        service=service, port=port, os_name=os_name, device_type=device_type,
-        state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
-        vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid,
+        severity=severity,
+        kev=kev,
+        epss_min=epss_min,
+        network_id=network_id,
+        service=service,
+        port=port,
+        os_name=os_name,
+        device_type=device_type,
+        state=state,
+        cve_age=cve_age,
+        exposure_duration=exposure_duration,
+        risk_band=risk_band,
+        vendor=vendor,
+        product=product,
+        cve_id=cve_id,
+        device_uuid=device_uuid,
         new_since=new_since,
+        q=q,
+        only_hidden=only_hidden,
     )
+    searching = search_term(filters) is not None
     total = db.scalar(_apply_filters(_count_base(), db, cfg, filters, now)) or 0
     rows = db.execute(
         _apply_filters(_rows_base(), db, cfg, filters, now)
         .order_by(*_findings_order_by(db, sort, order))
-        .offset(paging.offset).limit(paging.page_size)
+        .offset(paging.offset)
+        .limit(paging.page_size)
     ).all()
     items = [
-        vuln_finding_out(dpv, port_row, device, vuln, network_name, first_seen_at)
+        vuln_finding_out(
+            dpv,
+            port_row,
+            device,
+            vuln,
+            network_name,
+            first_seen_at,
+            hidden_reasons=hidden_reasons(dpv.state, vuln.kev, vuln.cvss_base, cfg) if searching else None,
+        )
         for dpv, port_row, device, vuln, network_name, first_seen_at in rows
     ]
-    return paged(items, total, paging)
+    body = paged(items, total, paging)
+    if searching:
+        # Count of normally-hidden matches among the full search (ignores only_hidden for the tally).
+        tallies = FindingFilters(**{**filters.__dict__, "only_hidden": False})
+        all_matches = db.scalar(_apply_filters(_count_base(), db, cfg, tallies, now)) or 0
+        hidden_matches = (
+            db.scalar(
+                _apply_filters(
+                    _count_base(),
+                    db,
+                    cfg,
+                    FindingFilters(**{**tallies.__dict__, "only_hidden": True}),
+                    now,
+                )
+            )
+            or 0
+        )
+        body["total_matches"] = all_matches  # useful when only_hidden narrows `total`
+        body["hidden_total"] = hidden_matches
+    return body
 
 
 def _csv_local_tz_label() -> str:
@@ -362,10 +533,13 @@ def _csv_local_tz_label() -> str:
     return datetime.now().astimezone().tzname() or "local"
 
 
-def _csv_columns() -> list[str]:
-    """Stable headers; date columns name the local timezone Excel will see."""
+def _csv_columns(*, searching: bool) -> list[str]:
+    """Stable headers; date columns name the local timezone Excel will see.
+
+    ``hidden_reasons`` is trailing so search-export stays rebase-friendly with the richer columns.
+    """
     tz = _csv_local_tz_label()
-    return [
+    cols = [
         "network",
         "device_name",
         "hostname",
@@ -387,6 +561,9 @@ def _csv_columns() -> list[str]:
         f"last_matched ({tz})",
         "cve_link",
     ]
+    if searching:
+        cols.append("hidden_reasons")
+    return cols
 
 
 def _csv_local_date(ts: datetime | None) -> str:
@@ -397,8 +574,15 @@ def _csv_local_date(ts: datetime | None) -> str:
     return local.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _export_row(dpv: DevicePortVuln, port_row: DevicePort, device: Device, vuln: Vulnerability,
-                network_name: str | None, first_seen_at: datetime | None) -> list:
+def _export_row(
+    dpv: DevicePortVuln,
+    port_row: DevicePort,
+    device: Device,
+    vuln: Vulnerability,
+    network_name: str | None,
+    first_seen_at: datetime | None,
+    reasons: list[str] | None = None,
+) -> list:
     device_name = device.hostname or device.discovery_name or device.current_ip or ""
     title = (vuln.summary or "").replace("\r\n", " ").replace("\n", " ").strip()
     cells = [
@@ -423,6 +607,8 @@ def _export_row(dpv: DevicePortVuln, port_row: DevicePort, device: Device, vuln:
         _csv_local_date(dpv.matched_at),
         CVE_NVD_URL.format(cve_id=vuln.cve_id),
     ]
+    if reasons is not None:
+        cells.append(";".join(reasons))
     return [csv_safe_cell(c) for c in cells]
 
 
@@ -451,6 +637,8 @@ def _export_filename(db: Session, filters: FindingFilters) -> str:
         parts.append(sanitize_filename_part(filters.severity))
     if filters.state:
         parts.append(sanitize_filename_part(filters.state))
+    if search_term(filters):
+        parts.append("search")
     slug = "_".join(parts) if parts else "all"
     return f"vulns_{slug}_{day}.csv"
 
@@ -459,17 +647,30 @@ def _export_lines(filters: FindingFilters, now: datetime) -> Iterator[str]:
     db = SessionLocal()
     try:
         cfg = get_section(db, VulnSettings)
+        searching = search_term(filters) is not None
         buf = io.StringIO()
         # UTF-8 BOM so Excel on Windows opens Hebrew / non-ASCII titles correctly.
         buf.write("\ufeff")
         writer = csv.writer(buf)
-        writer.writerow(_csv_columns())
+        writer.writerow(_csv_columns(searching=searching))
         rows = db.execute(
-            _apply_filters(_rows_base(), db, cfg, filters, now)
-            .order_by(Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), DevicePortVuln.id)
+            _apply_filters(_rows_base(), db, cfg, filters, now).order_by(
+                Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), DevicePortVuln.id
+            )
         )
         for dpv, port_row, device, vuln, network_name, first_seen_at in rows:
-            writer.writerow(_export_row(dpv, port_row, device, vuln, network_name, first_seen_at))
+            reasons = hidden_reasons(dpv.state, vuln.kev, vuln.cvss_base, cfg) if searching else None
+            writer.writerow(
+                _export_row(
+                    dpv,
+                    port_row,
+                    device,
+                    vuln,
+                    network_name,
+                    first_seen_at,
+                    reasons=reasons,
+                )
+            )
             if buf.tell() > 64_000:
                 yield buf.getvalue()
                 buf.seek(0)
@@ -498,16 +699,32 @@ def export_vulns(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
+    q: str | None = Query(None, max_length=200),
+    only_hidden: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Same filters as GET /api/vulns, no pagination: every matching row, streamed as UTF-8 CSV (BOM)."""
+    """Same filters as GET /api/vulns (including ``q`` / hidden inclusion), no pagination: CSV stream."""
     filters = _finding_filters_from_request(
-        severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
-        service=service, port=port, os_name=os_name, device_type=device_type,
-        state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
-        vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid,
+        severity=severity,
+        kev=kev,
+        epss_min=epss_min,
+        network_id=network_id,
+        service=service,
+        port=port,
+        os_name=os_name,
+        device_type=device_type,
+        state=state,
+        cve_age=cve_age,
+        exposure_duration=exposure_duration,
+        risk_band=risk_band,
+        vendor=vendor,
+        product=product,
+        cve_id=cve_id,
+        device_uuid=device_uuid,
         new_since=new_since,
+        q=q,
+        only_hidden=only_hidden,
     )
     filename = _export_filename(db, filters)
     return StreamingResponse(
@@ -541,10 +758,20 @@ def cve_detail(cve_id: str, db: Session = Depends(get_db), user: User = Depends(
     ).all()
     visible = [r for r in rows if is_visible(r[0].state, vuln.kev, vuln.cvss_base, cfg)]
     affected_devices = [
-        {"device_uuid": device.uuid, "device_ip": device.current_ip, "device_hostname": device.hostname,
-         "network": network_name, "port": port_row.port, "protocol": port_row.protocol,
-         "service": port_row.service, "product": port_row.product, "version": port_row.version,
-         "state": dpv.state, "matched_at": dpv.matched_at, "first_seen_at": first_seen_at}
+        {
+            "device_uuid": device.uuid,
+            "device_ip": device.current_ip,
+            "device_hostname": device.hostname,
+            "network": network_name,
+            "port": port_row.port,
+            "protocol": port_row.protocol,
+            "service": port_row.service,
+            "product": port_row.product,
+            "version": port_row.version,
+            "state": dpv.state,
+            "matched_at": dpv.matched_at,
+            "first_seen_at": first_seen_at,
+        }
         for dpv, port_row, device, network_name, first_seen_at in visible
     ]
     seen_dates = [r[4] for r in visible if r[4] is not None]

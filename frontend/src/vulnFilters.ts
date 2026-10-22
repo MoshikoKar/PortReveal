@@ -4,12 +4,11 @@
  */
 
 /** URL/query keys shared by the dashboard, findings list, CSV export, and print report.
- *  A future free-text ``q`` param should be appended here so parse/build/clear stay in sync. */
+ *  Free-text ``q`` / ``only_hidden`` are managed separately (search bar + Clear all). */
 export const VULN_FILTER_KEYS = [
   'severity', 'kev', 'epss_min', 'network_id', 'service', 'port', 'os_name', 'device_type',
   'state', 'cve_age', 'exposure_duration', 'risk_band', 'vendor', 'product',
   'cve_id', 'device_uuid', 'new_since',
-  // 'q',  // reserved: search-including-hidden / free-text findings search
 ] as const;
 
 export type VulnFilterKey = typeof VULN_FILTER_KEYS[number];
@@ -52,8 +51,64 @@ export function toggleVulnFilter(sp: URLSearchParams, key: VulnFilterKey, value:
 export function clearVulnFilters(sp: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(sp);
   for (const key of VULN_FILTER_KEYS) next.delete(key);
+  next.delete('q');
+  next.delete('only_hidden');
   next.delete('page');
   return next;
+}
+
+/** Live query string from the address bar (not React Router's render-captured searchParams). */
+export function liveSearchParams(): URLSearchParams {
+  if (typeof window === 'undefined') return new URLSearchParams();
+  return new URLSearchParams(window.location.search);
+}
+
+/**
+ * Apply a findings-search term onto `prev` without dropping other filters.
+ * Callers must pass **live** params (`liveSearchParams()` / `window.location.search`):
+ * react-router 7's `setSp(prev => …)` feeds a render-captured snapshot, which is stale after
+ * Clear all / facet clicks during the debounce window.
+ * Trims `qInput`; whitespace-only clears search. Returns null when `q` is already in sync.
+ */
+export function applyVulnSearchQ(prev: URLSearchParams, qInput: string): URLSearchParams | null {
+  const q = qInput.trim();
+  if ((prev.get('q') ?? '') === q) return null;
+  const next = new URLSearchParams(prev);
+  if (q) next.set('q', q);
+  else {
+    next.delete('q');
+    next.delete('only_hidden');
+  }
+  next.delete('page');
+  return next;
+}
+
+/** Merge in-progress (possibly not-yet-debounced) search text into a filter URL update. */
+export function withPendingVulnSearchQ(sp: URLSearchParams, qInput: string): URLSearchParams {
+  const next = new URLSearchParams(sp);
+  const q = qInput.trim();
+  if (q) next.set('q', q);
+  else {
+    next.delete('q');
+    // Keep only_hidden only when a real q remains; otherwise drop it with the search.
+    next.delete('only_hidden');
+  }
+  return next;
+}
+
+/** True when URL `q` changed outside this box's last write (back/forward/shared link). */
+export function shouldResyncVulnQInput(urlQ: string, lastWrittenQ: string): boolean {
+  return urlQ !== lastWrittenQ;
+}
+
+/** Drop state-redundant hidden_reasons that duplicate the state pill (Dismissed / Potential). */
+export function displayHiddenReasons(state: string, reasons: string[] | undefined): string[] {
+  if (!reasons?.length) return [];
+  return reasons.filter((r) => {
+    if (r === 'Dismissed' && state === 'dismissed') return false;
+    if (r === 'Potential (hidden)' && state === 'potential') return false;
+    return true;
+  });
 }
 
 /** A shareable `/vulnerabilities?...` link for a given filter set (e.g. from a top-list row). */

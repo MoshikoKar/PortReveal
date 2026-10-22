@@ -1,4 +1,5 @@
 """GET /api/vulns (filterable finding list) and GET /api/vulns/{cve_id} (CVE detail)."""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -47,10 +48,15 @@ def _uuid(c: TestClient, ip: str) -> str:
 
 def _seed_two_devices(db):
     net = make_network(db)
-    scan(ScriptedScanner([
-        host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01"),
-        host("10.0.0.2", [port(80, "http", "nginx", "1.18")], mac="00:11:22:33:44:02"),
-    ]), network_id=net.id)
+    scan(
+        ScriptedScanner(
+            [
+                host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01"),
+                host("10.0.0.2", [port(80, "http", "nginx", "1.18")], mac="00:11:22:33:44:02"),
+            ]
+        ),
+        network_id=net.id,
+    )
     da = device_by_ip(db, "10.0.0.1")
     db_ = device_by_ip(db, "10.0.0.2")
     pa = next(p for p in da.ports if p.port == 22)
@@ -120,8 +126,7 @@ def test_list_vulns_filters_new_since_scan_and_db(admin, db):
     # Seed ran a completed scan before inserting findings → they count as new since that scan.
     assert admin.get("/api/vulns", params={"new_since": "scan"}).json()["total"] == 2
 
-    db.add(VulnFeedState(source="nvd", last_synced_at=now - timedelta(hours=1), record_count=1,
-                         mirror_complete=True))
+    db.add(VulnFeedState(source="nvd", last_synced_at=now - timedelta(hours=1), record_count=1, mirror_complete=True))
     db.commit()
     assert admin.get("/api/vulns", params={"new_since": "db"}).json()["total"] == 2
 
@@ -270,6 +275,175 @@ def test_list_vulns_respects_min_cvss_display_like_device_endpoint(admin, db):
     assert {it["cve_id"] for it in device_items_b} == set()  # below floor, not KEV
 
 
+def test_list_vulns_q_matches_cve_device_product_port_and_summary(admin, db):
+    """Free-text q matches CVE id, IP/hostname, product, port, and summary (case-insensitive)."""
+    _net, da, _db = _seed_two_devices(db)
+    da.hostname = "edge-gw"
+    med = db.query(Vulnerability).filter_by(cve_id="CVE-2024-MED").one()
+    med.summary = "nginx buffer overflow in HTTP parser"
+    pb = next(p for p in _db.ports if p.port == 80)
+    pb.product = "nginx"
+    db.commit()
+
+    by_cve = admin.get("/api/vulns", params={"q": "2024-med"}).json()
+    assert by_cve["total"] == 1 and by_cve["items"][0]["cve_id"] == "CVE-2024-MED"
+    assert "hidden_reasons" in by_cve["items"][0]
+    assert by_cve["hidden_total"] == 0 and by_cve["total_matches"] == 1
+
+    by_ip = admin.get("/api/vulns", params={"q": "10.0.0.1"}).json()
+    assert by_ip["total"] == 1 and by_ip["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    by_host = admin.get("/api/vulns", params={"q": "EDGE-GW"}).json()
+    assert by_host["total"] == 1 and by_host["items"][0]["device_hostname"] == "edge-gw"
+
+    by_product = admin.get("/api/vulns", params={"q": "nginx"}).json()
+    assert by_product["total"] == 1 and by_product["items"][0]["cve_id"] == "CVE-2024-MED"
+
+    by_port = admin.get("/api/vulns", params={"q": "22"}).json()
+    assert by_port["total"] == 1 and by_port["items"][0]["port"] == 22
+
+    by_port_prefix = admin.get("/api/vulns", params={"q": "port:80"}).json()
+    assert by_port_prefix["total"] == 1 and by_port_prefix["items"][0]["port"] == 80
+
+    by_summary = admin.get("/api/vulns", params={"q": "buffer overflow"}).json()
+    assert by_summary["total"] == 1 and by_summary["items"][0]["cve_id"] == "CVE-2024-MED"
+
+    # Empty / whitespace q must not lift the floor or attach hidden_reasons.
+    no_q = admin.get("/api/vulns", params={"q": "   "}).json()
+    assert no_q["total"] == 2
+    assert all("hidden_reasons" not in it for it in no_q["items"])
+    assert "hidden_total" not in no_q
+
+
+def test_list_vulns_q_digit_port_is_exact_not_substring(admin, db):
+    """Pure-digit q must not match port 122 via LIKE '%22%'; only exact port (and other fields)."""
+    from app.models import DevicePort
+
+    _seed_two_devices(db)
+    # Attach a second port 122 on the MED device so a naive port LIKE would over-match "22".
+    db_ = device_by_ip(db, "10.0.0.2")
+    db.add(DevicePort(device_id=db_.id, port=122, protocol="tcp", is_open=True, service="custom"))
+    db.flush()
+    db.refresh(db_)
+    p122 = next(p for p in db_.ports if p.port == 122)
+    db.add(
+        DevicePortVuln(
+            device_port_id=p122.id,
+            cve_id="CVE-2024-MED",
+            state=VULN_STATE_POTENTIAL,
+            matched_at=utcnow(),
+        )
+    )
+    db.commit()
+
+    body = admin.get("/api/vulns", params={"q": "22"}).json()
+    assert body["total"] == 1 and body["items"][0]["port"] == 22
+    assert admin.get("/api/vulns", params={"q": "port:122"}).json()["total"] == 1
+    assert admin.get("/api/vulns", params={"q": "port:122"}).json()["items"][0]["port"] == 122
+
+
+def test_list_vulns_q_includes_below_floor_with_hidden_reason(admin, db):
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
+    db.commit()
+
+    assert admin.get("/api/vulns").json()["total"] == 1  # MED hidden by floor
+
+    body = admin.get("/api/vulns", params={"q": "CVE-2024-MED"}).json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["cve_id"] == "CVE-2024-MED"
+    assert item["hidden_reasons"] == ["Below CVSS floor"]
+    assert body["hidden_total"] == 1 and body["total_matches"] == 1
+
+
+def test_list_vulns_q_includes_dismissed_with_hidden_reason(admin, db):
+    _seed_two_devices(db)
+    row = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
+    row.state = VULN_STATE_DISMISSED
+    db.commit()
+
+    assert admin.get("/api/vulns").json()["total"] == 1  # CRIT dismissed
+
+    body = admin.get("/api/vulns", params={"q": "CRIT"}).json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["cve_id"] == "CVE-2024-CRIT"
+    assert item["hidden_reasons"] == ["Dismissed"]
+
+
+def test_list_vulns_q_includes_potential_when_include_potential_off(admin, db):
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, include_potential=False, min_cvss_display=0.0))
+    db.commit()
+
+    assert admin.get("/api/vulns").json()["total"] == 1  # MED is potential
+    assert admin.get("/api/vulns").json()["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    body = admin.get("/api/vulns", params={"q": "MED"}).json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["cve_id"] == "CVE-2024-MED"
+    assert item["hidden_reasons"] == ["Potential (hidden)"]
+
+
+def test_list_vulns_q_with_state_filter_still_narrows(admin, db):
+    """Explicit state= continues to apply on top of search (floor bypass only when state unset)."""
+    _seed_two_devices(db)
+    row = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
+    row.state = VULN_STATE_DISMISSED
+    db.commit()
+
+    dismissed = admin.get("/api/vulns", params={"q": "2024", "state": "dismissed"}).json()
+    assert dismissed["total"] == 1 and dismissed["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    confirmed = admin.get("/api/vulns", params={"q": "2024", "state": "confirmed"}).json()
+    assert confirmed["total"] == 0
+
+    potential = admin.get("/api/vulns", params={"q": "2024", "state": "potential"}).json()
+    assert potential["total"] == 1 and potential["items"][0]["cve_id"] == "CVE-2024-MED"
+
+
+def test_list_vulns_q_only_hidden_filters_to_normally_hidden(admin, db):
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
+    db.commit()
+
+    all_q = admin.get("/api/vulns", params={"q": "2024"}).json()
+    assert all_q["total"] == 2 and all_q["hidden_total"] == 1 and all_q["total_matches"] == 2
+
+    hidden_only = admin.get("/api/vulns", params={"q": "2024", "only_hidden": "true"}).json()
+    assert hidden_only["total"] == 1
+    assert hidden_only["items"][0]["cve_id"] == "CVE-2024-MED"
+    assert hidden_only["hidden_total"] == 1 and hidden_only["total_matches"] == 2
+
+
+def test_list_vulns_q_still_respects_facet_filters(admin, db):
+    """Search lifts the display floor but severity/network/etc. facets still narrow results."""
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
+    db.commit()
+
+    # q alone would find MED; severity=critical must exclude it.
+    body = admin.get("/api/vulns", params={"q": "2024", "severity": "critical"}).json()
+    assert body["total"] == 1 and body["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+
+def test_export_vulns_respects_q_including_below_floor(admin, db):
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
+    db.commit()
+
+    default = admin.get("/api/vulns/export").text
+    assert "CVE-2024-CRIT" in default and "CVE-2024-MED" not in default
+
+    searched = admin.get("/api/vulns/export", params={"q": "MED"}).text
+    assert "CVE-2024-MED" in searched
+    # Semicolon-joined hidden_reasons when q is set; empty for normally-visible rows.
+    med_line = next(line for line in searched.strip().splitlines() if "CVE-2024-MED" in line)
+    assert med_line.endswith("Below CVSS floor") or ";Below CVSS floor" in med_line or med_line.endswith(",Below CVSS floor")
+
+
 def test_cve_detail_returns_metadata_and_affected_devices(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/CVE-2024-CRIT")
@@ -344,8 +518,23 @@ def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
 
 # --- CSV export --------------------------------------------------------------------------------------
 CSV_HEADER_PREFIX = [
-    "network", "device_name", "hostname", "ip", "mac", "port", "protocol", "service",
-    "product", "version", "cve", "title", "cvss", "severity", "kev", "epss", "state",
+    "network",
+    "device_name",
+    "hostname",
+    "ip",
+    "mac",
+    "port",
+    "protocol",
+    "service",
+    "product",
+    "version",
+    "cve",
+    "title",
+    "cvss",
+    "severity",
+    "kev",
+    "epss",
+    "state",
 ]
 
 
@@ -372,11 +561,37 @@ def test_export_vulns_streams_header_and_rows(admin, db):
     lines = _csv_lines(r.text)
     header = lines[0].split(",")
     _assert_csv_header(header)
+    assert "hidden_reasons" not in header  # only appended when q is set
     assert len(lines) == 3  # header + 2 findings
     body = "\n".join(lines)
     assert "CVE-2024-CRIT" in body and "CVE-2024-MED" in body
     assert "Yes" in body and "No" in body
     assert "nvd.nist.gov/vuln/detail/CVE-2024-CRIT" in body
+
+
+def test_export_vulns_hidden_reasons_column_with_q(admin, db):
+    """With ``q``, rich CSV gains a trailing hidden_reasons column (search includes hidden rows)."""
+    import csv
+    import io
+
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0, include_potential=False))
+    row = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
+    row.state = VULN_STATE_DISMISSED
+    db.commit()
+
+    r = admin.get("/api/vulns/export", params={"q": "2024"})
+    rows = list(csv.reader(io.StringIO(r.text.lstrip("\ufeff"))))
+    header, *data = rows
+    assert header[-1] == "hidden_reasons"
+    _assert_csv_header(header[:-1])
+    by_cve = {row[header.index("cve")]: row for row in data}
+    assert "Dismissed" in by_cve["CVE-2024-CRIT"][header.index("hidden_reasons")]
+    # MED is potential + below floor → semicolon-joined reasons.
+    med_reasons = by_cve["CVE-2024-MED"][header.index("hidden_reasons")]
+    assert "Potential (hidden)" in med_reasons
+    assert "Below CVSS floor" in med_reasons
+    assert ";" in med_reasons
 
 
 def test_export_vulns_respects_filters(admin, db):
@@ -420,8 +635,7 @@ def test_export_vulns_hebrew_network_name_content_disposition(admin, db):
 
     # Generic Hebrew placeholder network name (not a real org/site).
     net = make_network(db, cidr="10.30.0.0/24", name="רשת-בדיקה")
-    scan(ScriptedScanner([host("10.30.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:30")]),
-         network_id=net.id)
+    scan(ScriptedScanner([host("10.30.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:30")]), network_id=net.id)
     d = device_by_ip(db, "10.30.0.1")
     p = next(pp for pp in d.ports if pp.port == 22)
     db.add(Vulnerability(cve_id="CVE-2024-HEB", cvss_base=9.8, kev=True, summary="hebrew net"))
@@ -445,18 +659,28 @@ def test_export_vulns_hebrew_network_name_content_disposition(admin, db):
 def test_export_vulns_csv_injection_prefix(admin, db):
     """Hostname / title / product cells starting with =+-@ get a leading apostrophe."""
     net = make_network(db, cidr="10.40.0.0/24", name="Inj Net")
-    scan(ScriptedScanner([
-        host("10.40.0.1", [port(22, "ssh", "=EvilProduct", "1.0")],
-             hostname="=cmd|' /C calc'!A0", mac="00:11:22:33:44:40"),
-    ]), network_id=net.id)
+    scan(
+        ScriptedScanner(
+            [
+                host(
+                    "10.40.0.1", [port(22, "ssh", "=EvilProduct", "1.0")], hostname="=cmd|' /C calc'!A0", mac="00:11:22:33:44:40"
+                ),
+            ]
+        ),
+        network_id=net.id,
+    )
     d = device_by_ip(db, "10.40.0.1")
     d.hostname = "=cmd|' /C calc'!A0"
     p = next(pp for pp in d.ports if pp.port == 22)
     p.product = "+1+1"
-    db.add(Vulnerability(
-        cve_id="CVE-2024-INJ", cvss_base=5.0, kev=False,
-        summary="@SUM(A1:A10) formula title",
-    ))
+    db.add(
+        Vulnerability(
+            cve_id="CVE-2024-INJ",
+            cvss_base=5.0,
+            kev=False,
+            summary="@SUM(A1:A10) formula title",
+        )
+    )
     db.flush()
     db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-INJ", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
     db.commit()
@@ -493,12 +717,57 @@ def test_export_vulns_unassigned_network_label(admin, db):
     assert "CVE-2024-MED" in rows[1]
 
 
-def test_vulns_routes_do_not_accept_q_query_param():
-    """``q`` stays off the API surface here so a parallel free-text PR can own it."""
-    import inspect
+def test_vulns_routes_accept_q_and_network_together(admin, db):
+    """List, summary, and CSV all compose ``q`` with ``network_id`` (and other facets)."""
+    import csv
+    import io
 
-    from app.api import vulns as vulns_api
+    net, _da, other = _seed_two_devices(db)
+    net_b = make_network(db, cidr="10.1.0.0/24", name="other-net")
+    other.network_id = net_b.id
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0, include_potential=False))
+    db.commit()
 
-    for fn in (vulns_api.list_vulns, vulns_api.export_vulns, vulns_api.vuln_summary_route):
-        params = inspect.signature(fn).parameters
-        assert "q" not in params, f"{fn.__name__} must not accept q"
+    # q alone lifts the floor → both CVEs; network scopes to CRIT's device only.
+    alone = admin.get("/api/vulns", params={"q": "2024"}).json()
+    assert alone["total"] == 2
+    listed = admin.get("/api/vulns", params={"q": "2024", "network_id": net.id}).json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    # kev + network + q still compose.
+    kev = admin.get(
+        "/api/vulns",
+        params={
+            "q": "2024",
+            "network_id": net.id,
+            "kev": "true",
+        },
+    ).json()
+    assert kev["total"] == 1 and kev["items"][0]["kev"] is True
+
+    summary = admin.get("/api/vulns/summary", params={"q": "2024", "network_id": net.id}).json()
+    assert summary["findings_total"] == 1
+    assert summary["severity_counts"]["critical"] == 1
+
+    exported = admin.get("/api/vulns/export", params={"q": "2024", "network_id": net.id})
+    rows = list(csv.reader(io.StringIO(exported.text.lstrip("\ufeff"))))
+    assert rows[0][-1] == "hidden_reasons"
+    assert len(rows) == 2
+    assert "CVE-2024-CRIT" in rows[1]
+    assert "CVE-2024-MED" not in exported.text
+    cd = exported.headers["content-disposition"]
+    assert "vulns_" in cd and "search" in cd
+
+
+def test_export_filename_preserves_underscores_in_ascii_fallback(admin, db):
+    """ASCII ``filename=`` keeps underscores (``vulns_network-a_YYYYMMDD`` style), not hyphens-only."""
+    from app.core.vuln.filters import content_disposition_attachment, sanitize_filename_part
+
+    assert "_" in sanitize_filename_part("network_a")
+    assert sanitize_filename_part("network_a", ascii_only=True) == "network_a"
+    # Spaces/dots become hyphens; underscores stay.
+    assert sanitize_filename_part("My_Net Work", ascii_only=True) == "my_net-work"
+    cd = content_disposition_attachment("vulns_network_a_20261022.csv")
+    assert 'filename="vulns_network_a_20261022.csv"' in cd
+    assert "filename*=UTF-8''vulns_network_a_20261022.csv" in cd
