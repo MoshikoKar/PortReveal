@@ -270,6 +270,108 @@ def test_list_vulns_respects_min_cvss_display_like_device_endpoint(admin, db):
     assert {it["cve_id"] for it in device_items_b} == set()  # below floor, not KEV
 
 
+def test_list_vulns_q_matches_cve_device_product_port_and_summary(admin, db):
+    """Free-text q matches CVE id, IP/hostname, product, port, and summary (case-insensitive)."""
+    _net, da, _db = _seed_two_devices(db)
+    da.hostname = "edge-gw"
+    med = db.query(Vulnerability).filter_by(cve_id="CVE-2024-MED").one()
+    med.summary = "nginx buffer overflow in HTTP parser"
+    pb = next(p for p in _db.ports if p.port == 80)
+    pb.product = "nginx"
+    db.commit()
+
+    by_cve = admin.get("/api/vulns", params={"q": "2024-med"}).json()
+    assert by_cve["total"] == 1 and by_cve["items"][0]["cve_id"] == "CVE-2024-MED"
+    assert "hidden_reasons" in by_cve["items"][0]
+
+    by_ip = admin.get("/api/vulns", params={"q": "10.0.0.1"}).json()
+    assert by_ip["total"] == 1 and by_ip["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    by_host = admin.get("/api/vulns", params={"q": "EDGE-GW"}).json()
+    assert by_host["total"] == 1 and by_host["items"][0]["device_hostname"] == "edge-gw"
+
+    by_product = admin.get("/api/vulns", params={"q": "nginx"}).json()
+    assert by_product["total"] == 1 and by_product["items"][0]["cve_id"] == "CVE-2024-MED"
+
+    by_port = admin.get("/api/vulns", params={"q": "22"}).json()
+    assert by_port["total"] == 1 and by_port["items"][0]["port"] == 22
+
+    by_summary = admin.get("/api/vulns", params={"q": "buffer overflow"}).json()
+    assert by_summary["total"] == 1 and by_summary["items"][0]["cve_id"] == "CVE-2024-MED"
+
+    # Empty / whitespace q must not lift the floor or attach hidden_reasons.
+    no_q = admin.get("/api/vulns", params={"q": "   "}).json()
+    assert no_q["total"] == 2
+    assert all("hidden_reasons" not in it for it in no_q["items"])
+
+
+def test_list_vulns_q_includes_below_floor_with_hidden_reason(admin, db):
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
+    db.commit()
+
+    assert admin.get("/api/vulns").json()["total"] == 1  # MED hidden by floor
+
+    body = admin.get("/api/vulns", params={"q": "CVE-2024-MED"}).json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["cve_id"] == "CVE-2024-MED"
+    assert item["hidden_reasons"] == ["Below CVSS floor"]
+
+
+def test_list_vulns_q_includes_dismissed_with_hidden_reason(admin, db):
+    _seed_two_devices(db)
+    row = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
+    row.state = VULN_STATE_DISMISSED
+    db.commit()
+
+    assert admin.get("/api/vulns").json()["total"] == 1  # CRIT dismissed
+
+    body = admin.get("/api/vulns", params={"q": "CRIT"}).json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["cve_id"] == "CVE-2024-CRIT"
+    assert item["hidden_reasons"] == ["Dismissed"]
+
+
+def test_list_vulns_q_includes_potential_when_include_potential_off(admin, db):
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, include_potential=False, min_cvss_display=0.0))
+    db.commit()
+
+    assert admin.get("/api/vulns").json()["total"] == 1  # MED is potential
+    assert admin.get("/api/vulns").json()["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    body = admin.get("/api/vulns", params={"q": "MED"}).json()
+    assert body["total"] == 1
+    item = body["items"][0]
+    assert item["cve_id"] == "CVE-2024-MED"
+    assert item["hidden_reasons"] == ["Potential (hidden)"]
+
+
+def test_list_vulns_q_still_respects_facet_filters(admin, db):
+    """Search lifts the display floor but severity/network/etc. facets still narrow results."""
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
+    db.commit()
+
+    # q alone would find MED; severity=critical must exclude it.
+    body = admin.get("/api/vulns", params={"q": "2024", "severity": "critical"}).json()
+    assert body["total"] == 1 and body["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+
+def test_export_vulns_respects_q_including_below_floor(admin, db):
+    _seed_two_devices(db)
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0))
+    db.commit()
+
+    default = admin.get("/api/vulns/export").text
+    assert "CVE-2024-CRIT" in default and "CVE-2024-MED" not in default
+
+    searched = admin.get("/api/vulns/export", params={"q": "MED"}).text
+    assert "CVE-2024-MED" in searched
+
+
 def test_cve_detail_returns_metadata_and_affected_devices(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/CVE-2024-CRIT")

@@ -12,14 +12,14 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import and_, func, literal_column, or_, select
+from sqlalchemy import String, and_, cast, func, literal_column, or_, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
 from ..core.mockdata import device_visible
 from ..core.query.sqlfn import ipv4_int_expr
 from ..core.vuln.buckets import severity_bucket, severity_bucket_expr
-from ..core.vuln.display import is_visible, normalize_cve_id
+from ..core.vuln.display import hidden_reasons, is_visible, normalize_cve_id
 from ..core.vuln.score import DEFAULT_CVSS, RISK_BANDS, RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 from ..core.vuln.summary import get_vuln_summary
 from ..db import SessionLocal, get_db, utcnow
@@ -41,7 +41,7 @@ from ..models import (
     VulnFindingLifecycle,
 )
 from ..settings_store import VulnSettings, get_section
-from .common import Paging, cve_out, paged, vuln_finding_out
+from .common import Paging, cve_out, like_pattern, paged, vuln_finding_out
 
 router = APIRouter(prefix="/api/vulns", tags=["vulns"])
 
@@ -87,6 +87,8 @@ class FindingFilters:
     device_uuid: str | None = None
     # first_seen/matched_at >= last completed scan ("scan") or newest enabled feed sync ("db").
     new_since: str | None = None
+    # Free-text search; when set, the display floor (dismissed / potential / min_cvss) is skipped.
+    q: str | None = None
 
 
 def _parse_network_id_param(raw: str | None) -> str | None:
@@ -163,16 +165,61 @@ def _age_bucket_cond(col, bucket: str, now: datetime):
     return and_(col.isnot(None), col < d365)  # over_365d
 
 
+def _search_term(f: FindingFilters) -> str | None:
+    """Non-empty stripped `q`, or None when search is inactive."""
+    if not f.q:
+        return None
+    term = f.q.strip()
+    return term or None
+
+
+def _search_match_cond(term: str):
+    """DB-side OR across CVE id/summary, device, product/vendor/CPE, and port (no CVE-cache scan)."""
+    like = like_pattern(term)
+    cpe_vendor_product = (
+        select(VulnCpeMatch.id)
+        .where(
+            VulnCpeMatch.cve_id == DevicePortVuln.cve_id,
+            VulnCpeMatch.cpe23 == DevicePortVuln.matched_cpe,
+            VulnCpeMatch.vendor_product.ilike(like, escape="\\"),
+        )
+        .exists()
+    )
+    conds = [
+        Vulnerability.cve_id.ilike(like, escape="\\"),
+        Vulnerability.summary.ilike(like, escape="\\"),
+        Device.current_ip.ilike(like, escape="\\"),
+        Device.hostname.ilike(like, escape="\\"),
+        Device.vendor.ilike(like, escape="\\"),
+        DevicePort.product.ilike(like, escape="\\"),
+        DevicePort.service.ilike(like, escape="\\"),
+        DevicePortVuln.matched_cpe.ilike(like, escape="\\"),
+        cast(DevicePort.port, String).like(like, escape="\\"),
+        cpe_vendor_product,
+    ]
+    if term.isdigit():
+        port_num = int(term)
+        if 1 <= port_num <= 65535:
+            conds.append(DevicePort.port == port_num)
+    return or_(*conds)
+
+
 def _apply_filters(q, db: Session, cfg: VulnSettings, f: FindingFilters, now: datetime):
     q = q.where(device_visible(db))
+    searching = _search_term(f) is not None
     if f.state:
         q = q.where(DevicePortVuln.state == f.state)
-    else:
+    elif not searching:
+        # Default view: hide dismissed, optional potential, and below-floor (non-KEV) findings.
         q = q.where(DevicePortVuln.state != VULN_STATE_DISMISSED)
         if not cfg.include_potential:
             q = q.where(DevicePortVuln.state != VULN_STATE_POTENTIAL)
         effective_cvss = func.coalesce(Vulnerability.cvss_base, literal_column(str(DEFAULT_CVSS)))
         q = q.where(or_(Vulnerability.kev.is_(True), effective_cvss >= cfg.min_cvss_display))
+    # When searching with no explicit state=, include normally-hidden rows; facets still apply below.
+    term = _search_term(f)
+    if term is not None:
+        q = q.where(_search_match_cond(term))
     if f.severity:
         q = q.where(severity_bucket_expr(Vulnerability.cvss_base) == f.severity)
     if f.kev is not None:
@@ -288,13 +335,14 @@ def _filters_from_query(
     cve_id: str | None = None,
     device_uuid: str | None = None,
     new_since: str | None = None,
+    q: str | None = None,
 ) -> FindingFilters:
     return FindingFilters(
         severity=severity, kev=kev, epss_min=epss_min, network_id=_parse_network_id_param(network_id),
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration,
         risk_band=risk_band, vendor=vendor, product=product,
-        cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
+        cve_id=cve_id, device_uuid=device_uuid, new_since=new_since, q=q,
     )
 
 
@@ -317,6 +365,7 @@ def list_vulns(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
+    q: str | None = Query(None, max_length=200),
     sort: str = Query("risk", pattern=FINDING_SORT_PATTERN),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     paging: Paging = Depends(),
@@ -324,7 +373,11 @@ def list_vulns(
     user: User = Depends(current_user),
 ):
     """Filterable, sortable, paginated, CVE-centric finding list -- every card/facet on `/vulnerabilities`
-    links here with matching query params, so the URL is shareable (spec UX)."""
+    links here with matching query params, so the URL is shareable (spec UX).
+
+    With ``q``, the display floor is lifted so dismissed / potential / below-floor findings that
+    match the term are included; each row carries ``hidden_reasons`` for UI badges.
+    """
     cfg = get_section(db, VulnSettings)
     now = utcnow()
     filters = _filters_from_query(
@@ -332,7 +385,9 @@ def list_vulns(
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
         vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
+        q=q,
     )
+    searching = _search_term(filters) is not None
     total = db.scalar(_apply_filters(_count_base(), db, cfg, filters, now)) or 0
     rows = db.execute(
         _apply_filters(_rows_base(), db, cfg, filters, now)
@@ -340,7 +395,10 @@ def list_vulns(
         .offset(paging.offset).limit(paging.page_size)
     ).all()
     items = [
-        vuln_finding_out(dpv, port_row, device, vuln, network_name, first_seen_at)
+        vuln_finding_out(
+            dpv, port_row, device, vuln, network_name, first_seen_at,
+            hidden_reasons=hidden_reasons(dpv.state, vuln.kev, vuln.cvss_base, cfg) if searching else None,
+        )
         for dpv, port_row, device, vuln, network_name, first_seen_at in rows
     ]
     return paged(items, total, paging)
@@ -405,14 +463,16 @@ def export_vulns(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
+    q: str | None = Query(None, max_length=200),
     user: User = Depends(current_user),
 ):
-    """Same filters as GET /api/vulns, no pagination: every matching row, streamed as CSV."""
+    """Same filters as GET /api/vulns (including ``q`` / hidden inclusion), no pagination: CSV stream."""
     filters = _filters_from_query(
         severity=severity, kev=kev, epss_min=epss_min, network_id=network_id,
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
         vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
+        q=q,
     )
     stamp = datetime.now().strftime("%Y%m%d-%H%M")
     return StreamingResponse(

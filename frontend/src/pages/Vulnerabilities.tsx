@@ -60,6 +60,25 @@ export default function Vulnerabilities() {
   }, [searchKey]);
 
   const page = Number(sp.get('page') || 1);
+  const q = sp.get('q') ?? '';
+  // Local input + debounce into URL (same pattern as Devices / Changes); kept out of VULN_FILTER_KEYS.
+  const [qInput, setQInput] = useState(q);
+  useEffect(() => {
+    setQInput(q);
+  }, [q]);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if ((sp.get('q') ?? '') === qInput) return;
+      const next = new URLSearchParams(sp);
+      if (qInput) next.set('q', qInput);
+      else next.delete('q');
+      next.delete('page');
+      setSp(next, { replace: true });
+    }, 300);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
+
   const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', undefined, 30000);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -105,7 +124,7 @@ export default function Vulnerabilities() {
     setExporting(true);
     try {
       await downloadBlob(
-        `/vulns/export${query(buildVulnQuery(filters))}`,
+        `/vulns/export${query(buildVulnQuery(filters, { q: q || undefined }))}`,
         `portreveal-vulns-${new Date().toISOString().slice(0, 10)}.csv`,
       );
     } catch (e: unknown) {
@@ -235,6 +254,9 @@ export default function Vulnerabilities() {
           <div id="vuln-findings">
             <VulnFindingsTable
               filters={filters}
+              q={q}
+              qInput={qInput}
+              onQInput={setQInput}
               page={page}
               onPage={setPage}
               sort={findingSort}

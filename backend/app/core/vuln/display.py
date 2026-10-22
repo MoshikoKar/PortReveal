@@ -8,6 +8,11 @@ from ...models import VULN_STATE_DISMISSED, VULN_STATE_POTENTIAL, DevicePortVuln
 from ...settings_store import VulnSettings
 from .score import DEFAULT_CVSS
 
+# Badge labels for findings the default list hides; returned on GET /api/vulns when `q` is set.
+REASON_BELOW_CVSS_FLOOR = "Below CVSS floor"
+REASON_DISMISSED = "Dismissed"
+REASON_POTENTIAL_HIDDEN = "Potential (hidden)"
+
 
 def normalize_cve_id(cve_id: str) -> str:
     """Canonical CVE id for lookups and storage (NVD form is uppercase)."""
@@ -29,6 +34,26 @@ def is_visible(state: str, kev: bool, cvss_base: float | None, cfg: VulnSettings
         return True
     effective_cvss = cvss_base if cvss_base is not None else DEFAULT_CVSS
     return effective_cvss >= cfg.min_cvss_display
+
+
+def hidden_reasons(state: str, kev: bool, cvss_base: float | None, cfg: VulnSettings) -> list[str]:
+    """Why a finding is absent from the default CVE-centric list (no `state=` / no `q`).
+
+    The list endpoint excludes dismissed and (when configured) potential and below-floor rows
+    separately from ``is_visible`` (which treats dismissed as floor-visible for the dismissed view).
+    Search results use these labels as row badges.
+    """
+    reasons: list[str] = []
+    if state == VULN_STATE_DISMISSED:
+        reasons.append(REASON_DISMISSED)
+    if not cfg.include_potential and state == VULN_STATE_POTENTIAL:
+        reasons.append(REASON_POTENTIAL_HIDDEN)
+    # CVSS floor never applies to dismissed (same as is_visible) or to KEV.
+    if state != VULN_STATE_DISMISSED and not kev:
+        effective_cvss = cvss_base if cvss_base is not None else DEFAULT_CVSS
+        if effective_cvss < cfg.min_cvss_display:
+            reasons.append(REASON_BELOW_CVSS_FLOOR)
+    return reasons
 
 
 def should_display(dpv: DevicePortVuln, vuln: Vulnerability, cfg: VulnSettings) -> bool:
