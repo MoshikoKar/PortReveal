@@ -35,12 +35,12 @@ class JsonFormatter(logging.Formatter):
     def __init__(self) -> None:
         super().__init__()
         # Static identity, so records from several instances stay apart once aggregated.
-        self._identity = {"service": SERVICE_NAME, "version": __version__, "host": socket.gethostname(),
-                          "pid": os.getpid()}
+        self._identity = {"service": SERVICE_NAME, "version": __version__, "host": socket.gethostname(), "pid": os.getpid()}
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec="milliseconds")
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc)
+            .isoformat(timespec="milliseconds")
             .replace("+00:00", "Z"),
             "level": record.levelname,
             "logger": record.name,
@@ -78,8 +78,7 @@ def setup_logging() -> None:
     try:
         log_dir = s.data_path / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        fh = logging.handlers.RotatingFileHandler(log_dir / "app.log", maxBytes=5_000_000, backupCount=3,
-                                                  encoding="utf-8")
+        fh = logging.handlers.RotatingFileHandler(log_dir / "app.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
         fh.setFormatter(fmt)
         fh.addFilter(context)
         root.addHandler(fh)

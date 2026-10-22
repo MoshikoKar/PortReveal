@@ -826,7 +826,9 @@ class RecipientGroup(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     last_error_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     destinations: Mapped[list[RecipientDestination]] = relationship(
-        back_populates="group", cascade="all, delete-orphan", order_by="RecipientDestination.id",
+        back_populates="group",
+        cascade="all, delete-orphan",
+        order_by="RecipientDestination.id",
     )
 
 
@@ -842,7 +844,8 @@ class RecipientDestination(Base):
     # email: address; slack/teams: never store plaintext — use url_enc; webhook: leave null
     target: Mapped[str | None] = mapped_column(String(255))
     webhook_id: Mapped[int | None] = mapped_column(
-        ForeignKey("webhook_endpoints.id", ondelete="SET NULL"), index=True,
+        ForeignKey("webhook_endpoints.id", ondelete="SET NULL"),
+        index=True,
     )
     url_enc: Mapped[str | None] = mapped_column(String(500))  # Slack / Teams incoming webhook URL
     group: Mapped[RecipientGroup] = relationship(back_populates="destinations")
@@ -865,6 +868,8 @@ class RecipientHold(Base):
     dedupe_key: Mapped[str | None] = mapped_column(String(200), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # After a partial failure: destination ids still owed a send (None = all enabled dests).
+    pending_dest_ids: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

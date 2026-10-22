@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..auth.deps import client_ip, require_admin
 from ..core.audit import audit
-from ..core.channels import send_group_test
+from ..core.channels import daily_seed_last_digest_on, send_group_test
 from ..db import get_db, utcnow
 from ..models import (
     DELIVERY_DAILY,
@@ -157,7 +157,7 @@ def _network_names(db: Session, ids: list[int] | None) -> dict[int, str]:
 
 
 def _group_summary(g: RecipientGroup, net_names: dict[int, str] | None = None) -> str:
-    """One-line card summary — omits name/mode (shown as badges) to avoid repetition."""
+    """One-line card summary — omits name and delivery mode (badges cover those)."""
     sev = {
         "high": "Critical+High",
         "medium": "Medium+",
@@ -176,12 +176,8 @@ def _group_summary(g: RecipientGroup, net_names: dict[int, str] | None = None) -
             nets = f"{labels[0]}, {labels[1]}"
         else:
             nets = f"{labels[0]}, {labels[1]} +{len(labels) - 2}"
-    when = {
-        "immediate": "Immediate",
-        "hourly": "Hourly",
-        "daily": f"Daily {g.digest_time or '08:00'}".strip(),
-    }.get(g.delivery_mode, g.delivery_mode)
-    return f"{sev} · {nets} · {when}"
+    # Delivery mode (and daily clock) live on the badge only — avoid doubling.
+    return f"{sev} · {nets}"
 
 
 def _friendly_error(err: str | None) -> str | None:
@@ -199,13 +195,26 @@ def _friendly_error(err: str | None) -> str | None:
     return "Delivery failed"
 
 
-def _out(g: RecipientGroup, net_names: dict[int, str] | None = None) -> dict:
-    dests = [_dest_out(d) for d in (g.destinations or [])]
-    kinds = []
+def _destination_kind_labels(dests: list[dict]) -> list[str]:
+    """Badge labels — email shows address or recipient count."""
+    kinds: list[str] = []
+    emails = [d["target"] for d in dests if d.get("kind") == DEST_EMAIL and d.get("target")]
+    if len(emails) == 1:
+        kinds.append(f"Email · {emails[0]}")
+    elif len(emails) > 1:
+        kinds.append(f"Email · {len(emails)} recipients")
     for d in dests:
-        label = {"email": "Email", "slack": "Slack", "teams": "Teams", "webhook": "Webhook"}.get(d["kind"], d["kind"])
+        if d.get("kind") == DEST_EMAIL:
+            continue
+        label = {"slack": "Slack", "teams": "Teams", "webhook": "Webhook"}.get(d["kind"], d["kind"])
         if label not in kinds:
             kinds.append(label)
+    return kinds
+
+
+def _out(g: RecipientGroup, net_names: dict[int, str] | None = None) -> dict:
+    dests = [_dest_out(d) for d in (g.destinations or [])]
+    kinds = _destination_kind_labels(dests)
     return {
         "id": g.id,
         "name": g.name,
@@ -333,6 +342,7 @@ def create_group(body: GroupIn, request: Request, db: Session = Depends(get_db),
         quiet_start=qs,
         quiet_end=qe,
         quiet_bypass_critical=body.quiet_bypass_critical,
+        last_digest_on=daily_seed_last_digest_on(digest) if mode == DELIVERY_DAILY else None,
         created_at=utcnow(),
         updated_at=utcnow(),
     )
@@ -384,6 +394,8 @@ def patch_group(
     g.digest_time = digest
     g.quiet_start = qs
     g.quiet_end = qe
+    if mode == DELIVERY_DAILY and g.last_digest_on is None:
+        g.last_digest_on = daily_seed_last_digest_on(digest)
     if "network_ids" in data:
         g.network_ids = _validate_network_ids(db, data["network_ids"])
     if "max_per_hour" in data:

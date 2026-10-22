@@ -257,6 +257,7 @@ def tick(now: datetime | None = None) -> None:
     if flush_channels:
         try:
             from .channels import flush_due_holds
+
             # Daily groups flush at their own digest_time; hourly flag releases hourly/rate holds.
             flush_due_holds(hourly=send_hourly)
         except Exception:

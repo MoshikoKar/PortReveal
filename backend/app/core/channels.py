@@ -91,9 +91,13 @@ def group_matches_event(group: RecipientGroup, ev: Event) -> bool:
 
 
 def group_managed_webhook_ids(db: Session) -> set[int]:
-    """Webhook endpoint ids attached to any recipient-group destination (skip global delivery)."""
+    """Webhook endpoint ids owned by an *enabled* group destination (skip global delivery)."""
     rows = db.scalars(
-        select(RecipientDestination.webhook_id).where(
+        select(RecipientDestination.webhook_id)
+        .join(RecipientGroup, RecipientDestination.group_id == RecipientGroup.id)
+        .where(
+            RecipientGroup.enabled.is_(True),
+            RecipientDestination.enabled.is_(True),
             RecipientDestination.kind == DEST_WEBHOOK,
             RecipientDestination.webhook_id.is_not(None),
         )
@@ -227,13 +231,16 @@ def _route_event_ids(event_ids: list[int]) -> None:
                     _hold(db, group.id, ev.id, HOLD_RATE, key)
                     continue
                 matched.append(ev)
-                if group.dedupe_seconds:
-                    _hold(db, group.id, ev.id, HOLD_DEDUPE, key)
+                # Do not create HOLD_DEDUPE before send — a pre-send dedupe hold
+                # blocked retry holds on failure (unique group+event). Record
+                # dedupe only after a successful delivery.
 
             if matched:
                 n = len(matched)
                 # Count one message toward the hourly cap (batched).
                 group.rate_sent = (group.rate_sent or 0) + 1
+                # Snapshot dedupe keys for post-success HOLD_DEDUPE.
+                keys = {_dedupe_key(e): e.id for e in matched}
                 immediate_jobs.append(
                     {
                         "group_id": group.id,
@@ -242,6 +249,8 @@ def _route_event_ids(event_ids: list[int]) -> None:
                         "destinations": _dest_snaps(db, destinations),
                         "cfg": cfg_snap,
                         "rate_count": n,
+                        "dedupe_keys": keys,
+                        "dedupe_seconds": group.dedupe_seconds or 0,
                     }
                 )
         db.commit()
@@ -249,7 +258,10 @@ def _route_event_ids(event_ids: list[int]) -> None:
         db.close()
 
     for job in immediate_jobs:
-        _deliver_job(job)
+        try:
+            _deliver_job(job)
+        except Exception:
+            log.exception("channel immediate delivery failed for group %s", job.get("group_id"))
 
 
 def _cfg_snap(cfg: NotificationSettings) -> dict:
@@ -287,26 +299,56 @@ def _dest_snaps(db: Session, destinations: list[RecipientDestination]) -> list[d
     return snaps
 
 
-def _hold(db: Session, group_id: int, event_id: int, reason: str, key: str | None) -> None:
+def _hold(
+    db: Session,
+    group_id: int,
+    event_id: int,
+    reason: str,
+    key: str | None,
+    *,
+    pending_dest_ids: list[int] | None = None,
+    attempts: int = 0,
+    next_attempt_at: datetime | None = None,
+) -> RecipientHold:
+    """Insert or return existing hold for (group, event). Does not overwrite on conflict."""
     existing = db.scalar(
-        select(RecipientHold.id).where(
+        select(RecipientHold).where(
             RecipientHold.group_id == group_id,
             RecipientHold.event_id == event_id,
         )
     )
     if existing:
-        return
-    db.add(
-        RecipientHold(
-            group_id=group_id,
-            event_id=event_id,
-            reason=reason,
-            dedupe_key=key,
-            attempts=0,
-            created_at=utcnow(),
-        )
+        return existing
+    h = RecipientHold(
+        group_id=group_id,
+        event_id=event_id,
+        reason=reason,
+        dedupe_key=key,
+        attempts=attempts,
+        next_attempt_at=next_attempt_at,
+        pending_dest_ids=pending_dest_ids,
+        created_at=utcnow(),
     )
+    db.add(h)
     db.flush()
+    return h
+
+
+def _mark_hold_retry(
+    h: RecipientHold,
+    *,
+    pending_dest_ids: list[int] | None,
+) -> None:
+    """Bump attempts / backoff; convert dedupe markers into retryable rate holds."""
+    attempts = (h.attempts or 0) + 1
+    h.attempts = attempts
+    if h.reason == HOLD_DEDUPE:
+        h.reason = HOLD_RATE
+    h.pending_dest_ids = pending_dest_ids
+    if attempts >= MAX_HOLD_ATTEMPTS:
+        return  # caller deletes
+    delay = _BACKOFF_SECONDS[min(attempts, len(_BACKOFF_SECONDS)) - 1]
+    h.next_attempt_at = utcnow() + timedelta(seconds=delay)
 
 
 def flush_due_holds(*, hourly: bool = False) -> None:
@@ -377,16 +419,31 @@ def flush_due_holds(*, hourly: bool = False) -> None:
                     db.delete(h)
                 continue
             hold_ids = [h.id for h in ready]
+            # Intersect pending dest ids across ready holds (None = all dests).
+            pending: set[int] | None = None
+            for h in ready:
+                ids = h.pending_dest_ids
+                if not ids:
+                    pending = None
+                    break
+                pending = set(ids) if pending is None else (pending & set(ids))
+            dest_snaps = _dest_snaps(db, destinations)
+            if pending is not None:
+                dest_snaps = [d for d in dest_snaps if d.get("id") in pending]
+                if not dest_snaps:
+                    # Stale pending ids — fall back to all enabled destinations.
+                    dest_snaps = _dest_snaps(db, destinations)
             jobs.append(
                 {
                     "group_id": group.id,
                     "group_name": group.name,
                     "event_ids": [e.id for e in events],
                     "hold_ids": hold_ids,
-                    "destinations": _dest_snaps(db, destinations),
+                    "destinations": dest_snaps,
                     "cfg": cfg_snap,
                     "claim_daily": claim_daily,
                     "digest_day": today if claim_daily else None,
+                    "pending_dest_ids": sorted(pending) if pending is not None else None,
                 }
             )
         db.commit()
@@ -398,7 +455,10 @@ def flush_due_holds(*, hourly: bool = False) -> None:
         db.close()
 
     for job in jobs:
-        _deliver_job(job)
+        try:
+            _deliver_job(job)
+        except Exception:
+            log.exception("channel flush delivery failed for group %s", job.get("group_id"))
 
 
 def _daily_due(digest_time: str | None, now: datetime) -> bool:
@@ -411,18 +471,29 @@ def _daily_due(digest_time: str | None, now: datetime) -> bool:
     return now >= due
 
 
+def daily_seed_last_digest_on(digest_time: str | None, now: datetime | None = None) -> str | None:
+    """If today's digest time already passed, return today's date iso so we wait until tomorrow."""
+    now = now or utcnow().astimezone()
+    if _daily_due(digest_time, now):
+        return now.date().isoformat()
+    return None
+
+
 def _deliver_job(job: dict) -> None:
     """HTTP/SMTP with no open DB session; then short write for status / holds."""
     event_ids: list[int] = job["event_ids"]
+    destinations = list(job.get("destinations") or [])
     # Load event cards + ORM rows for HTML digest in a short read session.
     get_engine()
     db = SessionLocal()
     try:
-        events = list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all())
+        events = (
+            list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all()) if event_ids else []
+        )
         cards = [_event_card(ev) for ev in events]
         # Detach plain dicts for SMTP HTML builder (needs Event-like attrs) — use cards + format from Events before close.
         html_pack = None
-        if any(d["kind"] == DEST_EMAIL for d in job["destinations"]) and events:
+        if any(d["kind"] == DEST_EMAIL for d in destinations) and events:
             subject, plain, html_body = format_daily_digest(events)
             # Retitle for the group.
             n = len(events)
@@ -431,18 +502,30 @@ def _deliver_job(job: dict) -> None:
     finally:
         db.close()
 
-    if not cards:
+    if not cards and event_ids:
+        return
+    if not destinations:
         return
 
     results = _send_destinations_concurrent(
-        job["destinations"],
+        destinations,
         cards,
         job["cfg"],
         job["group_name"],
         html_pack=html_pack,
     )
-    all_ok = all(r["ok"] for r in results) if results else False
-    last_err = next((r["error"] for r in results if not r["ok"]), None)
+    failed = [r for r in results if not r.get("ok")]
+    succeeded = [r for r in results if r.get("ok")]
+    all_ok = bool(results) and not failed
+    last_err = next((r["error"] for r in failed), None)
+    failed_dest_ids = [r["dest_id"] for r in failed if r.get("dest_id") is not None]
+    # Preserve previously-pending dests that were not attempted this round.
+    prior_pending = job.get("pending_dest_ids")
+    if prior_pending and failed_dest_ids:
+        # Keep any prior pending that we did not try (should be none if filtered correctly).
+        attempted = {d.get("id") for d in destinations}
+        leftover = [i for i in prior_pending if i not in attempted]
+        failed_dest_ids = sorted(set(failed_dest_ids) | set(leftover))
 
     db = SessionLocal()
     try:
@@ -458,29 +541,52 @@ def _deliver_job(job: dict) -> None:
             if hold_ids:
                 for h in db.scalars(select(RecipientHold).where(RecipientHold.id.in_(hold_ids))).all():
                     db.delete(h)
+            # Dedupe markers after successful immediate delivery.
+            dedupe_keys: dict = job.get("dedupe_keys") or {}
+            if job.get("dedupe_seconds") and dedupe_keys:
+                for key, eid in dedupe_keys.items():
+                    _hold(db, group.id, eid, HOLD_DEDUPE, key)
             # Mark email-notified when an email destination succeeded (legacy digest retired).
-            if any(r["ok"] and r["kind"] == DEST_EMAIL for r in results):
+            if any(r.get("ok") and r.get("kind") == DEST_EMAIL for r in succeeded):
                 now = utcnow()
                 for ev in db.scalars(select(Event).where(Event.id.in_(event_ids), Event.notified_at.is_(None))).all():
                     ev.notified_at = now
         else:
             group.last_error = (last_err or "delivery failed")[:500]
             group.last_error_at = utcnow()
+            pending = failed_dest_ids or None
             hold_ids = job.get("hold_ids") or []
             if hold_ids:
                 for h in db.scalars(select(RecipientHold).where(RecipientHold.id.in_(hold_ids))).all():
-                    attempts = (h.attempts or 0) + 1
-                    h.attempts = attempts
-                    if attempts >= MAX_HOLD_ATTEMPTS:
-                        # Cap: drop after too many failures so the queue cannot grow forever.
+                    _mark_hold_retry(h, pending_dest_ids=pending)
+                    if (h.attempts or 0) >= MAX_HOLD_ATTEMPTS:
                         db.delete(h)
-                        continue
-                    delay = _BACKOFF_SECONDS[min(attempts, len(_BACKOFF_SECONDS)) - 1]
-                    h.next_attempt_at = utcnow() + timedelta(seconds=delay)
             else:
-                # Immediate failure: roll events into rate/digest hold for retry.
+                # Immediate failure: queue retry holds (one per event; pending dests only).
+                dedupe_keys = job.get("dedupe_keys") or {}
+                key_by_eid = {eid: key for key, eid in dedupe_keys.items()}
                 for eid in event_ids:
-                    _hold(db, group.id, eid, HOLD_RATE, None)
+                    h = db.scalar(
+                        select(RecipientHold).where(
+                            RecipientHold.group_id == group.id,
+                            RecipientHold.event_id == eid,
+                        )
+                    )
+                    if h is None:
+                        h = RecipientHold(
+                            group_id=group.id,
+                            event_id=eid,
+                            reason=HOLD_RATE,
+                            dedupe_key=key_by_eid.get(eid),
+                            attempts=0,
+                            pending_dest_ids=pending,
+                            created_at=utcnow(),
+                        )
+                        db.add(h)
+                        db.flush()
+                    _mark_hold_retry(h, pending_dest_ids=pending)
+                    if (h.attempts or 0) >= MAX_HOLD_ATTEMPTS:
+                        db.delete(h)
         db.commit()
     except Exception:
         log.exception("channel delivery status write failed for group %s", job.get("group_id"))
@@ -502,27 +608,29 @@ def _send_destinations_concurrent(
 
     def _one(snap: dict) -> dict:
         kind = snap["kind"]
+        dest_id = snap.get("id")
+        base = {"ok": True, "kind": kind, "dest_id": dest_id, "error": None}
         try:
             if kind == DEST_EMAIL:
                 if not snap.get("target"):
-                    return {"ok": True, "kind": kind, "error": None}
+                    return base
                 _send_email_events(cfg, snap["target"], cards, group_name=group_name, html_pack=html_pack)
             elif kind == DEST_SLACK:
                 if not snap.get("url"):
-                    return {"ok": True, "kind": kind, "error": None}
+                    return base
                 _post_json(snap["url"], _slack_payload(cards, group_name), secret="")
             elif kind == DEST_TEAMS:
                 if not snap.get("url"):
-                    return {"ok": True, "kind": kind, "error": None}
+                    return base
                 _post_json(snap["url"], _teams_payload(cards, group_name), secret="")
             elif kind == DEST_WEBHOOK:
                 if not snap.get("url"):
-                    return {"ok": True, "kind": kind, "error": None}
+                    return base
                 body = _webhook_body(cards)
                 _post_json(snap["url"], None, secret=snap.get("secret") or "", raw=body)
             else:
-                return {"ok": True, "kind": kind, "error": None}
-            return {"ok": True, "kind": kind, "error": None}
+                return base
+            return base
         except Exception as exc:
             log.warning(
                 "recipient group dest %s failed for host %s: %s",
@@ -530,16 +638,54 @@ def _send_destinations_concurrent(
                 _host(snap.get("url") or "") if snap.get("url") else "(email)",
                 type(exc).__name__,
             )
-            return {"ok": False, "kind": kind, "error": str(exc)[:500]}
+            return {"ok": False, "kind": kind, "dest_id": dest_id, "error": str(exc)[:500]}
 
     results: list[dict] = []
+    wait_s = HTTP_DEADLINE + 2
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(destinations))) as pool:
-        futs = [pool.submit(_one, snap) for snap in destinations]
-        for fut in concurrent.futures.as_completed(futs, timeout=HTTP_DEADLINE + 2):
-            try:
-                results.append(fut.result())
-            except Exception as exc:
-                results.append({"ok": False, "kind": "?", "error": str(exc)[:500]})
+        fut_to_snap = {pool.submit(_one, snap): snap for snap in destinations}
+        pending = dict(fut_to_snap)
+        try:
+            for fut in concurrent.futures.as_completed(fut_to_snap, timeout=wait_s):
+                snap = pending.pop(fut, None)
+                try:
+                    results.append(fut.result(timeout=0))
+                except Exception as exc:
+                    results.append(
+                        {
+                            "ok": False,
+                            "kind": (snap or {}).get("kind", "?"),
+                            "dest_id": (snap or {}).get("id"),
+                            "error": str(exc)[:500],
+                        }
+                    )
+        except TimeoutError:
+            # Per-destination deadline: record unfinished work as failed so the
+            # scheduler does not resend the same digest every tick, and other
+            # groups in this tick are not aborted.
+            for fut, snap in list(pending.items()):
+                if fut.done():
+                    try:
+                        results.append(fut.result(timeout=0))
+                    except Exception as exc:
+                        results.append(
+                            {
+                                "ok": False,
+                                "kind": snap.get("kind", "?"),
+                                "dest_id": snap.get("id"),
+                                "error": str(exc)[:500],
+                            }
+                        )
+                else:
+                    fut.cancel()
+                    results.append(
+                        {
+                            "ok": False,
+                            "kind": snap.get("kind", "?"),
+                            "dest_id": snap.get("id"),
+                            "error": f"delivery timed out after {wait_s:.0f}s",
+                        }
+                    )
     return results
 
 
@@ -627,12 +773,14 @@ def _send_email_events(
     from ..settings_store import NotificationSettings as NS
 
     local = NS.model_validate({**cfg, "recipients": [recipient], "enabled": True})
+    # SMTP timeout must finish inside the concurrent wait (HTTP_DEADLINE + 2).
+    smtp_timeout = max(1.0, HTTP_DEADLINE - 0.5)
     if html_pack:
         subject, plain, html_body = html_pack
         # Prefer group name in subject; keep categorized HTML body.
         n = len(payloads)
         subject = f"{SUBJECT_PREFIX} {group_name} — {n} event{'s' if n != 1 else ''}"
-        send_email(local, subject, plain, html_body)
+        send_email(local, subject, plain, html_body, timeout=smtp_timeout)
         return
     n = len(payloads)
     subject = f"{SUBJECT_PREFIX} {group_name} — {n} event{'s' if n != 1 else ''}"
@@ -641,7 +789,7 @@ def _send_email_events(
         lines.append(f"- [{(p.get('severity') or 'info').upper()}] {p.get('type')}: {p.get('message')}")
     if n > 40:
         lines.append(f"…and {n - 40} more")
-    send_email(local, subject, "\n".join(lines))
+    send_email(local, subject, "\n".join(lines), timeout=smtp_timeout)
 
 
 def _post_json(url: str, payload: dict | None, *, secret: str, raw: bytes | None = None) -> None:

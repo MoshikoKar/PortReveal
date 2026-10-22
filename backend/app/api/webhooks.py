@@ -73,6 +73,7 @@ def _validate_types(types: list[str] | None) -> list[str] | None:
 
 def _group_managed_ids(db: Session) -> set[int]:
     from ..core.channels import group_managed_webhook_ids
+
     return group_managed_webhook_ids(db)
 
 
@@ -113,10 +114,7 @@ def _audit_details(h: WebhookEndpoint, **extra) -> dict:
 @router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_webhooks(db: Session = Depends(get_db), user: User = Depends(require_admin)):
     managed = _group_managed_ids(db)
-    return [
-        _out(h, group_managed=h.id in managed)
-        for h in db.scalars(select(WebhookEndpoint).order_by(WebhookEndpoint.id))
-    ]
+    return [_out(h, group_managed=h.id in managed) for h in db.scalars(select(WebhookEndpoint).order_by(WebhookEndpoint.id))]
 
 
 @router.post("", status_code=201)

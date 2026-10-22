@@ -140,7 +140,7 @@ def test_daily_and_hourly_batching_hold_events(db, monkeypatch):
 
     sent: list[str] = []
 
-    def fake_email(cfg, subject, plain, html=None):
+    def fake_email(cfg, subject, plain, html=None, **kwargs):
         sent.append(cfg.recipients[0])
 
     monkeypatch.setattr(channels, "send_email", fake_email)
@@ -163,7 +163,7 @@ def test_rate_cap_overflow_rolls_into_digest(db, monkeypatch):
 
     sent: list[str] = []
 
-    def fake_email(cfg, subject, plain, html=None):
+    def fake_email(cfg, subject, plain, html=None, **kwargs):
         sent.append(plain)
 
     monkeypatch.setattr(channels, "send_email", fake_email)
@@ -218,7 +218,7 @@ def test_quiet_hours_hold_non_critical(db, monkeypatch):
     monkeypatch.setattr(
         channels,
         "send_email",
-        lambda cfg, subject, plain, html=None: sent.append((subject, plain or "", html or "")),
+        lambda cfg, subject, plain, html=None, **kwargs: sent.append((subject, plain or "", html or "")),
     )
     deliver_channel_event_ids([info.id, crit.id])
 
@@ -275,6 +275,9 @@ def test_migration_copies_email_recipients_into_default_group(tmp_path: Path):
         assert row[3] == "09:30"
         types = json.loads(row[4]) if isinstance(row[4], str) else (row[4] or [])
         assert "port_opened" in types
+        # Legacy digest always included ALWAYS_NOTIFY_TYPES.
+        for t in ("watch_match", "policy_violation", "monitor_change", "cve_watch_match"):
+            assert t in types
         dests = conn.execute(text("SELECT kind, target FROM recipient_destinations ORDER BY target")).fetchall()
         assert [(d[0], d[1]) for d in dests] == [
             ("email", "ops@example.com"),
@@ -317,10 +320,13 @@ def test_recipient_group_crud_masks_slack_url(client, monkeypatch):
     assert r.status_code == 201, r.text
     body = r.json()
     assert "Critical+High" in body["summary"]
-    assert "Daily" in body["summary"]
-    assert not body["summary"].startswith("SOC")  # name is a card badge, not in summary
+    assert "All networks" in body["summary"]
+    # Mode lives on the badge; summary is severity · networks only.
+    assert "Daily" not in body["summary"] and "07:00" not in body["summary"]
+    assert not body["summary"].startswith("SOC")
     assert body["delivery_mode"] == "daily"
-    assert "Email" in body["destination_kinds"] and "Slack" in body["destination_kinds"]
+    assert any(k.startswith("Email · soc@example.com") for k in body["destination_kinds"])
+    assert "Slack" in body["destination_kinds"]
     dests = {d["kind"]: d for d in body["destinations"]}
     assert dests["email"]["target"] == "soc@example.com"
     assert dests["slack"]["has_url"] is True

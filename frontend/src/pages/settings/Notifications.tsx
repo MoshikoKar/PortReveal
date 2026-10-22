@@ -463,6 +463,10 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
 
   const saveDraft = async () => {
     if (!draft || saving) return;
+    if (!draft.destinations.length) {
+      setSaveError('at least one destination is required');
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -636,7 +640,11 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
                   <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
                     <strong>{g.name}</strong>
                     {g.is_default && <span className="badge">Default</span>}
-                    <span className="badge muted">{g.delivery_mode}</span>
+                    <span className="badge muted">
+                      {g.delivery_mode === 'daily'
+                        ? `daily · ${g.digest_time || '08:00'}`
+                        : g.delivery_mode}
+                    </span>
                     {(g.destination_kinds || []).map((k) => (
                       <span key={k} className="badge muted" title={k}>{k}</span>
                     ))}
@@ -794,9 +802,6 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
                 <button type="button" className="btn sm" onClick={() => addDestination('slack')}>+ Slack</button>
                 <button type="button" className="btn sm" onClick={() => addDestination('teams')}>+ Teams</button>
               </div>
-              {!draft.destinations.length && (
-                <div className="muted small" style={{ marginBottom: 8 }}>Add at least one destination to deliver.</div>
-              )}
               {draft.destinations.map((d) => (
                 <div key={d.key} className="notif-explain" style={{ marginBottom: 8 }}>
                   <div className="row wrap" style={{ justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>

@@ -383,6 +383,7 @@ def put_notifications(body: NotificationIn, request: Request, db: Session = Depe
     # Keep the default recipient group's enabled flag in sync with the master email switch.
     if body.enabled is not None:
         from ..models import RecipientGroup
+
         default = db.scalar(select(RecipientGroup).where(RecipientGroup.is_default.is_(True)))
         if default is not None:
             default.enabled = bool(body.enabled)

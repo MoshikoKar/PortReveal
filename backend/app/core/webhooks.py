@@ -213,6 +213,7 @@ def schedule_event_delivery(event_ids: list[int], *, wait: bool = False) -> None
         deliver_event_ids(ids)
         try:
             from .channels import deliver_channel_event_ids
+
             deliver_channel_event_ids(ids)
         except Exception:
             log.exception("recipient-group delivery failed")
@@ -239,19 +240,24 @@ def _enqueue_delivery(ids: list[int], *, channels_only: bool) -> None:
         log.warning("webhook delivery queue full; dropping %d event(s)", len(ids))
         if not channels_only:
             threading.Thread(
-                target=_record_dropped_events, args=(ids, "queue full"),
-                name="webhook-drop-status", daemon=True,
+                target=_record_dropped_events,
+                args=(ids, "queue full"),
+                name="webhook-drop-status",
+                daemon=True,
             ).start()
         # Still attempt channel routing off the scan thread when the webhook queue is saturated.
         threading.Thread(
-            target=_safe_channel_deliver, args=(ids,),
-            name="channel-fallback", daemon=True,
+            target=_safe_channel_deliver,
+            args=(ids,),
+            name="channel-fallback",
+            daemon=True,
         ).start()
 
 
 def _safe_channel_deliver(ids: list[int]) -> None:
     try:
         from .channels import deliver_channel_event_ids
+
         deliver_channel_event_ids(ids)
     except Exception:
         log.exception("recipient-group delivery failed")
@@ -275,6 +281,7 @@ def _worker_loop() -> None:
                 _dispatch_event_ids(ids)
             try:
                 from .channels import deliver_channel_event_ids
+
                 deliver_channel_event_ids(ids)
             except Exception:
                 log.exception("recipient-group delivery failed")
@@ -366,7 +373,8 @@ def _submit_hook_job(item: dict) -> None:
             start_now = True
     if overflow:
         _record_hook_result(
-            hid, ok=False,
+            hid,
+            ok=False,
             err=f"{_drop_label(len(overflow))} dropped: pending cap ({MAX_PENDING_EVENTS_PER_HOOK})",
         )
     if not start_now:
@@ -453,6 +461,7 @@ def _load_delivery_plan(event_ids: list[int]) -> list[dict]:
             return []
         # Webhooks attached to a recipient group are group-managed — skip global fan-out.
         from .channels import group_managed_webhook_ids
+
         managed = group_managed_webhook_ids(db)
         jobs: list[dict] = []
         for hook in hooks:

@@ -77,6 +77,8 @@ def upgrade() -> None:
         sa.Column("dedupe_key", sa.String(200), nullable=True),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("next_attempt_at", sa.DateTime(), nullable=True),
+        # Destination ids still owed a delivery after a partial/failed send (null = all).
+        sa.Column("pending_dest_ids", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.UniqueConstraint("group_id", "event_id", name="uq_recipient_hold_event"),
     )
@@ -106,9 +108,27 @@ def upgrade() -> None:
 
     recipients = cfg.get("recipients") if isinstance(cfg.get("recipients"), list) else []
     event_types = cfg.get("event_types") if isinstance(cfg.get("event_types"), list) else []
+    # Legacy digest always unioned ALWAYS_NOTIFY_TYPES (watch/policy/monitor/CVE). Keep that.
+    _ALWAYS = ("watch_match", "policy_violation", "monitor_change", "cve_watch_match")
+    if event_types:
+        event_types = sorted(set(event_types) | set(_ALWAYS))
     digest_time = str(cfg.get("digest_time") or "08:00").strip() or "08:00"
     # Copy the global email enabled switch onto the default group.
     group_enabled = bool(cfg.get("enabled", False))
+
+    # If today's digest_time already passed, mark last_digest_on so the next tick
+    # waits for tomorrow instead of flushing immediately after migrate.
+    from datetime import datetime as _dt
+
+    now_local = _dt.now().astimezone()
+    last_digest_on = None
+    try:
+        hh, mm = (int(x) for x in digest_time.split(":"))
+        due = now_local.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if now_local >= due:
+            last_digest_on = now_local.date().isoformat()
+    except ValueError:
+        pass
 
     # Use typed boolean binds — PostgreSQL rejects integer 1 for boolean columns.
     bind.execute(
@@ -116,9 +136,10 @@ def upgrade() -> None:
             "INSERT INTO recipient_groups "
             "(name, enabled, is_default, event_types, min_severity, network_ids, delivery_mode, "
             "digest_time, max_per_hour, dedupe_seconds, quiet_bypass_critical, rate_sent, "
-            "created_at, updated_at) "
+            "last_digest_on, created_at, updated_at) "
             "VALUES (:name, :enabled, :is_default, :event_types, 'info', NULL, 'daily', "
-            ":digest_time, 20, 300, :quiet_bypass, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            ":digest_time, 20, 300, :quiet_bypass, 0, :last_digest_on, "
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
         ),
         {
             "name": "Email digest",
@@ -127,6 +148,7 @@ def upgrade() -> None:
             "quiet_bypass": True,
             "event_types": json.dumps(event_types) if event_types else None,
             "digest_time": digest_time,
+            "last_digest_on": last_digest_on,
         },
     )
     gid = bind.execute(

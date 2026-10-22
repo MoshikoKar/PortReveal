@@ -314,6 +314,7 @@ def schedule_watchlist_delivery(event_ids: list[int], *, wait: bool = False) -> 
         try:
             # Groups first so quiet-hours / batching apply; watchlist path skips covered dests.
             from ..channels import deliver_channel_event_ids
+
             deliver_channel_event_ids(ids)
         except Exception:
             log.exception("CVE watchlist recipient-group delivery failed")
@@ -328,6 +329,7 @@ def schedule_watchlist_delivery(event_ids: list[int], *, wait: bool = False) -> 
     # Prefer the shared delivery queue for group routing; watchlist email/hooks still need _run.
     try:
         from .. import webhooks as wh
+
         wh.enqueue_channel_delivery(ids)
     except Exception:
         log.exception("CVE watchlist channel enqueue failed")
@@ -390,6 +392,7 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
             return None
         event_snaps = [_event_delivery_snap(ev) for ev in events]
         from ..channels import emails_covered_by_groups_for_cve, group_managed_webhook_ids
+
         managed_hooks = group_managed_webhook_ids(db)
         covered_emails = emails_covered_by_groups_for_cve(db)
         hooks: list[dict] = []
@@ -413,9 +416,7 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
         return {
             "event_ids": [s["id"] for s in event_snaps],
             "events": event_snaps,
-            "email_enabled": bool(
-                cfg.watchlist_email_enabled and cfg.enabled and cfg.smtp_host and remaining_recipients
-            ),
+            "email_enabled": bool(cfg.watchlist_email_enabled and cfg.enabled and cfg.smtp_host and remaining_recipients),
             "webhooks_enabled": bool(cfg.webhooks_enabled and cfg.watchlist_webhooks_enabled),
             "smtp": {
                 "enabled": cfg.enabled,

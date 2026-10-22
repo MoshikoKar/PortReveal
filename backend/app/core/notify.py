@@ -1,4 +1,5 @@
 """Daily HTML email summary of network changes through an (internal) SMTP relay."""
+
 from __future__ import annotations
 
 import html
@@ -182,8 +183,9 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
     n = len(events)
     subject = f"{SUBJECT_PREFIX} Daily summary - {n} change{'s' if n != 1 else ''} ({day})"
 
-    count_bits = [f"{counts[t]} {TITLES.get(t, t).lower()}" for t, _ in
-                  sorted(((t, TITLES.get(t, t)) for t in counts), key=lambda x: x[1])]
+    count_bits = [
+        f"{counts[t]} {TITLES.get(t, t).lower()}" for t, _ in sorted(((t, TITLES.get(t, t)) for t in counts), key=lambda x: x[1])
+    ]
     summary = " · ".join(count_bits)
 
     # --- plain text ---
@@ -223,26 +225,23 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
             if not lines:
                 continue
             shown = lines[:MAX_LINES_PER_SECTION]
-            items = "".join(
-                f'<li style="margin:0 0 4px;padding:0;line-height:1.35;">{_esc(line)}</li>'
-                for line in shown
-            )
+            items = "".join(f'<li style="margin:0 0 4px;padding:0;line-height:1.35;">{_esc(line)}</li>' for line in shown)
             extra = len(lines) - len(shown)
             if extra > 0:
                 items += f'<li style="margin:0;padding:0;color:#64748b;">…and {extra} more</li>'
             blocks.append(
                 f'<div style="margin:12px 0 0;">'
                 f'<div style="font-size:13px;font-weight:600;color:#334155;margin:0 0 4px;">'
-                f'{_esc(TITLES.get(etype, etype))} '
+                f"{_esc(TITLES.get(etype, etype))} "
                 f'<span style="font-weight:500;color:#64748b;">({len(lines)})</span></div>'
                 f'<ul style="margin:0;padding:0 0 0 18px;font-size:13px;color:#0f172a;">{items}</ul>'
-                f'</div>'
+                f"</div>"
             )
         sections.append(
             f'<div style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;">'
             f'<div style="font-size:15px;font-weight:600;color:#0f172a;">{_esc(cat_name)} '
             f'<span style="font-weight:500;color:#64748b;font-size:13px;">({len(cat_events)})</span></div>'
-            f'{"".join(blocks)}</div>'
+            f"{''.join(blocks)}</div>"
         )
 
     html_body = f"""<!DOCTYPE html>
@@ -256,7 +255,7 @@ def format_daily_digest(events: list[Event], network_names: dict[int, str] | Non
 <tr><td style="background:#0f172a;padding:16px 20px;">
   <div style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#94a3b8;">PortReveal</div>
   <div style="font-size:18px;font-weight:600;color:#ffffff;margin-top:2px;">Daily summary</div>
-  <div style="font-size:13px;color:#cbd5e1;margin-top:4px;">{_esc(day)} · {n} change{'s' if n != 1 else ''}</div>
+  <div style="font-size:13px;color:#cbd5e1;margin-top:4px;">{_esc(day)} · {n} change{"s" if n != 1 else ""}</div>
 </td></tr>
 <tr><td style="padding:16px 20px 4px;">
   <p style="margin:0;font-size:13px;line-height:1.45;color:#475569;">{_esc(summary)}</p>
@@ -275,13 +274,7 @@ def format_sample_digest() -> tuple[str, str, str]:
     """Sample compact daily summary for the settings test-email action."""
     day = utcnow().astimezone().strftime("%Y-%m-%d")
     subject = f"{SUBJECT_PREFIX} Daily summary - sample ({day})"
-    plain = (
-        f"PortReveal - {day}\n"
-        "1 change: 1 ports opened\n\n"
-        "Ports (1)\n"
-        "  Ports opened\n"
-        "    • server01 (10.0.0.10) - TCP/8080\n"
-    )
+    plain = f"PortReveal - {day}\n1 change: 1 ports opened\n\nPorts (1)\n  Ports opened\n    • server01 (10.0.0.10) - TCP/8080\n"
     html_body = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>{_esc(subject)}</title></head>
 <body style="margin:0;padding:0;background:#f8fafc;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
@@ -340,7 +333,14 @@ def smtp_failure_reason(exc: BaseException) -> str:
     return "unexpected error (details in the application log)"
 
 
-def send_email(cfg: NotificationSettings, subject: str, body: str, html_body: str | None = None) -> None:
+def send_email(
+    cfg: NotificationSettings,
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+    *,
+    timeout: float | None = None,
+) -> None:
     if not cfg.smtp_host:
         raise SmtpConfigError("SMTP host is not configured")
     if not cfg.recipients:
@@ -354,10 +354,12 @@ def send_email(cfg: NotificationSettings, subject: str, body: str, html_body: st
     msg.set_content(body)
     if html_body:
         msg.add_alternative(html_body, subtype="html")
-    timeout = 20
+    # Default 8s so channel delivery finishes inside the concurrent wait (HTTP_DEADLINE+2).
+    timeout = 8.0 if timeout is None else float(timeout)
     if cfg.security == "ssl":
-        server: smtplib.SMTP = smtplib.SMTP_SSL(cfg.smtp_host, cfg.smtp_port, timeout=timeout,
-                                                context=ssl.create_default_context())
+        server: smtplib.SMTP = smtplib.SMTP_SSL(
+            cfg.smtp_host, cfg.smtp_port, timeout=timeout, context=ssl.create_default_context()
+        )
     else:
         server = smtplib.SMTP(cfg.smtp_host, cfg.smtp_port, timeout=timeout)
     try:
@@ -421,5 +423,7 @@ def _pending_all(db: Session, cfg: NotificationSettings) -> list[Event]:
             )
             .order_by(Event.created_at, Event.id)
             .limit(PENDING_DIGEST_LIMIT)
-        ).unique().all()
+        )
+        .unique()
+        .all()
     )
