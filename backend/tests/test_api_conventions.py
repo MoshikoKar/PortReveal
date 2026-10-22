@@ -134,11 +134,13 @@ def test_errors_share_one_envelope_with_a_machine_readable_code(client):
     r = client.post("/api/networks", json={"name": "Office", "cidr": "10.10.0.0/24"})  # no CSRF header
     assert r.status_code == 403 and r.json()["code"] == "forbidden" and isinstance(r.json()["message"], str)
 
-    r = client.post("/api/networks", json={"name": "", "cidr": "10.10.0.0/24"}, headers=csrf(client))
+    # Pydantic field errors keep the legacy details[] shape (network empty-name uses a plain 422 instead).
+    r = client.post("/api/networks", json={"name": "Office", "cidr": "10.10.0.0/24", "zone": "bogus"},
+                    headers=csrf(client))
     body = r.json()
     assert r.status_code == 422 and body["code"] == "validation_error"
-    assert body["message"].startswith("name: ")
-    assert isinstance(body["detail"], list) and body["detail"][0]["loc"] == ["body", "name"]  # legacy shape kept
+    assert body["message"].startswith("zone: ")
+    assert isinstance(body["detail"], list) and body["detail"][0]["loc"] == ["body", "zone"]  # legacy shape kept
     assert body["details"][0].keys() == {"loc", "msg", "type"}
 
     r = client.post("/api/scans", json={"scan_type": "standard", "targets": "10.0.0.1; reboot"}, headers=csrf(client))

@@ -9,6 +9,7 @@ from .config import get_settings
 from .core.manager import create_scan
 from .db import session_scope
 from .models import ROLE_ADMIN, SCAN_STANDARD, Network, User
+from .netutils import validate_network_name
 from .scanner import scanner_status
 from .security import hash_password
 from .settings_store import set_value
@@ -26,9 +27,10 @@ def seed_dev() -> bool:
             return False
         db.add(User(username=s.dev_admin_username, password_hash=hash_password(s.dev_admin_password),
                     role=ROLE_ADMIN, source="local", display_name="Development admin"))
-        net = db.scalar(select(Network).where(Network.name == DEV_NETWORK[0]))
+        net_name = validate_network_name(DEV_NETWORK[0])
+        net = db.scalar(select(Network).where(Network.name == net_name))
         if net is None:
-            net = Network(name=DEV_NETWORK[0], cidr=DEV_NETWORK[1], description=DEV_NETWORK[2])
+            net = Network(name=net_name, cidr=DEV_NETWORK[1], description=DEV_NETWORK[2])
             db.add(net)
             db.flush()
         set_value(db, "setup_completed", True)
