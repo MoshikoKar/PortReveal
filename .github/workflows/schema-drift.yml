@@ -62,7 +62,10 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
       - run: python -m pip install -r requirements-dev.txt
+      # Upgrade / downgrade / upgrade catches dialect-specific migration bugs (e.g. boolean
+      # binds). Full model↔DB drift stays on the SQLite alembic-check job — Postgres also
+      # surfaces pre-existing UniqueConstraint naming noise (vuln_jobs_uuid_key) unrelated
+      # to recipient groups.
       - run: python -m alembic upgrade head
       - run: python -m alembic downgrade base
       - run: python -m alembic upgrade head
-      - run: python -m alembic check

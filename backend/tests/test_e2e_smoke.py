@@ -816,7 +816,8 @@ def test_notifications_tabs_and_webhook_crud(live_app, browser):
         page.get_by_role("button", name="Save").click()
         expect(page.get_by_text("e2e-soc", exact=True)).to_be_visible(timeout=10_000)
         # Name is a card badge; summary is severity · networks · when (no name prefix).
-        expect(page.get_by_test_id("group-summary").filter(has_text="Daily")).to_be_visible()
+        soc_card = page.locator("[data-testid^=recipient-group-]").filter(has_text="e2e-soc")
+        expect(soc_card.get_by_test_id("group-summary")).to_contain_text("Daily")
 
         # Back to Webhooks for CRUD
         nav.get_by_role("link", name="Webhooks", exact=True).click()

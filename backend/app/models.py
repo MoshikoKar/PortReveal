@@ -841,7 +841,9 @@ class RecipientDestination(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # email: address; slack/teams: never store plaintext — use url_enc; webhook: leave null
     target: Mapped[str | None] = mapped_column(String(255))
-    webhook_id: Mapped[int | None] = mapped_column(ForeignKey("webhook_endpoints.id", ondelete="SET NULL"))
+    webhook_id: Mapped[int | None] = mapped_column(
+        ForeignKey("webhook_endpoints.id", ondelete="SET NULL"), index=True,
+    )
     url_enc: Mapped[str | None] = mapped_column(String(500))  # Slack / Teams incoming webhook URL
     group: Mapped[RecipientGroup] = relationship(back_populates="destinations")
 
@@ -852,6 +854,7 @@ class RecipientHold(Base):
     __tablename__ = "recipient_holds"
     __table_args__ = (
         Index("ix_recipient_holds_group_created", "group_id", "created_at"),
+        # Named to match 0031 — do not also set index=True on the column (that creates a second name).
         Index("ix_recipient_holds_next_attempt", "next_attempt_at"),
         UniqueConstraint("group_id", "event_id", name="uq_recipient_hold_event"),
     )
@@ -861,7 +864,7 @@ class RecipientHold(Base):
     reason: Mapped[str] = mapped_column(String(40))  # digest | hourly | rate_cap | quiet | dedupe
     dedupe_key: Mapped[str | None] = mapped_column(String(200), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
-    next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
