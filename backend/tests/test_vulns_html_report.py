@@ -104,6 +104,48 @@ def test_compute_stats_top_lists():
     assert stats.top_devices[0][1] >= stats.top_devices[-1][1]
 
 
+def test_report_js_embeds_all_sortable_columns():
+    """Static check (no browser): every sortable column is wired in the inline JS."""
+    html = build_html_report(findings=[_finding()], filter_line="All networks (no filters)")
+    for needle in (
+        "function compareCveIds",
+        "case 'epss':",
+        "case 'title':",
+        "case 'port':",
+        "case 'state':",
+        "case 'severity':",
+        "case 'cvss':",
+        "case 'cve':",
+        "SEV_DESC",
+        "beforeprint",
+        "data-theme-set",
+        "Top devices by risk",
+        "Top CVEs by affected devices",
+        "A4 landscape",
+    ):
+        assert needle in html, needle
+
+
+def _cve_parts(cve_id: str) -> tuple[int, int]:
+    import re
+
+    m = re.match(r"^CVE-(\d+)-(\d+)$", cve_id, re.I)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def test_cve_numeric_sort_mirror():
+    """CVE year+id ordering (mirrors compareCveIds): 999 < 10000 < 73180 < 900002."""
+    ids = ["CVE-2024-10000", "CVE-2024-999", "CVE-2026-900002", "CVE-2026-73180"]
+    ordered = sorted(ids, key=_cve_parts)
+    assert ordered == [
+        "CVE-2024-999",
+        "CVE-2024-10000",
+        "CVE-2026-73180",
+        "CVE-2026-900002",
+    ]
+
+
+@pytest.mark.e2e
 @pytest.mark.parametrize(
     "key,dir_,field,expected_first",
     [
@@ -214,6 +256,7 @@ def test_report_js_sort_helpers(key, dir_, field, expected_first, tmp_path: Path
         browser.close()
 
 
+@pytest.mark.e2e
 def test_report_print_css_forces_light_and_expands_groups(tmp_path: Path):
     pytest.importorskip("playwright")
     from playwright.sync_api import sync_playwright
@@ -243,6 +286,7 @@ def test_report_print_css_forces_light_and_expands_groups(tmp_path: Path):
         browser.close()
 
 
+@pytest.mark.e2e
 def test_expanded_row_survives_resort(tmp_path: Path):
     pytest.importorskip("playwright")
     from playwright.sync_api import sync_playwright
