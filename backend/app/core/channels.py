@@ -11,6 +11,7 @@ import concurrent.futures
 import hashlib
 import json
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -105,23 +106,47 @@ def group_managed_webhook_ids(db: Session) -> set[int]:
     return {int(wid) for wid in rows if wid is not None}
 
 
-def emails_covered_by_groups_for_cve(db: Session) -> set[str]:
-    """Email addresses on enabled groups that accept CVE watchlist matches (avoid double-send)."""
+def emails_covered_by_groups_for_cve(db: Session, events: list[Event] | None = None) -> set[str]:
+    """Emails that an *immediate* group would send for these CVE events right now.
+
+    Daily/hourly groups must not suppress the watchlist's immediate email — otherwise
+    a match waits until the next digest (up to 24h). Only immediate groups that
+    match type/severity/network and are not in quiet-hold count as covering.
+    """
+    if not events:
+        return set()
     groups = list(
         db.scalars(
-            select(RecipientGroup).where(RecipientGroup.enabled.is_(True)).options(selectinload(RecipientGroup.destinations))
+            select(RecipientGroup)
+            .where(
+                RecipientGroup.enabled.is_(True),
+                RecipientGroup.delivery_mode == DELIVERY_IMMEDIATE,
+            )
+            .options(selectinload(RecipientGroup.destinations))
         )
         .unique()
         .all()
     )
     covered: set[str] = set()
+    now = utcnow().astimezone()
     for g in groups:
         types = g.event_types or []
         if types and EV_CVE_WATCH_MATCH not in types:
             continue
-        for d in g.destinations or []:
-            if d.enabled and d.kind == DEST_EMAIL and d.target:
+        email_dests = [d for d in (g.destinations or []) if d.enabled and d.kind == DEST_EMAIL and d.target]
+        if not email_dests:
+            continue
+        for ev in events:
+            if ev.event_type != EV_CVE_WATCH_MATCH:
+                continue
+            if not group_matches_event(g, ev):
+                continue
+            quiet = _in_quiet_hours(g.quiet_start, g.quiet_end, now)
+            if quiet and not (g.quiet_bypass_critical and _is_critical(ev)):
+                continue
+            for d in email_dests:
                 covered.add(d.target.strip().lower())
+            break
     return covered
 
 
@@ -193,29 +218,41 @@ def _route_event_ids(event_ids: list[int]) -> None:
             destinations = [d for d in (group.destinations or []) if d.enabled]
             if not destinations:
                 continue
-            matched: list[Event] = []
+            # Per destination-set bucket so per-dest dedupe can shrink the target list.
+            buckets: dict[tuple[int, ...], list[Event]] = {}
             for ev in events:
                 if not group_matches_event(group, ev):
                     continue
                 key = _dedupe_key(ev)
+                mode = group.delivery_mode or DELIVERY_DAILY
+                dests_for_ev = destinations
                 if group.dedupe_seconds and group.dedupe_seconds > 0:
                     cutoff = utcnow() - timedelta(seconds=group.dedupe_seconds)
-                    recent = db.scalar(
-                        select(RecipientHold.id)
-                        .where(
-                            RecipientHold.group_id == group.id,
-                            RecipientHold.dedupe_key == key,
-                            RecipientHold.created_at >= cutoff,
+                    if mode != DELIVERY_IMMEDIATE:
+                        # Batch modes: one hold per fingerprint is enough.
+                        recent = db.scalar(
+                            select(RecipientHold.id)
+                            .where(
+                                RecipientHold.group_id == group.id,
+                                RecipientHold.dedupe_key == key,
+                                RecipientHold.created_at >= cutoff,
+                            )
+                            .limit(1)
                         )
-                        .limit(1)
-                    )
-                    if recent:
-                        continue
+                        if recent:
+                            continue
+                    else:
+                        already = _deduped_dest_ids(db, group.id, key, cutoff)
+                        if already is None:
+                            continue  # legacy whole-group dedupe
+                        if already:
+                            dests_for_ev = [d for d in destinations if d.id not in already]
+                            if not dests_for_ev:
+                                continue
                 quiet = _in_quiet_hours(group.quiet_start, group.quiet_end, now)
                 if quiet and not (group.quiet_bypass_critical and _is_critical(ev)):
                     _hold(db, group.id, ev.id, HOLD_QUIET, key)
                     continue
-                mode = group.delivery_mode or DELIVERY_DAILY
                 if mode == DELIVERY_DAILY:
                     _hold(db, group.id, ev.id, HOLD_DIGEST, key)
                     continue
@@ -230,23 +267,23 @@ def _route_event_ids(event_ids: list[int]) -> None:
                 if group.rate_sent >= max(1, group.max_per_hour or 20):
                     _hold(db, group.id, ev.id, HOLD_RATE, key)
                     continue
-                matched.append(ev)
-                # Do not create HOLD_DEDUPE before send — a pre-send dedupe hold
-                # blocked retry holds on failure (unique group+event). Record
-                # dedupe only after a successful delivery.
+                dest_key = tuple(sorted(d.id for d in dests_for_ev))
+                buckets.setdefault(dest_key, []).append(ev)
 
-            if matched:
+            for dest_key, matched in buckets.items():
+                if not matched:
+                    continue
                 n = len(matched)
                 # Count one message toward the hourly cap (batched).
                 group.rate_sent = (group.rate_sent or 0) + 1
-                # Snapshot dedupe keys for post-success HOLD_DEDUPE.
+                dests = [d for d in destinations if d.id in dest_key]
                 keys = {_dedupe_key(e): e.id for e in matched}
                 immediate_jobs.append(
                     {
                         "group_id": group.id,
                         "group_name": group.name,
                         "event_ids": [e.id for e in matched],
-                        "destinations": _dest_snaps(db, destinations),
+                        "destinations": _dest_snaps(db, dests),
                         "cfg": cfg_snap,
                         "rate_count": n,
                         "dedupe_keys": keys,
@@ -307,6 +344,7 @@ def _hold(
     key: str | None,
     *,
     pending_dest_ids: list[int] | None = None,
+    delivered_dest_ids: list[int] | None = None,
     attempts: int = 0,
     next_attempt_at: datetime | None = None,
 ) -> RecipientHold:
@@ -327,6 +365,7 @@ def _hold(
         attempts=attempts,
         next_attempt_at=next_attempt_at,
         pending_dest_ids=pending_dest_ids,
+        delivered_dest_ids=delivered_dest_ids,
         created_at=utcnow(),
     )
     db.add(h)
@@ -338,6 +377,7 @@ def _mark_hold_retry(
     h: RecipientHold,
     *,
     pending_dest_ids: list[int] | None,
+    delivered_dest_ids: list[int] | None = None,
 ) -> None:
     """Bump attempts / backoff; convert dedupe markers into retryable rate holds."""
     attempts = (h.attempts or 0) + 1
@@ -345,10 +385,36 @@ def _mark_hold_retry(
     if h.reason == HOLD_DEDUPE:
         h.reason = HOLD_RATE
     h.pending_dest_ids = pending_dest_ids
+    if delivered_dest_ids is not None:
+        prev = set(h.delivered_dest_ids or [])
+        h.delivered_dest_ids = sorted(prev | set(delivered_dest_ids))
     if attempts >= MAX_HOLD_ATTEMPTS:
         return  # caller deletes
     delay = _BACKOFF_SECONDS[min(attempts, len(_BACKOFF_SECONDS)) - 1]
     h.next_attempt_at = utcnow() + timedelta(seconds=delay)
+
+
+def _deduped_dest_ids(db: Session, group_id: int, key: str, cutoff: datetime) -> set[int] | None:
+    """Destination ids that already received ``key`` within the dedupe window.
+
+    Returns ``None`` when a legacy whole-group HOLD_DEDUPE covers every destination.
+    """
+    rows = list(
+        db.scalars(
+            select(RecipientHold).where(
+                RecipientHold.group_id == group_id,
+                RecipientHold.dedupe_key == key,
+                RecipientHold.created_at >= cutoff,
+            )
+        ).all()
+    )
+    delivered: set[int] = set()
+    for h in rows:
+        if h.delivered_dest_ids:
+            delivered.update(int(i) for i in h.delivered_dest_ids)
+        elif h.reason == HOLD_DEDUPE:
+            return None  # all destinations covered
+    return delivered
 
 
 def flush_due_holds(*, hourly: bool = False) -> None:
@@ -412,40 +478,47 @@ def flush_due_holds(*, hourly: bool = False) -> None:
             if not ready:
                 continue
 
-            event_ids = [h.event_id for h in ready]
-            events = list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all())
-            if not events:
-                for h in ready:
-                    db.delete(h)
-                continue
-            hold_ids = [h.id for h in ready]
-            # Intersect pending dest ids across ready holds (None = all dests).
-            pending: set[int] | None = None
+            # Keep retries with pending_dest_ids in their own jobs so a new digest
+            # hold (all dests) never expands a partial retry to destinations that
+            # already succeeded.
+            buckets: dict[tuple[int, ...] | None, list[RecipientHold]] = defaultdict(list)
             for h in ready:
-                ids = h.pending_dest_ids
-                if not ids:
-                    pending = None
-                    break
-                pending = set(ids) if pending is None else (pending & set(ids))
-            dest_snaps = _dest_snaps(db, destinations)
-            if pending is not None:
-                dest_snaps = [d for d in dest_snaps if d.get("id") in pending]
-                if not dest_snaps:
-                    # Stale pending ids — fall back to all enabled destinations.
-                    dest_snaps = _dest_snaps(db, destinations)
-            jobs.append(
-                {
-                    "group_id": group.id,
-                    "group_name": group.name,
-                    "event_ids": [e.id for e in events],
-                    "hold_ids": hold_ids,
-                    "destinations": dest_snaps,
-                    "cfg": cfg_snap,
-                    "claim_daily": claim_daily,
-                    "digest_day": today if claim_daily else None,
-                    "pending_dest_ids": sorted(pending) if pending is not None else None,
-                }
-            )
+                key = tuple(sorted(int(i) for i in h.pending_dest_ids)) if h.pending_dest_ids else None
+                buckets[key].append(h)
+            for pending_key, bucket_holds in buckets.items():
+                event_ids = [h.event_id for h in bucket_holds]
+                events = list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all())
+                if not events:
+                    for h in bucket_holds:
+                        db.delete(h)
+                    continue
+                hold_ids = [h.id for h in bucket_holds]
+                dest_snaps = _dest_snaps(db, destinations)
+                if pending_key is not None:
+                    dest_snaps = [d for d in dest_snaps if d.get("id") in pending_key]
+                    if not dest_snaps:
+                        dest_snaps = _dest_snaps(db, destinations)
+                # Carry delivered_dest_ids / dedupe keys from holds for post-success markers.
+                dedupe_keys = {h.dedupe_key: h.event_id for h in bucket_holds if h.dedupe_key}
+                prior_delivered: set[int] = set()
+                for h in bucket_holds:
+                    prior_delivered.update(int(i) for i in (h.delivered_dest_ids or []))
+                jobs.append(
+                    {
+                        "group_id": group.id,
+                        "group_name": group.name,
+                        "event_ids": [e.id for e in events],
+                        "hold_ids": hold_ids,
+                        "destinations": dest_snaps,
+                        "cfg": cfg_snap,
+                        "claim_daily": claim_daily and pending_key is None,
+                        "digest_day": today if (claim_daily and pending_key is None) else None,
+                        "pending_dest_ids": list(pending_key) if pending_key is not None else None,
+                        "dedupe_keys": dedupe_keys,
+                        "dedupe_seconds": group.dedupe_seconds or 0,
+                        "prior_delivered_dest_ids": sorted(prior_delivered),
+                    }
+                )
         db.commit()
     except Exception:
         log.exception("flush_due_holds plan failed")
@@ -519,13 +592,15 @@ def _deliver_job(job: dict) -> None:
     all_ok = bool(results) and not failed
     last_err = next((r["error"] for r in failed), None)
     failed_dest_ids = [r["dest_id"] for r in failed if r.get("dest_id") is not None]
+    succeeded_dest_ids = [r["dest_id"] for r in succeeded if r.get("dest_id") is not None]
     # Preserve previously-pending dests that were not attempted this round.
     prior_pending = job.get("pending_dest_ids")
     if prior_pending and failed_dest_ids:
-        # Keep any prior pending that we did not try (should be none if filtered correctly).
         attempted = {d.get("id") for d in destinations}
         leftover = [i for i in prior_pending if i not in attempted]
         failed_dest_ids = sorted(set(failed_dest_ids) | set(leftover))
+    prior_delivered = set(job.get("prior_delivered_dest_ids") or [])
+    delivered_now = sorted(prior_delivered | set(succeeded_dest_ids))
 
     db = SessionLocal()
     try:
@@ -534,18 +609,35 @@ def _deliver_job(job: dict) -> None:
             return
         if all_ok:
             group.last_success_at = utcnow()
-            # Keep last_error / last_error_at visible after later success (do not clear).
+            # Clear stale failure banner once every destination in this job succeeded.
+            group.last_error = None
+            group.last_error_at = None
             if job.get("claim_daily") and job.get("digest_day"):
                 group.last_digest_on = job["digest_day"]
             hold_ids = job.get("hold_ids") or []
+            hold_rows = []
             if hold_ids:
-                for h in db.scalars(select(RecipientHold).where(RecipientHold.id.in_(hold_ids))).all():
+                hold_rows = list(db.scalars(select(RecipientHold).where(RecipientHold.id.in_(hold_ids))).all())
+                for h in hold_rows:
                     db.delete(h)
-            # Dedupe markers after successful immediate delivery.
+                db.flush()
+            # Per-dest dedupe markers (immediate + successful retries).
             dedupe_keys: dict = job.get("dedupe_keys") or {}
-            if job.get("dedupe_seconds") and dedupe_keys:
+            if not dedupe_keys and hold_rows:
+                dedupe_keys = {h.dedupe_key: h.event_id for h in hold_rows if h.dedupe_key}
+            dedupe_sec = job.get("dedupe_seconds")
+            if dedupe_sec is None:
+                dedupe_sec = group.dedupe_seconds or 0
+            if dedupe_sec and dedupe_keys and delivered_now:
                 for key, eid in dedupe_keys.items():
-                    _hold(db, group.id, eid, HOLD_DEDUPE, key)
+                    _hold(
+                        db,
+                        group.id,
+                        eid,
+                        HOLD_DEDUPE,
+                        key,
+                        delivered_dest_ids=delivered_now,
+                    )
             # Mark email-notified when an email destination succeeded (legacy digest retired).
             if any(r.get("ok") and r.get("kind") == DEST_EMAIL for r in succeeded):
                 now = utcnow()
@@ -558,7 +650,11 @@ def _deliver_job(job: dict) -> None:
             hold_ids = job.get("hold_ids") or []
             if hold_ids:
                 for h in db.scalars(select(RecipientHold).where(RecipientHold.id.in_(hold_ids))).all():
-                    _mark_hold_retry(h, pending_dest_ids=pending)
+                    _mark_hold_retry(
+                        h,
+                        pending_dest_ids=pending,
+                        delivered_dest_ids=succeeded_dest_ids or None,
+                    )
                     if (h.attempts or 0) >= MAX_HOLD_ATTEMPTS:
                         db.delete(h)
             else:
@@ -580,11 +676,16 @@ def _deliver_job(job: dict) -> None:
                             dedupe_key=key_by_eid.get(eid),
                             attempts=0,
                             pending_dest_ids=pending,
+                            delivered_dest_ids=delivered_now or None,
                             created_at=utcnow(),
                         )
                         db.add(h)
                         db.flush()
-                    _mark_hold_retry(h, pending_dest_ids=pending)
+                    _mark_hold_retry(
+                        h,
+                        pending_dest_ids=pending,
+                        delivered_dest_ids=succeeded_dest_ids or None,
+                    )
                     if (h.attempts or 0) >= MAX_HOLD_ATTEMPTS:
                         db.delete(h)
         db.commit()

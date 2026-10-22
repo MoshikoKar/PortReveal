@@ -534,3 +534,218 @@ def test_daily_group_waits_if_digest_time_already_passed(db, monkeypatch):
     flush_due_holds(hourly=False)
     assert sent == []
     assert db.scalar(select(RecipientHold).where(RecipientHold.event_id == ev.id)) is not None
+
+
+def test_daily_group_does_not_cover_cve_watchlist_email(db, monkeypatch):
+    """Daily default digest must not suppress the immediate CVE watchlist email."""
+    from app.core.channels import emails_covered_by_groups_for_cve
+    from app.security import encrypt_secret
+
+    g = _group(
+        db,
+        name="Email digest",
+        is_default=True,
+        delivery_mode=DELIVERY_DAILY,
+        digest_time="08:00",
+        event_types=[EV_CVE_WATCH_MATCH, "port_opened"],
+    )
+    db.add(RecipientDestination(group_id=g.id, kind=DEST_EMAIL, enabled=True, target="ops@example.com"))
+    # Immediate group covering a different address (email) — that address is skipped by watchlist.
+    g2 = _group(
+        db,
+        name="SOC",
+        delivery_mode=DELIVERY_IMMEDIATE,
+        dedupe_seconds=0,
+        event_types=[EV_CVE_WATCH_MATCH],
+        min_severity="info",
+    )
+    db.add(RecipientDestination(group_id=g2.id, kind=DEST_EMAIL, enabled=True, target="soc@example.com"))
+    # Slack-only immediate group must not mark notified_at (email-only).
+    g3 = _group(
+        db,
+        name="Slack SOC",
+        delivery_mode=DELIVERY_IMMEDIATE,
+        dedupe_seconds=0,
+        event_types=[EV_CVE_WATCH_MATCH],
+    )
+    db.add(
+        RecipientDestination(
+            group_id=g3.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/cve"),
+        )
+    )
+    ev = _event(db, event_type=EV_CVE_WATCH_MATCH, severity="high", message="CVE-2026-1")
+    db.commit()
+
+    covered = emails_covered_by_groups_for_cve(db, [ev])
+    assert "ops@example.com" not in covered
+    assert "soc@example.com" in covered
+
+    # End-to-end: with only the daily digest covering ops@, watchlist email still fires.
+    g2.enabled = False
+    g3.enabled = False
+    put_section(
+        db,
+        NotificationSettings(
+            enabled=True,
+            smtp_host="smtp.example.com",
+            recipients=["ops@example.com"],
+            watchlist_email_enabled=True,
+            watchlist_webhooks_enabled=False,
+        ),
+    )
+    db.commit()
+    sent: list[list[str]] = []
+
+    def fake_email(cfg, subject, plain, html=None, **kwargs):
+        sent.append(list(cfg.recipients))
+
+    import app.core.notify as notify_mod
+
+    monkeypatch.setattr(notify_mod, "send_email", fake_email)
+    schedule_watchlist_delivery([ev.id], wait=True)
+    assert sent == [["ops@example.com"]], "daily group must not suppress immediate CVE email"
+
+
+def test_per_dest_dedupe_after_partial_and_retry(db, monkeypatch):
+    """After Slack ok / Teams fail then Teams retry ok, a repeat event skips Slack."""
+    from app.security import encrypt_secret
+
+    g = _group(db, delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=600)
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/ok"),
+        )
+    )
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_TEAMS,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.teams.example/bad"),
+        )
+    )
+    ev = _event(db, message="same-fingerprint")
+    db.commit()
+    posts: list[str] = []
+
+    def selective(url, payload, *, secret, raw=None):
+        posts.append(url)
+        if "teams" in url:
+            raise RuntimeError("HTTP 500")
+        return None
+
+    monkeypatch.setattr(channels, "_post_json", selective)
+    deliver_channel_event_ids([ev.id])
+    hold = db.scalar(select(RecipientHold).where(RecipientHold.event_id == ev.id))
+    assert hold is not None and hold.pending_dest_ids
+    assert hold.delivered_dest_ids  # Slack recorded
+    hold.next_attempt_at = None
+    db.commit()
+
+    monkeypatch.setattr(channels, "_post_json", lambda url, payload, *, secret, raw=None: posts.append(url))
+    flush_due_holds(hourly=False)
+    assert posts.count("https://hooks.slack.example/ok") == 1
+    assert posts.count("https://hooks.teams.example/bad") == 2
+
+    # Repeat fingerprint within dedupe window — both dests already covered after retry.
+    ev2 = _event(db, message="same-fingerprint")
+    db.commit()
+    deliver_channel_event_ids([ev2.id])
+    assert posts.count("https://hooks.slack.example/ok") == 1
+    assert posts.count("https://hooks.teams.example/bad") == 2
+
+
+def test_flush_keeps_retry_pending_dests_separate_from_new_holds(db, monkeypatch):
+    """Retry with pending_dest_ids must not expand when a new digest hold flushes too."""
+    from app.security import encrypt_secret
+
+    g = _group(db, delivery_mode=DELIVERY_DAILY, digest_time="00:00", dedupe_seconds=0)
+    slack = RecipientDestination(
+        group_id=g.id,
+        kind=DEST_SLACK,
+        enabled=True,
+        url_enc=encrypt_secret("https://hooks.slack.example/ok"),
+    )
+    teams = RecipientDestination(
+        group_id=g.id,
+        kind=DEST_TEAMS,
+        enabled=True,
+        url_enc=encrypt_secret("https://hooks.teams.example/x"),
+    )
+    db.add_all([slack, teams])
+    ev_retry = _event(db, message="retry-me")
+    ev_new = _event(db, message="fresh")
+    db.commit()
+    db.refresh(slack)
+    db.refresh(teams)
+
+    # Simulate a partial failure hold for ev_retry (Teams only).
+    db.add(
+        RecipientHold(
+            group_id=g.id,
+            event_id=ev_retry.id,
+            reason="rate_cap",
+            attempts=1,
+            next_attempt_at=None,
+            pending_dest_ids=[teams.id],
+            delivered_dest_ids=[slack.id],
+            created_at=db.get(type(ev_retry), ev_retry.id).created_at,
+        )
+    )
+    db.commit()
+
+    posts: list[str] = []
+    monkeypatch.setattr(channels, "_post_json", lambda url, payload, *, secret, raw=None: posts.append(url))
+    deliver_channel_event_ids([ev_new.id])  # digest hold
+    flush_due_holds(hourly=False)
+
+    # Retry job: Teams only for ev_retry. New digest: both dests for ev_new.
+    assert posts.count("https://hooks.teams.example/x") >= 1
+    # Slack must not receive the retry payload alone as a 2nd "retry-only" blast —
+    # it may receive the new digest once. Count Slack posts == 1 (new event only).
+    assert posts.count("https://hooks.slack.example/ok") == 1
+
+
+def test_last_error_cleared_after_successful_retry(db, monkeypatch):
+    """Card must not keep showing a stale failure after a later retry succeeds."""
+    from app.models import RecipientGroup
+    from app.security import encrypt_secret
+
+    g = _group(db, delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=0)
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/x"),
+        )
+    )
+    ev = _event(db)
+    db.commit()
+
+    def boom(url, payload, *, secret, raw=None):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(channels, "_post_json", boom)
+    deliver_channel_event_ids([ev.id])
+    db.expire_all()
+    g = db.get(RecipientGroup, g.id)
+    assert g.last_error
+    hold = db.scalar(select(RecipientHold).where(RecipientHold.event_id == ev.id))
+    assert hold is not None
+    hold.next_attempt_at = None
+    db.commit()
+
+    monkeypatch.setattr(channels, "_post_json", lambda *a, **k: None)
+    flush_due_holds(hourly=False)
+    db.expire_all()
+    g = db.get(RecipientGroup, g.id)
+    assert g.last_error is None
+    assert g.last_error_at is None
+    assert g.last_success_at is not None

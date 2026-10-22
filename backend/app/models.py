@@ -870,6 +870,8 @@ class RecipientHold(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     # After a partial failure: destination ids still owed a send (None = all enabled dests).
     pending_dest_ids: Mapped[list | None] = mapped_column(JSON)
+    # Destinations that already received this event/key (per-dest dedupe across retries).
+    delivered_dest_ids: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

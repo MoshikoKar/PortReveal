@@ -394,7 +394,7 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
         from ..channels import emails_covered_by_groups_for_cve, group_managed_webhook_ids
 
         managed_hooks = group_managed_webhook_ids(db)
-        covered_emails = emails_covered_by_groups_for_cve(db)
+        covered_emails = emails_covered_by_groups_for_cve(db, events)
         hooks: list[dict] = []
         # Master webhooks switch + per-watchlist toggle (both required).
         # Skip group-managed hooks — those receive CVE events via recipient groups only.
