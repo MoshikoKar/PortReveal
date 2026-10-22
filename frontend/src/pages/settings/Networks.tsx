@@ -2,9 +2,24 @@ import { useEffect, useState } from 'react';
 import { del, post, put } from '../../api';
 import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import { useApp } from '../../context';
-import { networkNameError } from '../../networkName';
+import {
+  NETWORK_NAME_HINT,
+  NETWORK_NAME_LEGACY_HINT,
+  isLegacyNetworkName,
+  networkNameError,
+  trimNetworkName,
+} from '../../networkName';
 import type { ArpSnmp, Network } from '../../types';
 import { NETWORK_ZONES, fmtTime, useApi, useInFlight } from '../../util';
+
+function NetworkNameCharsetHint() {
+  return (
+    <>
+      Use English letters, numbers, spaces and{' '}
+      <code>-</code> <code>_</code> <code>.</code> <code>(</code> <code>)</code> only
+    </>
+  );
+}
 
 /** Secrets are blank unless being changed; the *_set flags say whether a stored one exists. */
 type ArpDraft = {
@@ -194,9 +209,11 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
   const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   // Legacy names with other characters stay editable for other fields; only validate when the name is new or changed.
-  const nameUnchanged = !!draft?.id && draft.name.trim() === (initial?.name ?? '').trim();
+  const nameUnchanged = !!draft?.id && trimNetworkName(draft.name) === trimNetworkName(initial?.name ?? '');
   const nameErr = draft && !nameUnchanged ? networkNameError(draft.name) : null;
-  const canSave = !!draft && !!draft.name.trim() && !nameErr && !!draft.cidr.trim()
+  const legacyName = !!draft?.id && nameUnchanged && isLegacyNetworkName(draft.name);
+  const nameDescId = nameErr ? 'network-name-error' : legacyName ? 'network-name-legacy' : undefined;
+  const canSave = !!draft && !!trimNetworkName(draft.name) && !nameErr && !!draft.cidr.trim()
     && (!draft.arp || !!draft.arp.host.trim());
   useReportDirty(!!draft && dirty, onDirtyChange);
 
@@ -337,9 +354,16 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
           </>}
         >
           <label className="field">Name
-            <input type="text" value={draft.name} maxLength={120} aria-invalid={!!nameErr}
+            <input type="text" value={draft.name} aria-invalid={!!nameErr} aria-describedby={nameDescId}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" />
-            {nameErr && <span className="hint" style={{ color: 'var(--high)' }}>{nameErr}</span>}
+            {nameErr && (
+              <span id="network-name-error" className="hint" style={{ color: 'var(--high)' }} role="alert">
+                {nameErr === NETWORK_NAME_HINT ? <NetworkNameCharsetHint /> : nameErr}
+              </span>
+            )}
+            {legacyName && !nameErr && (
+              <span id="network-name-legacy" className="hint">{NETWORK_NAME_LEGACY_HINT}</span>
+            )}
           </label>
           <label className="field" title="IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline.">
             CIDR

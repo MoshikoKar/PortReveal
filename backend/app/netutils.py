@@ -18,9 +18,12 @@ from collections.abc import Iterable, Iterator
 MAX_SCAN_ADDRESSES = 65536
 MIN_NETWORK_PREFIX = 16
 NETWORK_NAME_MAX = 120
+NETWORK_NAME_EMPTY_MSG = "Name must not be empty"
+NETWORK_NAME_MAX_MSG = f"At most {NETWORK_NAME_MAX} characters"
 NETWORK_NAME_CHARS_MSG = "Use English letters, numbers, spaces and - _ . ( ) only"
 # New/renamed network names only; legacy rows with other characters remain readable.
 _NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9 ._()-]+$")
+_BOM = "\ufeff"
 
 _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
@@ -32,13 +35,23 @@ class TargetError(ValueError):
     pass
 
 
+def trim_network_name(name: str) -> str:
+    """Strip BOM and whitespace like JavaScript String.trim (Python strip alone keeps \\ufeff)."""
+    s = name or ""
+    while s and (s[0].isspace() or s[0] == _BOM):
+        s = s[1:]
+    while s and (s[-1].isspace() or s[-1] == _BOM):
+        s = s[:-1]
+    return s
+
+
 def validate_network_name(name: str) -> str:
     """Trim and enforce the allowed character set for creating or renaming a network."""
-    name = (name or "").strip()
+    name = trim_network_name(name)
     if not name:
-        raise ValueError("must not be empty")
+        raise ValueError(NETWORK_NAME_EMPTY_MSG)
     if len(name) > NETWORK_NAME_MAX:
-        raise ValueError(f"at most {NETWORK_NAME_MAX} characters")
+        raise ValueError(NETWORK_NAME_MAX_MSG)
     if not _NETWORK_NAME_RE.fullmatch(name):
         raise ValueError(NETWORK_NAME_CHARS_MSG)
     return name
