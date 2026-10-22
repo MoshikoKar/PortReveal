@@ -1,6 +1,6 @@
-"""Shared finding-list filters for GET /api/vulns, /export, and /summary.
+"""Shared finding-list filters for GET /api/vulns, /export, /export/html, and /summary.
 
-Kept in one place so list, CSV export, and dashboard summary share one filter object —
+Kept in one place so list, CSV/HTML export, and dashboard summary share one filter object —
 including free-text ``q`` (search includes normally-hidden rows) and ``only_hidden``.
 """
 

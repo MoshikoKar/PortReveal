@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import and_, func, literal_column, or_, select
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from ..core.vuln.filters import (
     sanitize_filename_part,
     search_term,
 )
+from ..core.vuln.html_report import build_html_report, finding_dict, format_filter_line
 from ..core.vuln.score import DEFAULT_CVSS, RISK_BANDS, RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 from ..core.vuln.summary import get_vuln_summary
 from ..db import SessionLocal, get_db, utcnow
@@ -612,8 +613,8 @@ def _export_row(
     return [csv_safe_cell(c) for c in cells]
 
 
-def _export_filename(db: Session, filters: FindingFilters) -> str:
-    """``vulns_<context>_<yyyymmdd>.csv`` with a sanitized filter slug when scoped.
+def _export_filename(db: Session, filters: FindingFilters, *, ext: str = "csv") -> str:
+    """``vulns_<context>_<yyyymmdd>.{csv|html}`` with a sanitized filter slug when scoped.
 
     Unicode network names are preserved in the filename (paired with an ASCII
     ``Content-Disposition`` fallback via ``content_disposition_attachment``).
@@ -640,7 +641,64 @@ def _export_filename(db: Session, filters: FindingFilters) -> str:
     if search_term(filters):
         parts.append("search")
     slug = "_".join(parts) if parts else "all"
-    return f"vulns_{slug}_{day}.csv"
+    safe_ext = "html" if ext == "html" else "csv"
+    return f"vulns_{slug}_{day}.{safe_ext}"
+
+
+def _html_filter_line(db: Session, filters: FindingFilters) -> str:
+    """Human filter line matching the print report (network name / device label resolved)."""
+    network_name = None
+    device_label = None
+    if filters.network_id and filters.network_id != NETWORK_UNASSIGNED:
+        network_name = db.scalar(select(Network.name).where(Network.id == int(filters.network_id)))
+    if filters.device_uuid:
+        device = db.scalar(select(Device).where(Device.uuid == filters.device_uuid))
+        if device is not None:
+            device_label = (
+                f"{device.current_ip} ({device.hostname})"
+                if device.hostname
+                else (device.current_ip or filters.device_uuid)
+            )
+    return format_filter_line(filters, network_name=network_name, device_label=device_label)
+
+
+def _html_findings(db: Session, filters: FindingFilters, now: datetime) -> list[dict]:
+    """All matching findings for the HTML report (same filter SQL as CSV/list)."""
+    cfg = get_section(db, VulnSettings)
+    searching = search_term(filters) is not None
+    rows = db.execute(
+        _apply_filters(_rows_base(), db, cfg, filters, now).order_by(
+            Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), DevicePortVuln.id
+        )
+    )
+    out: list[dict] = []
+    for dpv, port_row, device, vuln, network_name, first_seen_at in rows:
+        reasons = hidden_reasons(dpv.state, vuln.kev, vuln.cvss_base, cfg) if searching else None
+        out.append(
+            finding_dict(
+                cve_id=vuln.cve_id,
+                device_uuid=device.uuid,
+                device_ip=device.current_ip,
+                device_hostname=device.hostname,
+                network=network_name,
+                network_id=device.network_id,
+                port=port_row.port,
+                protocol=port_row.protocol,
+                service=port_row.service,
+                product=port_row.product,
+                version=port_row.version,
+                state=dpv.state,
+                cvss_base=vuln.cvss_base,
+                cvss_vector=vuln.cvss_vector,
+                kev=bool(vuln.kev),
+                epss=vuln.epss,
+                summary=vuln.summary,
+                first_seen_at=first_seen_at,
+                matched_at=dpv.matched_at,
+                hidden_reasons=reasons,
+            )
+        )
+    return out
 
 
 def _export_lines(filters: FindingFilters, now: datetime) -> Iterator[str]:
@@ -730,6 +788,71 @@ def export_vulns(
     return StreamingResponse(
         _export_lines(filters, utcnow()),
         media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
+    )
+
+
+@router.get("/export/html")
+def export_vulns_html(
+    severity: str | None = Query(None, pattern=SEVERITY_PATTERN),
+    kev: bool | None = None,
+    epss_min: float | None = Query(None, ge=0.0, le=1.0),
+    network_id: str | None = Query(None, max_length=32),
+    service: str | None = Query(None, max_length=100),
+    port: int | None = Query(None, ge=1, le=65535),
+    os_name: str | None = Query(None, max_length=255),
+    device_type: str | None = Query(None, max_length=40),
+    state: str | None = Query(None, pattern=STATE_PATTERN),
+    cve_age: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
+    exposure_duration: str | None = Query(None, pattern=AGE_BUCKET_PATTERN),
+    risk_band: str | None = Query(None, pattern=RISK_BAND_PATTERN),
+    vendor: str | None = Query(None, max_length=100),
+    product: str | None = Query(None, max_length=100),
+    cve_id: str | None = Query(None, max_length=32),
+    device_uuid: str | None = Query(None, max_length=64),
+    new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
+    q: str | None = Query(None, max_length=200),
+    only_hidden: bool = False,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """Same filters as CSV/print: self-contained offline HTML report (inline CSS/JS).
+
+    No audit log entry (CSV export is also not audited). Filename mirrors CSV with ``.html``.
+    """
+    filters = _finding_filters_from_request(
+        severity=severity,
+        kev=kev,
+        epss_min=epss_min,
+        network_id=network_id,
+        service=service,
+        port=port,
+        os_name=os_name,
+        device_type=device_type,
+        state=state,
+        cve_age=cve_age,
+        exposure_duration=exposure_duration,
+        risk_band=risk_band,
+        vendor=vendor,
+        product=product,
+        cve_id=cve_id,
+        device_uuid=device_uuid,
+        new_since=new_since,
+        q=q,
+        only_hidden=only_hidden,
+    )
+    now = utcnow()
+    findings = _html_findings(db, filters, now)
+    filter_line = _html_filter_line(db, filters)
+    body = build_html_report(
+        findings=findings,
+        filter_line=filter_line,
+        generated_at=datetime.now().astimezone(),
+    )
+    filename = _export_filename(db, filters, ext="html")
+    return HTMLResponse(
+        content=body,
+        media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 

@@ -217,6 +217,25 @@ describe('formatVulnFilterSummary / vulnExportFilename / toggleNetworkFilter', (
     expect(name).toMatch(/^vulns_lab-alpha_critical_\d{8}\.csv$/);
   });
 
+  it('builds an HTML report filename with the same slug and .html extension', () => {
+    const name = vulnExportFilename(
+      { network_id: '1', severity: 'critical' },
+      { networkNames: { '1': 'Lab Alpha' } },
+      'html',
+    );
+    expect(name).toMatch(/^vulns_lab-alpha_critical_\d{8}\.html$/);
+  });
+
+  it('appends _search when a free-text search is active (matches server naming)', () => {
+    const name = vulnExportFilename(
+      { network_id: '1' },
+      { networkNames: { '1': 'Lab Alpha' } },
+      'html',
+      { searchQ: 'openssh' },
+    );
+    expect(name).toMatch(/^vulns_lab-alpha_search_\d{8}\.html$/);
+  });
+
   it('uses local calendar day for the filename date (not UTC ISO)', () => {
     const local = new Date(2026, 0, 5, 23, 30, 0); // Jan 5 local
     expect(localFilenameDay(local)).toBe('20260105');
