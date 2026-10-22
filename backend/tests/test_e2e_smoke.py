@@ -141,12 +141,14 @@ def test_cve_watchlist_add_and_list(live_app, browser):
 
         page.get_by_role("link", name="Vulnerabilities", exact=True).click()
         expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
-        page.get_by_role("link", name="CVE Watchlist").click()
+        # Sidebar and page both link here; prefer the main-content button.
+        page.get_by_role("main").get_by_role("link", name="CVE Watchlist").click()
         expect(page).to_have_url(f"{live_app}/vulnerabilities/watchlist")
         expect(page.get_by_role("heading", name="CVE Watchlist")).to_be_visible()
 
         page.get_by_label("CVE IDs").fill("CVE-2026-109618")
         page.get_by_role("button", name="Add to watchlist").click()
+        expect(page.get_by_text("Added 1, already watched 0.")).to_be_visible(timeout=10_000)
         expect(page.locator("tbody tr").filter(has_text="CVE-2026-109618")).to_be_visible(timeout=10_000)
         expect(page.get_by_text("Pending sync", exact=True)).to_be_visible()
     finally:
