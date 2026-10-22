@@ -8,6 +8,7 @@ import {
   NETWORK_NAME_MAX,
   NETWORK_NAME_MAX_MSG,
   isLegacyNetworkName,
+  limitNetworkNameInput,
   networkNameError,
   trimNetworkName,
 } from '../../networkName';
@@ -361,12 +362,14 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
           <label className="field">Name
             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
               <input type="text" value={draft.name} aria-invalid={!!nameErr} aria-describedby={nameDescId}
-                maxLength={legacyName ? undefined : NETWORK_NAME_MAX}
                 title={`At most ${NETWORK_NAME_MAX} characters`}
-                onChange={(e) => { setNameTouched(true); setDraft({ ...draft, name: e.target.value }); }}
+                onChange={(e) => {
+                  setNameTouched(true);
+                  const next = legacyName ? e.target.value : limitNetworkNameInput(e.target.value);
+                  setDraft({ ...draft, name: next });
+                }}
                 onBlur={() => setNameTouched(true)} placeholder="Office LAN" style={{ flex: 1 }} />
-              <span className="hint mono" title={NETWORK_NAME_MAX_MSG}
-                style={nameErr === NETWORK_NAME_MAX_MSG ? { color: 'var(--high)' } : undefined}>
+              <span className="hint" title={NETWORK_NAME_MAX_MSG}>
                 {trimNetworkName(draft.name).length}/{NETWORK_NAME_MAX}
               </span>
             </div>

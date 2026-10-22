@@ -114,6 +114,45 @@ def test_compute_stats_top_lists():
     assert "KEV 1" in stats.top_devices[0][2]
 
 
+def test_top_device_bar_follows_lexicographic_rank():
+    """High count must not lengthen a bar past a device that ranks higher on Critical."""
+    findings = [
+        # Ranks first: 1 critical, 0 high
+        _finding(
+            cve_id="CVE-2024-1",
+            device_uuid="crit",
+            device_ip="10.0.0.1",
+            cvss_base=9.5,
+            kev=False,
+        ),
+        # Ranks second: 0 critical, many high + large CVSS sum (old weight inverted bars)
+        *[
+            _finding(
+                cve_id=f"CVE-2024-{i}",
+                device_uuid="highs",
+                device_ip="10.0.0.2",
+                cvss_base=7.0,
+                kev=False,
+            )
+            for i in range(10, 25)
+        ],
+    ]
+    stats = compute_stats(findings)
+    assert stats.top_devices[0][0].startswith("10.0.0.1")
+    assert stats.top_devices[1][0].startswith("10.0.0.2")
+    assert stats.top_devices[0][1] > stats.top_devices[1][1]
+    assert "Crit 1" in stats.top_devices[0][2]
+    assert "High 15" in stats.top_devices[1][2]
+
+
+def test_html_report_print_description_and_cve_compact():
+    html = build_html_report(findings=[_finding()], filter_line="All networks (no filters)")
+    assert 'class="detail-desc"' in html
+    assert "detail-desc { grid-column: 1 / -1" in html
+    assert "Group-by-CVE print" in html or "group-by-cve th.col-device" in html
+    assert "text-overflow: ellipsis" in html
+
+
 def test_report_js_embeds_all_sortable_columns():
     """Static check (no browser): every sortable column is wired in the inline JS."""
     html = build_html_report(findings=[_finding()], filter_line="All networks (no filters)")

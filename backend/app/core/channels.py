@@ -52,6 +52,78 @@ MAX_HOLD_ATTEMPTS = 8
 _BACKOFF_SECONDS = (60, 300, 900, 1800, 3600, 7200, 14400, 28800)
 
 
+def _as_dest_ids(value: object) -> list[int]:
+    """Normalize delivered/pending dest JSON (list, None, JSON null, or legacy ``'null'`` text)."""
+    if value is None or value is False:
+        return []
+    if isinstance(value, str):
+        if value.strip().lower() in ("", "null", "none"):
+            return []
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        if value is None:
+            return []
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: list[int] = []
+    for item in value:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _store_dest_ids(ids: list[int] | None) -> list[int]:
+    """Always persist a real list (never SQLAlchemy/JSON null)."""
+    return list(ids or [])
+
+
+def _stable_email_message_id(group_id: int, event_ids: list[int], recipient: str) -> str:
+    """Deterministic Message-ID so a late SMTP accept + backoff retry may dedupe at the MTA."""
+    raw = f"{int(group_id)}:{','.join(str(i) for i in sorted(event_ids))}:{recipient.strip().lower()}"
+    digest = hashlib.sha256(raw.encode()).hexdigest()[:24]
+    return f"<pr-{digest}@portreveal>"
+
+
+def _collapse_events_by_dedupe(events: list[Event], *, dedupe_seconds: int) -> list[Event]:
+    """Keep one event per fingerprint when the group has a dedupe window (retries / batches)."""
+    if not dedupe_seconds or len(events) < 2:
+        return events
+    seen: set[str] = set()
+    out: list[Event] = []
+    for ev in sorted(events, key=lambda e: e.id):
+        key = _dedupe_key(ev)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ev)
+    return out
+
+
+def _run_jobs_concurrent(jobs: list[dict]) -> None:
+    """Deliver independent group jobs in parallel (no DB session held during HTTP/SMTP)."""
+    if not jobs:
+        return
+    if len(jobs) == 1:
+        try:
+            _deliver_job(jobs[0])
+        except Exception:
+            log.exception("channel delivery failed for group %s", jobs[0].get("group_id"))
+        return
+    workers = min(8, len(jobs))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(_deliver_job, job): job for job in jobs}
+        for fut in concurrent.futures.as_completed(futs):
+            job = futs[fut]
+            try:
+                fut.result()
+            except Exception:
+                log.exception("channel delivery failed for group %s", job.get("group_id"))
+
+
 def schedule_channel_delivery(event_ids: list[int]) -> None:
     """Enqueue channel routing on the shared webhook delivery queue (preferred).
 
@@ -294,11 +366,7 @@ def _route_event_ids(event_ids: list[int]) -> None:
     finally:
         db.close()
 
-    for job in immediate_jobs:
-        try:
-            _deliver_job(job)
-        except Exception:
-            log.exception("channel immediate delivery failed for group %s", job.get("group_id"))
+    _run_jobs_concurrent(immediate_jobs)
 
 
 def _cfg_snap(cfg: NotificationSettings) -> dict:
@@ -364,8 +432,8 @@ def _hold(
         dedupe_key=key,
         attempts=attempts,
         next_attempt_at=next_attempt_at,
-        pending_dest_ids=pending_dest_ids,
-        delivered_dest_ids=delivered_dest_ids,
+        pending_dest_ids=_store_dest_ids(pending_dest_ids) if pending_dest_ids is not None else None,
+        delivered_dest_ids=_store_dest_ids(delivered_dest_ids),
         created_at=utcnow(),
     )
     db.add(h)
@@ -384,10 +452,10 @@ def _mark_hold_retry(
     h.attempts = attempts
     if h.reason == HOLD_DEDUPE:
         h.reason = HOLD_RATE
-    h.pending_dest_ids = pending_dest_ids
+    h.pending_dest_ids = _store_dest_ids(pending_dest_ids) if pending_dest_ids is not None else None
     if delivered_dest_ids is not None:
-        prev = set(h.delivered_dest_ids or [])
-        h.delivered_dest_ids = sorted(prev | set(delivered_dest_ids))
+        prev = set(_as_dest_ids(h.delivered_dest_ids))
+        h.delivered_dest_ids = _store_dest_ids(sorted(prev | set(delivered_dest_ids)))
     if attempts >= MAX_HOLD_ATTEMPTS:
         return  # caller deletes
     delay = _BACKOFF_SECONDS[min(attempts, len(_BACKOFF_SECONDS)) - 1]
@@ -410,8 +478,9 @@ def _deduped_dest_ids(db: Session, group_id: int, key: str, cutoff: datetime) ->
     )
     delivered: set[int] = set()
     for h in rows:
-        if h.delivered_dest_ids:
-            delivered.update(int(i) for i in h.delivered_dest_ids)
+        ids = _as_dest_ids(h.delivered_dest_ids)
+        if ids:
+            delivered.update(ids)
         elif h.reason == HOLD_DEDUPE:
             return None  # all destinations covered
     return delivered
@@ -483,8 +552,10 @@ def flush_due_holds(*, hourly: bool = False) -> None:
             # already succeeded.
             buckets: dict[tuple[int, ...] | None, list[RecipientHold]] = defaultdict(list)
             for h in ready:
-                key = tuple(sorted(int(i) for i in h.pending_dest_ids)) if h.pending_dest_ids else None
+                pending_ids = _as_dest_ids(h.pending_dest_ids)
+                key = tuple(sorted(pending_ids)) if pending_ids else None
                 buckets[key].append(h)
+            email_only = bool(destinations) and all(d.kind == DEST_EMAIL for d in destinations)
             for pending_key, bucket_holds in buckets.items():
                 event_ids = [h.event_id for h in bucket_holds]
                 events = list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all())
@@ -492,6 +563,36 @@ def flush_due_holds(*, hourly: bool = False) -> None:
                     for h in bucket_holds:
                         db.delete(h)
                     continue
+                # Legacy digest behaviour: skip events already emailed (e.g. CVE watchlist).
+                if email_only:
+                    already_ids = {e.id for e in events if e.notified_at is not None}
+                    if already_ids:
+                        for h in list(bucket_holds):
+                            if h.event_id in already_ids:
+                                db.delete(h)
+                                bucket_holds.remove(h)
+                        events = [e for e in events if e.id not in already_ids]
+                    if not events:
+                        continue
+                # Collapse same-content events in one retry/digest using the group dedupe window.
+                dedupe_sec = group.dedupe_seconds or 0
+                events = _collapse_events_by_dedupe(events, dedupe_seconds=dedupe_sec)
+                keep_ids = {e.id for e in events}
+                # Drop duplicate holds (same fingerprint) once the surviving event is selected.
+                if dedupe_sec:
+                    seen_keys: set[str] = set()
+                    survivors: list[RecipientHold] = []
+                    for h in sorted(bucket_holds, key=lambda row: row.event_id):
+                        if h.event_id not in keep_ids:
+                            db.delete(h)
+                            continue
+                        dk = h.dedupe_key or f"e:{h.event_id}"
+                        if dk in seen_keys:
+                            db.delete(h)
+                            continue
+                        seen_keys.add(dk)
+                        survivors.append(h)
+                    bucket_holds = survivors
                 hold_ids = [h.id for h in bucket_holds]
                 dest_snaps = _dest_snaps(db, destinations)
                 if pending_key is not None:
@@ -502,7 +603,7 @@ def flush_due_holds(*, hourly: bool = False) -> None:
                 dedupe_keys = {h.dedupe_key: h.event_id for h in bucket_holds if h.dedupe_key}
                 prior_delivered: set[int] = set()
                 for h in bucket_holds:
-                    prior_delivered.update(int(i) for i in (h.delivered_dest_ids or []))
+                    prior_delivered.update(_as_dest_ids(h.delivered_dest_ids))
                 jobs.append(
                     {
                         "group_id": group.id,
@@ -515,7 +616,7 @@ def flush_due_holds(*, hourly: bool = False) -> None:
                         "digest_day": today if (claim_daily and pending_key is None) else None,
                         "pending_dest_ids": list(pending_key) if pending_key is not None else None,
                         "dedupe_keys": dedupe_keys,
-                        "dedupe_seconds": group.dedupe_seconds or 0,
+                        "dedupe_seconds": dedupe_sec,
                         "prior_delivered_dest_ids": sorted(prior_delivered),
                     }
                 )
@@ -527,11 +628,7 @@ def flush_due_holds(*, hourly: bool = False) -> None:
     finally:
         db.close()
 
-    for job in jobs:
-        try:
-            _deliver_job(job)
-        except Exception:
-            log.exception("channel flush delivery failed for group %s", job.get("group_id"))
+    _run_jobs_concurrent(jobs)
 
 
 def _daily_due(digest_time: str | None, now: datetime) -> bool:
@@ -564,12 +661,13 @@ def _deliver_job(job: dict) -> None:
             list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all()) if event_ids else []
         )
         cards = [_event_card(ev) for ev in events]
-        # Detach plain dicts for SMTP HTML builder (needs Event-like attrs) — use cards + format from Events before close.
+        # Email digests skip events already marked emailed (CVE watchlist / prior digest).
+        email_events = [ev for ev in events if ev.notified_at is None]
+        email_cards = [_event_card(ev) for ev in email_events]
         html_pack = None
-        if any(d["kind"] == DEST_EMAIL for d in destinations) and events:
-            subject, plain, html_body = format_daily_digest(events)
-            # Retitle for the group.
-            n = len(events)
+        if any(d["kind"] == DEST_EMAIL for d in destinations) and email_events:
+            subject, plain, html_body = format_daily_digest(email_events)
+            n = len(email_events)
             subject = f"{SUBJECT_PREFIX} {job['group_name']} — {n} event{'s' if n != 1 else ''}"
             html_pack = (subject, plain, html_body)
     finally:
@@ -580,12 +678,17 @@ def _deliver_job(job: dict) -> None:
     if not destinations:
         return
 
+    email_ids = [int(e["id"]) for e in email_cards if e.get("id") is not None]
+    job["email_event_ids"] = email_ids
     results = _send_destinations_concurrent(
         destinations,
         cards,
         job["cfg"],
         job["group_name"],
         html_pack=html_pack,
+        email_cards=email_cards,
+        email_event_ids=email_ids,
+        group_id=int(job["group_id"]),
     )
     failed = [r for r in results if not r.get("ok")]
     succeeded = [r for r in results if r.get("ok")]
@@ -641,8 +744,11 @@ def _deliver_job(job: dict) -> None:
             # Mark email-notified when an email destination succeeded (legacy digest retired).
             if any(r.get("ok") and r.get("kind") == DEST_EMAIL for r in succeeded):
                 now = utcnow()
-                for ev in db.scalars(select(Event).where(Event.id.in_(event_ids), Event.notified_at.is_(None))).all():
-                    ev.notified_at = now
+                emailed_ids = job.get("email_event_ids")
+                mark_ids = emailed_ids if emailed_ids is not None else event_ids
+                if mark_ids:
+                    for ev in db.scalars(select(Event).where(Event.id.in_(mark_ids), Event.notified_at.is_(None))).all():
+                        ev.notified_at = now
         else:
             group.last_error = (last_err or "delivery failed")[:500]
             group.last_error_at = utcnow()
@@ -675,8 +781,8 @@ def _deliver_job(job: dict) -> None:
                             reason=HOLD_RATE,
                             dedupe_key=key_by_eid.get(eid),
                             attempts=0,
-                            pending_dest_ids=pending,
-                            delivered_dest_ids=delivered_now or None,
+                            pending_dest_ids=_store_dest_ids(pending) if pending is not None else None,
+                            delivered_dest_ids=_store_dest_ids(delivered_now),
                             created_at=utcnow(),
                         )
                         db.add(h)
@@ -703,9 +809,14 @@ def _send_destinations_concurrent(
     group_name: str,
     *,
     html_pack: tuple[str, str, str] | None,
+    email_cards: list[dict] | None = None,
+    email_event_ids: list[int] | None = None,
+    group_id: int | None = None,
 ) -> list[dict]:
     if not destinations:
         return []
+    mail_cards = email_cards if email_cards is not None else cards
+    mail_event_ids = email_event_ids if email_event_ids is not None else [c.get("id") for c in mail_cards if c.get("id")]
 
     def _one(snap: dict) -> dict:
         kind = snap["kind"]
@@ -715,7 +826,19 @@ def _send_destinations_concurrent(
             if kind == DEST_EMAIL:
                 if not snap.get("target"):
                     return base
-                _send_email_events(cfg, snap["target"], cards, group_name=group_name, html_pack=html_pack)
+                if not mail_cards:
+                    return base  # already emailed (e.g. CVE watchlist); nothing to send
+                msg_id = None
+                if group_id is not None and mail_event_ids:
+                    msg_id = _stable_email_message_id(group_id, [int(i) for i in mail_event_ids], snap["target"])
+                _send_email_events(
+                    cfg,
+                    snap["target"],
+                    mail_cards,
+                    group_name=group_name,
+                    html_pack=html_pack,
+                    message_id=msg_id,
+                )
             elif kind == DEST_SLACK:
                 if not snap.get("url"):
                     return base
@@ -870,6 +993,7 @@ def _send_email_events(
     *,
     group_name: str,
     html_pack: tuple[str, str, str] | None,
+    message_id: str | None = None,
 ) -> None:
     from ..settings_store import NotificationSettings as NS
 
@@ -881,7 +1005,7 @@ def _send_email_events(
         # Prefer group name in subject; keep categorized HTML body.
         n = len(payloads)
         subject = f"{SUBJECT_PREFIX} {group_name} — {n} event{'s' if n != 1 else ''}"
-        send_email(local, subject, plain, html_body, timeout=smtp_timeout)
+        send_email(local, subject, plain, html_body, timeout=smtp_timeout, message_id=message_id)
         return
     n = len(payloads)
     subject = f"{SUBJECT_PREFIX} {group_name} — {n} event{'s' if n != 1 else ''}"
@@ -890,7 +1014,7 @@ def _send_email_events(
         lines.append(f"- [{(p.get('severity') or 'info').upper()}] {p.get('type')}: {p.get('message')}")
     if n > 40:
         lines.append(f"…and {n - 40} more")
-    send_email(local, subject, "\n".join(lines), timeout=smtp_timeout)
+    send_email(local, subject, "\n".join(lines), timeout=smtp_timeout, message_id=message_id)
 
 
 def _post_json(url: str, payload: dict | None, *, secret: str, raw: bytes | None = None) -> None:

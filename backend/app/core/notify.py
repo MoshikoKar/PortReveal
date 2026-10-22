@@ -340,6 +340,7 @@ def send_email(
     html_body: str | None = None,
     *,
     timeout: float | None = None,
+    message_id: str | None = None,
 ) -> None:
     if not cfg.smtp_host:
         raise SmtpConfigError("SMTP host is not configured")
@@ -350,7 +351,8 @@ def send_email(
     msg["From"] = cfg.sender
     msg["To"] = ", ".join(cfg.recipients)
     msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid(domain="network-monitor")
+    # Stable id (channel retries) lets some MTAs drop a duplicate after a late accept.
+    msg["Message-ID"] = message_id or make_msgid(domain="network-monitor")
     msg.set_content(body)
     if html_body:
         msg.add_alternative(html_body, subtype="html")

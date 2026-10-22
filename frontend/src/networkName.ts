@@ -15,6 +15,16 @@ export function trimNetworkName(raw: string): string {
   return raw.trim();
 }
 
+/**
+ * Cap typed/pasted input so the trimmed name is at most `max` characters.
+ * Preserves leading/trailing spaces while under the limit (so multi-word names
+ * stay editable); when over, returns the trimmed+clipped core.
+ */
+export function limitNetworkNameInput(raw: string, max = NETWORK_NAME_MAX): string {
+  if (trimNetworkName(raw).length <= max) return raw;
+  return trimNetworkName(raw).slice(0, max);
+}
+
 /** True when a stored name would fail create/rename (charset or length). */
 export function isLegacyNetworkName(raw: string): boolean {
   const name = trimNetworkName(raw);

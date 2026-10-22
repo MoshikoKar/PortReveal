@@ -749,3 +749,175 @@ def test_last_error_cleared_after_successful_retry(db, monkeypatch):
     assert g.last_error is None
     assert g.last_error_at is None
     assert g.last_success_at is not None
+
+
+def test_watchlist_email_plus_daily_group_sends_once(db, monkeypatch):
+    """Watchlist marks notified_at; daily group digest must not email the same CVE again."""
+    g = _group(
+        db,
+        name="Email digest",
+        is_default=True,
+        delivery_mode=DELIVERY_DAILY,
+        digest_time="00:00",
+        event_types=[EV_CVE_WATCH_MATCH],
+        dedupe_seconds=0,
+    )
+    db.add(RecipientDestination(group_id=g.id, kind=DEST_EMAIL, enabled=True, target="ops@example.com"))
+    put_section(
+        db,
+        NotificationSettings(
+            enabled=True,
+            smtp_host="smtp.example.com",
+            recipients=["ops@example.com"],
+            watchlist_email_enabled=True,
+            watchlist_webhooks_enabled=False,
+        ),
+    )
+    ev = _event(db, event_type=EV_CVE_WATCH_MATCH, severity="high", message="CVE-2026-9 on 10.0.0.1")
+    db.commit()
+
+    sent: list[str] = []
+
+    def fake_email(cfg, subject, plain, html=None, **kwargs):
+        sent.append(subject)
+
+    import app.core.notify as notify_mod
+
+    monkeypatch.setattr(notify_mod, "send_email", fake_email)
+    monkeypatch.setattr(channels, "send_email", fake_email)
+
+    schedule_watchlist_delivery([ev.id], wait=True)
+    assert len(sent) == 1, "watchlist immediate email"
+    db.expire_all()
+    ev = db.get(type(ev), ev.id)
+    assert ev.notified_at is not None
+    assert db.scalar(select(RecipientHold).where(RecipientHold.event_id == ev.id)) is not None
+
+    flush_due_holds(hourly=False)
+    assert len(sent) == 1, "daily digest must skip already-emailed CVE match"
+    assert db.scalar(select(RecipientHold).where(RecipientHold.event_id == ev.id)) is None
+
+
+def test_retry_collapses_duplicate_fingerprint_events(db, monkeypatch):
+    """Two same-content pending holds → one retry message (group dedupe key)."""
+    from app.security import encrypt_secret
+
+    g = _group(db, delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=600)
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/retry"),
+        )
+    )
+    ev1 = _event(db, message="same-fingerprint")
+    ev2 = _event(db, message="same-fingerprint")
+    db.commit()
+
+    def boom(url, payload, *, secret, raw=None):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(channels, "_post_json", boom)
+    deliver_channel_event_ids([ev1.id, ev2.id])
+    holds = list(db.scalars(select(RecipientHold).where(RecipientHold.group_id == g.id)).all())
+    assert len(holds) == 2
+    for h in holds:
+        h.next_attempt_at = None
+    db.commit()
+
+    payloads: list[object] = []
+
+    def capture(url, payload, *, secret, raw=None):
+        payloads.append(payload)
+
+    monkeypatch.setattr(channels, "_post_json", capture)
+    flush_due_holds(hourly=False)
+    assert len(payloads) == 1
+    text = json.dumps(payloads[0])
+    # One Slack attachment mentioning the fingerprint once (collapsed), not two events.
+    assert text.count("same-fingerprint") == 1
+
+
+def test_immediate_groups_deliver_concurrently(db, monkeypatch):
+    """Slow dest on group A must not block group B within the same round."""
+    from app.security import encrypt_secret
+
+    g1 = _group(db, name="Slow", delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=0)
+    g2 = _group(db, name="Fast", delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=0)
+    db.add(
+        RecipientDestination(
+            group_id=g1.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/slow"),
+        )
+    )
+    db.add(
+        RecipientDestination(
+            group_id=g2.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/fast"),
+        )
+    )
+    ev = _event(db)
+    db.commit()
+
+    order: list[str] = []
+    started = {"fast": False}
+
+    def fake_post(url, payload, *, secret, raw=None):
+        if "slow" in url:
+            # Wait until fast has started — proves overlap instead of serial delivery.
+            deadline = time.time() + 2.0
+            while not started["fast"] and time.time() < deadline:
+                time.sleep(0.01)
+            order.append("slow")
+            time.sleep(0.05)
+        else:
+            started["fast"] = True
+            order.append("fast")
+
+    monkeypatch.setattr(channels, "_post_json", fake_post)
+    t0 = time.perf_counter()
+    deliver_channel_event_ids([ev.id])
+    elapsed = time.perf_counter() - t0
+    assert set(order) == {"slow", "fast"}
+    assert "fast" in order
+    # Serial would be ~slow-wait + fast; concurrent finishes near the slow path alone.
+    assert elapsed < 1.5
+
+
+def test_delivered_dest_ids_stores_list_and_tolerates_null(db):
+    """Empty delivered_dest_ids is []; readers tolerate JSON null / legacy 'null' text."""
+    from app.core.channels import _as_dest_ids, _hold, _store_dest_ids
+
+    assert _store_dest_ids(None) == []
+    assert _store_dest_ids([]) == []
+    assert _as_dest_ids(None) == []
+    assert _as_dest_ids("null") == []
+    assert _as_dest_ids("NULL") == []
+    assert _as_dest_ids([1, "2"]) == [1, 2]
+
+    g = _group(db, delivery_mode=DELIVERY_DAILY, digest_time="00:00", dedupe_seconds=0)
+    ev = _event(db)
+    db.commit()
+    h = _hold(db, g.id, ev.id, "digest", "k")
+    db.commit()
+    db.expire_all()
+    h = db.get(RecipientHold, h.id)
+    assert h.delivered_dest_ids == []
+    # Legacy bad value still reads as empty.
+    h.delivered_dest_ids = None  # type: ignore[assignment]
+    db.commit()
+    assert _as_dest_ids(h.delivered_dest_ids) == []
+
+
+def test_stable_email_message_id_is_deterministic():
+    from app.core.channels import _stable_email_message_id
+
+    a = _stable_email_message_id(3, [10, 2], "Ops@Example.com")
+    b = _stable_email_message_id(3, [2, 10], "ops@example.com")
+    assert a == b and a.startswith("<pr-") and a.endswith("@portreveal>")
+    assert a != _stable_email_message_id(3, [10, 2], "other@example.com")

@@ -5,6 +5,7 @@ import {
   NETWORK_NAME_MAX,
   NETWORK_NAME_MAX_MSG,
   isLegacyNetworkName,
+  limitNetworkNameInput,
   networkNameError,
   trimNetworkName,
 } from './networkName';
@@ -14,6 +15,20 @@ describe('trimNetworkName', () => {
     expect(trimNetworkName('  Office  ')).toBe('Office');
     expect(trimNetworkName('\ufeffOffice\ufeff')).toBe('Office');
     expect(trimNetworkName('\u00a0Lab\u00a0')).toBe('Lab');
+  });
+});
+
+describe('limitNetworkNameInput', () => {
+  it('keeps raw input while trimmed length is within the limit', () => {
+    expect(limitNetworkNameInput('  Office  ')).toBe('  Office  ');
+    expect(limitNetworkNameInput(`  ${'a'.repeat(NETWORK_NAME_MAX)}  `))
+      .toBe(`  ${'a'.repeat(NETWORK_NAME_MAX)}  `);
+  });
+
+  it('trims before clipping so paste spaces do not eat real characters', () => {
+    const core = 'a'.repeat(NETWORK_NAME_MAX);
+    expect(limitNetworkNameInput(`  ${core}XY  `)).toBe(core);
+    expect(limitNetworkNameInput(`  ${'b'.repeat(NETWORK_NAME_MAX + 5)}`)).toBe('b'.repeat(NETWORK_NAME_MAX));
   });
 });
 

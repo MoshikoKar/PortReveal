@@ -226,8 +226,12 @@ def compute_stats(findings: list[dict[str, Any]]) -> ReportStats:
             device_label[u],
         ),
     )[:8]
-    # Relative bar length within this top list (0–100).
-    raw_scores = [device_kev[u] * 10000 + device_crit[u] * 100 + device_high[u] * 10 + device_cvss[u] for u in ranked]
+    # Bar length must follow the same lexicographic rank (KEV > Crit > High > CVSS sum).
+    # Large tier weights so a lower tier can never outrank a higher one on the bar.
+    _w_high = 1_000_000.0
+    _w_crit = _w_high * 1_000_000.0
+    _w_kev = _w_crit * 1_000_000.0
+    raw_scores = [device_kev[u] * _w_kev + device_crit[u] * _w_crit + device_high[u] * _w_high + device_cvss[u] for u in ranked]
     max_raw = max(raw_scores) if raw_scores else 1.0
     top_dev: list[tuple[str, int, str]] = []
     for u, raw in zip(ranked, raw_scores, strict=True):
@@ -551,6 +555,10 @@ table.findings tr.detail-row > td { overflow: hidden; }
 .detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px 16px; }
 .detail-grid dt { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
 .detail-grid dd { margin:0 0 6px; }
+.detail-grid .detail-desc { grid-column: 1 / -1; }
+.detail-grid .detail-desc dd {
+  white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.35;
+}
 .empty-msg { color:var(--muted); font-style:italic; padding:16px; }
 footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border-top:1px solid var(--border); padding-top:10px; }
 /* Column show/hide (screen) */
@@ -713,13 +721,42 @@ footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border
     width: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   table.findings th.col-device, table.findings td.col-device { width: 12%; white-space: nowrap; }
+  /* Group-by-CVE print: keep Device compact (clip) so page count stays near device grouping. */
   .group-by-cve th.col-device, .group-by-cve td.col-device {
-    width: 20%; white-space: normal; overflow: visible; word-break: break-word;
+    width: 14%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: normal;
+  }
+  .group-by-cve td.col-device.clip,
+  .group-by-cve td.col-device .mono {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   table.findings th.col-network, table.findings td.col-network { width: 8%; }
   table.findings th.col-port, table.findings td.col-port { width: 7%; white-space: nowrap; }
   table.findings th.col-state, table.findings td.col-state { width: 10%; white-space: nowrap; }
   table.findings th.col-first, table.findings td.col-first { width: 10%; white-space: nowrap; }
+  /* Full-width Description when a row's details are expanded for print. */
+  .detail-grid {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr 1fr !important;
+    gap: 4px 10px !important;
+  }
+  .detail-grid .detail-desc { grid-column: 1 / -1 !important; }
+  .detail-grid .detail-desc dd { font-size: 7pt; line-height: 1.25; }
+  /* Tighter group headers in print (especially many CVE groups). */
+  .group { margin-bottom: 1px; }
+  .group-head {
+    padding: 0 3px !important;
+    font-size: 6.5pt !important;
+    gap: 4px !important;
+    min-height: 0;
+  }
+  .group-head .meta-bits { font-size: 6pt; gap: 4px; }
+  .group-head .title { font-size: 6.5pt; }
 }
 """
 
@@ -879,7 +916,7 @@ def _js() -> str:
       '<span class="badge outline hidden-reason" title="'+esc(r)+'">'+esc(reasonShort(r))+'</span>'
     ).join(' ');
     return '<div class="detail-grid">'
-      +'<div><dt>Description</dt><dd>'+esc(f.summary||'—')+'</dd></div>'
+      +'<div class="detail-desc"><dt>Description</dt><dd>'+esc(f.summary||'—')+'</dd></div>'
       +'<div><dt>CVSS</dt><dd class="mono">'+(f.cvss_base==null?'—':Number(f.cvss_base).toFixed(1))
       +(f.cvss_vector? ' · '+esc(f.cvss_vector):'')+'</dd></div>'
       +'<div><dt>KEV</dt><dd>'+(f.kev?'Yes':'No')+'</dd></div>'
