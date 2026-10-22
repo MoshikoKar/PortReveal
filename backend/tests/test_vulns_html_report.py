@@ -46,10 +46,7 @@ def _finding(**kwargs):
 def test_format_filter_line_matches_print_wording():
     assert format_filter_line(FindingFilters()) == "All networks (no filters)"
     assert format_filter_line(FindingFilters(q="openssh")) == 'Search: "openssh" · Includes hidden'
-    assert (
-        format_filter_line(FindingFilters(q="openssh", only_hidden=True))
-        == 'Search: "openssh" · Only hidden'
-    )
+    assert format_filter_line(FindingFilters(q="openssh", only_hidden=True)) == 'Search: "openssh" · Only hidden'
     assert (
         format_filter_line(
             FindingFilters(network_id="1", q="2024", only_hidden=True),
@@ -62,7 +59,7 @@ def test_format_filter_line_matches_print_wording():
 def test_build_html_report_escapes_and_embeds_json():
     findings = [
         _finding(
-            device_hostname='</script><script>alert(1)</script>',
+            device_hostname="</script><script>alert(1)</script>",
             summary='Title with <b>html</b> & "quotes"',
             hidden_reasons=["Below CVSS floor"],
         )
@@ -78,11 +75,16 @@ def test_build_html_report_escapes_and_embeds_json():
     assert "CVE-2024-1" in html
     assert "Top devices by risk" in html
     assert "Top CVEs by affected devices" in html
+    assert "chart-hbar" in html
+    assert "rank-list" in html
+    assert "sum of (CVSS + 1000 if KEV)" in html
+    assert "function compareIps" in html
     assert "First seen (weekly)" not in html
     assert "KEV share" not in html
     assert "beforeprint" in html
     assert "@page" in html and "A4 landscape" in html
     assert "data-theme-set" in html
+    assert "grid-template-columns: 1fr 1fr" in html  # print charts 2×2
     stats = compute_stats(findings)
     assert stats.findings_total == 1
     assert stats.kev_count == 1
@@ -122,6 +124,8 @@ def test_report_js_embeds_all_sortable_columns():
         "Top devices by risk",
         "Top CVEs by affected devices",
         "A4 landscape",
+        "compareIps",
+        "chart-hbar",
     ):
         assert needle in html, needle
 
@@ -131,6 +135,13 @@ def _cve_parts(cve_id: str) -> tuple[int, int]:
 
     m = re.match(r"^CVE-(\d+)-(\d+)$", cve_id, re.I)
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def _ip_parts(ip: str) -> tuple[int, ...]:
+    bits = ip.split(".")
+    if len(bits) != 4 or not all(b.isdigit() for b in bits):
+        return (999, 999, 999, 999)
+    return tuple(int(b) for b in bits)
 
 
 def test_cve_numeric_sort_mirror():
@@ -143,6 +154,13 @@ def test_cve_numeric_sort_mirror():
         "CVE-2026-73180",
         "CVE-2026-900002",
     ]
+
+
+def test_ip_numeric_sort_mirror():
+    """Device IP ordering (mirrors compareIps): .5 before .10 (not lexical)."""
+    ips = ["10.99.0.10", "10.99.0.5", "10.99.0.2", "10.99.0.100"]
+    ordered = sorted(ips, key=_ip_parts)
+    assert ordered == ["10.99.0.2", "10.99.0.5", "10.99.0.10", "10.99.0.100"]
 
 
 @pytest.mark.e2e

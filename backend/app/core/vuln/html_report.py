@@ -164,7 +164,7 @@ def format_filter_line(
 
 
 def risk_score(f: dict[str, Any]) -> float:
-    """KEV-boosted CVSS used for device ranking charts."""
+    """Per-finding contribution to device risk: CVSS + 1000 if KEV (summed per device)."""
     return (1000.0 if f.get("kev") else 0.0) + float(f.get("cvss_base") or 0.0)
 
 
@@ -245,10 +245,7 @@ def _svg_bar_chart(
 ) -> str:
     """Simple vertical bars as inline SVG (no libraries). Extra top pad for value labels."""
     if not items:
-        return (
-            f'<figure class="chart"><figcaption>{_esc(title)}</figcaption>'
-            f'<p class="empty">No data</p></figure>'
-        )
+        return f'<figure class="chart"><figcaption>{_esc(title)}</figcaption><p class="empty">No data</p></figure>'
     max_v = max(v for _, v in items) or 1
     pad_l, pad_r, pad_t, pad_b = 8, 8, 34, 30  # pad_t leaves room for tallest-bar labels
     chart_w = width - pad_l - pad_r
@@ -269,16 +266,45 @@ def _svg_bar_chart(
         )
         lx = x + bar_w / 2
         short = _chart_tick_label(label)
-        labels.append(
-            f'<text x="{lx:.1f}" y="{height - 6}" text-anchor="middle" class="tick">{_esc(short)}</text>'
-        )
-        bars.append(
-            f'<text x="{lx:.1f}" y="{max(12, y - 4)}" text-anchor="middle" class="val">{val}</text>'
-        )
+        labels.append(f'<text x="{lx:.1f}" y="{height - 6}" text-anchor="middle" class="tick">{_esc(short)}</text>')
+        bars.append(f'<text x="{lx:.1f}" y="{max(12, y - 4)}" text-anchor="middle" class="val">{val}</text>')
     return (
         f'<figure class="chart"><figcaption>{_esc(title)}</figcaption>'
         f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" role="img" '
         f'aria-label="{_esc(title)}">{"".join(bars)}{"".join(labels)}</svg></figure>'
+    )
+
+
+def _rank_hbar_chart(
+    title: str,
+    items: list[tuple[str, int]],
+    *,
+    color: str = "#0ed0d9",
+    caption: str | None = None,
+    value_unit: str = "",
+) -> str:
+    """HTML horizontal bars: full label + title tooltip, value with optional unit."""
+    if not items:
+        return f'<figure class="chart chart-hbar"><figcaption>{_esc(title)}</figcaption><p class="empty">No data</p></figure>'
+    max_v = max(v for _, v in items) or 1
+    unit = f" {_esc(value_unit)}" if value_unit else ""
+    rows: list[str] = []
+    for label, val in items:
+        pct = int(round((val / max_v) * 100)) if val else 0
+        tip = f"{label}: {val}{(' ' + value_unit) if value_unit else ''}"
+        rows.append(
+            f'<li title="{_esc(tip)}">'
+            f'<span class="rank-label">{_esc(label)}</span>'
+            f'<span class="rank-track" aria-hidden="true">'
+            f'<span class="rank-bar" style="width:{pct}%;background:{_esc(color)}"></span>'
+            f"</span>"
+            f'<span class="rank-val">{val}<span class="rank-unit">{unit}</span></span>'
+            f"</li>"
+        )
+    cap = f'<p class="chart-caption" title="{_esc(caption)}">{_esc(caption)}</p>' if caption else ""
+    return (
+        f'<figure class="chart chart-hbar"><figcaption>{_esc(title)}</figcaption>{cap}'
+        f'<ol class="rank-list" aria-label="{_esc(title)}">{"".join(rows)}</ol></figure>'
     )
 
 
@@ -290,20 +316,22 @@ def _charts_html(stats: ReportStats) -> str:
         stats.by_network[:8],
         colors=defaultdict(lambda: "#1965d9"),
     )
-    top_dev = _svg_bar_chart(
+    risk_caption = "Risk = sum of (CVSS + 1000 if KEV) across findings on the device. Higher = more urgent."
+    top_dev = _rank_hbar_chart(
         "Top devices by risk",
         stats.top_devices,
-        colors=defaultdict(lambda: "#0ed0d9"),
+        color="#0ed0d9",
+        caption=risk_caption,
+        value_unit="risk",
     )
-    top_cve = _svg_bar_chart(
+    top_cve = _rank_hbar_chart(
         "Top CVEs by affected devices",
         stats.top_cves,
-        colors=defaultdict(lambda: "#f87171"),
+        color="#f87171",
+        caption="Count of distinct devices matching each CVE.",
+        value_unit="devices",
     )
-    return (
-        f'<section class="charts" aria-label="Charts">'
-        f"{sev_chart}{net_chart}{top_dev}{top_cve}</section>"
-    )
+    return f'<section class="charts" aria-label="Charts">{sev_chart}{net_chart}{top_dev}{top_cve}</section>'
 
 
 def _payload_json(findings: list[dict[str, Any]]) -> str:
@@ -371,15 +399,33 @@ header.report-header h1 { margin:0 0 6px; font-size:22px; letter-spacing:.01em; 
 .card .label { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
 .card .value { font-size:22px; font-weight:700; margin-top:4px; }
 .card.crit .value, .card.kev .value { color:var(--high); }
-.charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin:8px 0 20px; }
+.charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:8px 0 20px; }
+@media (max-width:900px){ .charts { grid-template-columns:1fr; } }
 .chart {
   margin:0; background:var(--panel); border:1px solid var(--border);
   border-radius:8px; padding:10px 12px; overflow:visible;
 }
 .chart figcaption { font-size:12px; font-weight:600; color:var(--text-2); margin-bottom:6px; }
+.chart-caption { margin:0 0 8px; font-size:11px; color:var(--muted); line-height:1.35; }
 .chart .empty { color:var(--muted); font-style:italic; margin:12px 0; }
 .chart svg .tick { fill:var(--muted); font-size:9px; }
 .chart svg .val { fill:var(--text-2); font-size:10px; }
+.rank-list { list-style:none; margin:0; padding:0; }
+.rank-list li {
+  display:grid; grid-template-columns:minmax(9.5rem,1.6fr) minmax(4rem,1fr) max-content;
+  gap:8px; align-items:center; margin:0 0 7px; font-size:12px;
+}
+.rank-label {
+  color:var(--text); line-height:1.25; min-width:0;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2;
+  overflow:hidden; word-break:break-word;
+}
+.rank-track {
+  display:block; height:12px; background:var(--panel-3); border-radius:3px; overflow:hidden;
+}
+.rank-bar { display:block; height:100%; border-radius:3px; min-width:2px; }
+.rank-val { color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap; font-weight:600; }
+.rank-unit { color:var(--muted); font-weight:500; font-size:11px; }
 .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:12px 0;
   padding:10px 12px; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; }
 .toolbar input[type=search] { flex:1; min-width:160px; padding:6px 10px; border-radius:6px;
@@ -426,6 +472,18 @@ table.findings th:hover { color:var(--text); }
 table.findings tr.row { cursor:pointer; }
 table.findings tr.row:hover { background:var(--panel-2); }
 table.findings tr.detail-row td { background:var(--panel-3); padding:10px 12px; font-size:12px; }
+/* Fixed widths for compact cols; Title takes remaining space (100% table). */
+table.findings th.col-kev, table.findings td.col-kev { width: 4.5%; }
+table.findings th.col-sev, table.findings td.col-sev { width: 7%; }
+table.findings th.col-cvss, table.findings td.col-cvss,
+table.findings th.col-epss, table.findings td.col-epss { width: 5%; }
+table.findings th.col-cve, table.findings td.col-cve { width: 12%; }
+table.findings th.col-title, table.findings td.col-title { width: auto; }
+table.findings th.col-device, table.findings td.col-device { width: 14%; }
+table.findings th.col-network, table.findings td.col-network { width: 10%; }
+table.findings th.col-port, table.findings td.col-port { width: 6%; }
+table.findings th.col-state, table.findings td.col-state { width: 8%; }
+table.findings th.col-first, table.findings td.col-first { width: 9%; }
 .mono { font-family:var(--mono); font-size:12px; }
 .nowrap { white-space:nowrap; }
 .badge {
@@ -461,14 +519,29 @@ footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border
 .hide-port th.col-port, .hide-port td.col-port,
 .hide-state th.col-state, .hide-state td.col-state,
 .hide-first th.col-first, .hide-first td.col-first { display:none; }
-/* Drop columns redundant with group header */
+/* Drop columns redundant with group header; Title absorbs freed width via width:auto. */
 .group-by-device th.col-device, .group-by-device td.col-device,
 .group-by-device th.col-network, .group-by-device td.col-network,
 .group-by-cve th.col-cve, .group-by-cve td.col-cve,
 .group-by-cve th.col-title, .group-by-cve td.col-title { display:none; }
+/* CVE grouping: Device needs room for IP + hostname (wrap, no ellipsis). */
+.group-by-cve th.col-device, .group-by-cve td.col-device {
+  width: 22%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+}
+.group-by-cve td.col-device.clip,
+.group-by-cve td.col-device .mono {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+}
 
 @media print {
-  @page { size: A4 landscape; margin: 6mm 6mm 8mm; background: #fff; }
+  @page { size: A4 landscape; margin: 8mm 8mm 10mm; background: #fff; }
   /* Force light palette regardless of prefers-color-scheme / data-theme. */
   :root, html, body, .wrap, .card, .chart, .group, .group-head, .group-body,
   table.findings, table.findings th, table.findings td, tr.detail-row td {
@@ -482,13 +555,13 @@ footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border
     background: #fff !important;
     color: #111 !important;
   }
-  .wrap { max-width: none; padding: 0; margin: 0; }
+  .wrap { max-width: none; padding: 0 2mm; margin: 0; }
   .toolbar, .col-menu, .theme-toggle { display: none !important; }
   .cards {
     display: grid !important;
     grid-template-columns: repeat(7, 1fr) !important;
     gap: 4px !important;
-    margin: 4px 0 6px !important;
+    margin: 4px 2mm 6px !important;
   }
   .card {
     border: 1px solid #bbb !important;
@@ -498,22 +571,34 @@ footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border
   .card .label { color: #555 !important; font-size: 7pt; }
   .card .value { color: #111 !important; font-size: 11pt; }
   .card.crit .value, .card.kev .value { color: #a00 !important; }
+  /* Readable 2×2 chart grid (omit tiny 4-up). */
   .charts {
     display: grid !important;
-    grid-template-columns: 1fr 1fr 1fr 1fr !important;
-    gap: 4px !important;
-    margin: 2px 0 4px !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px 10px !important;
+    margin: 4px 2mm 8px !important;
   }
   .chart {
-    border: 1px solid #bbb !important; border-radius: 0; padding: 2px 4px !important;
-    min-width: 0;
+    border: 1px solid #bbb !important; border-radius: 0; padding: 4px 6px !important;
+    min-width: 0; break-inside: avoid; page-break-inside: avoid;
   }
-  .chart figcaption { color: #333 !important; font-size: 7pt; margin-bottom: 2px; }
-  .chart svg { height: 72px !important; max-width: 100%; }
-  .chart svg .tick, .chart svg .val { fill: #333 !important; font-size: 7px; }
+  .chart figcaption { color: #111 !important; font-size: 9pt; margin-bottom: 2px; font-weight: 700; }
+  .chart-caption { color: #333 !important; font-size: 7.5pt; margin-bottom: 4px; }
+  .chart svg { height: 120px !important; max-width: 100%; }
+  .chart svg .tick, .chart svg .val { fill: #222 !important; font-size: 9px; }
+  .rank-list li {
+    font-size: 9pt; gap: 6px; margin-bottom: 4px;
+    grid-template-columns: minmax(10rem,1.8fr) minmax(3.5rem,1fr) max-content;
+  }
+  .rank-label { color: #111 !important; -webkit-line-clamp: 2; }
+  .rank-track { background: #e8e8e8 !important; height: 10px; }
+  .rank-val { color: #111 !important; }
+  .rank-unit { color: #444 !important; }
   header.report-header { border-bottom: 1px solid #ccc; margin-bottom: 4px; padding-bottom: 2px; }
   header.report-header h1 { font-size: 11pt; color: #111 !important; }
-  .meta, .filters { color: #333 !important; font-size: 7pt; }
+  .meta { color: #333 !important; font-size: 7.5pt; }
+  .filters { color: #222 !important; font-size: 7.5pt; }
+  .filters strong { color: #000 !important; font-weight: 700; }
   /* Expand all groups for print (JS also fills bodies beforeprint). */
   .group {
     break-inside: auto;
@@ -580,6 +665,9 @@ footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border
     width: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   table.findings th.col-device, table.findings td.col-device { width: 12%; white-space: nowrap; }
+  .group-by-cve th.col-device, .group-by-cve td.col-device {
+    width: 20%; white-space: normal; overflow: visible; word-break: break-word;
+  }
   table.findings th.col-network, table.findings td.col-network { width: 8%; }
   table.findings th.col-port, table.findings td.col-port { width: 7%; white-space: nowrap; }
   table.findings th.col-state, table.findings td.col-state { width: 9%; }
@@ -632,6 +720,21 @@ def _js() -> str:
     const [ay, an] = cveParts(a), [by, bn] = cveParts(b);
     return (ay - by) || (an - bn) || String(a||'').localeCompare(String(b||''));
   }
+  function ipParts(ip){
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip||'').trim());
+    if(!m) return null;
+    return [parseInt(m[1],10), parseInt(m[2],10), parseInt(m[3],10), parseInt(m[4],10)];
+  }
+  function compareIps(a, b){
+    const pa = ipParts(a), pb = ipParts(b);
+    if(pa && pb){
+      for(let i=0;i<4;i++){ if(pa[i]!==pb[i]) return pa[i]-pb[i]; }
+      return 0;
+    }
+    if(pa && !pb) return -1;
+    if(!pa && pb) return 1;
+    return String(a||'').localeCompare(String(b||''), undefined, {numeric:true, sensitivity:'base'});
+  }
   function matches(f){
     if(sevFilter.size && !sevFilter.has(f.severity||'unknown')) return false;
     if(!textQ) return true;
@@ -644,7 +747,7 @@ def _js() -> str:
     switch(key){
       case 'cve': cmp = compareCveIds(a.cve_id, b.cve_id); break;
       case 'title': cmp = String(a.summary||'').localeCompare(String(b.summary||'')); break;
-      case 'device': cmp = (a.device_ip||'').localeCompare(b.device_ip||'')
+      case 'device': cmp = compareIps(a.device_ip, b.device_ip)
         || (a.device_hostname||'').localeCompare(b.device_hostname||''); break;
       case 'network': cmp = (a.network||'').localeCompare(b.network||''); break;
       case 'cvss': cmp = (Number(a.cvss_base)||0) - (Number(b.cvss_base)||0); break;
@@ -986,7 +1089,7 @@ def _js() -> str:
 
   // Expose sort helpers for unit/e2e tests.
   window.__REPORT_API__ = {
-    compareCveIds, compareFindings, riskScore, rowId, groupKey,
+    compareCveIds, compareIps, compareFindings, riskScore, rowId, groupKey,
     getSort: ()=>({key:sortKey, dir:sortDir}),
     setSort: (key, dir)=>{ sortKey=key; sortDir=dir; render({forceFull:true}); },
     getGroupBy: ()=>groupBy,
@@ -1017,25 +1120,21 @@ def build_html_report(
     cards = f"""
 <section class="cards" aria-label="Summary">
   <div class="card"><div class="label">Findings</div><div class="value">{stats.findings_total}</div></div>
-  <div class="card crit"><div class="label">Critical</div><div class="value">{sev.get('critical', 0)}</div></div>
+  <div class="card crit"><div class="label">Critical</div><div class="value">{sev.get("critical", 0)}</div></div>
   <div class="card"><div class="label">High</div>
-    <div class="value" style="color:var(--high)">{sev.get('high', 0)}</div></div>
+    <div class="value" style="color:var(--high)">{sev.get("high", 0)}</div></div>
   <div class="card"><div class="label">Medium</div>
-    <div class="value" style="color:var(--medium)">{sev.get('medium', 0)}</div></div>
+    <div class="value" style="color:var(--medium)">{sev.get("medium", 0)}</div></div>
   <div class="card"><div class="label">Low</div>
-    <div class="value" style="color:var(--ok)">{sev.get('low', 0)}</div></div>
+    <div class="value" style="color:var(--ok)">{sev.get("low", 0)}</div></div>
   <div class="card kev"><div class="label">KEV</div><div class="value">{stats.kev_count}</div></div>
   <div class="card"><div class="label">Affected devices</div><div class="value">{stats.device_count}</div></div>
 </section>"""
 
-    chips = "".join(
-        f'<button type="button" class="chip sev-chip" data-sev="{s}">{s.capitalize()}</button>'
-        for s in SEV_ORDER
-    )
+    chips = "".join(f'<button type="button" class="chip sev-chip" data-sev="{s}">{s.capitalize()}</button>' for s in SEV_ORDER)
     _upper = frozenset(("kev", "cve", "cvss", "epss"))
     col_checks = "".join(
-        f'<label><input type="checkbox" value="{c}" checked> '
-        f"{c.upper() if c in _upper else c.capitalize()}</label>"
+        f'<label><input type="checkbox" value="{c}" checked> {c.upper() if c in _upper else c.capitalize()}</label>'
         for c in ("kev", "sev", "cvss", "epss", "cve", "title", "device", "network", "port", "state", "first")
     )
 
