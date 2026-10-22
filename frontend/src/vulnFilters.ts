@@ -325,8 +325,12 @@ export function localFilenameDay(now: Date = new Date()): string {
   return `${y}${m}${d}`;
 }
 
-/** Client-side CSV filename hint; the server Content-Disposition is preferred when present. */
-export function vulnExportFilename(filters: VulnFilters, ctx: VulnFilterLabelContext = {}): string {
+/** Client-side export filename hint; the server Content-Disposition is preferred when present. */
+export function vulnExportFilename(
+  filters: VulnFilters,
+  ctx: VulnFilterLabelContext = {},
+  ext: 'csv' | 'html' = 'csv',
+): string {
   const day = localFilenameDay();
   const parts: string[] = [];
   if (filters.network_id === 'unassigned') parts.push('unassigned');
@@ -342,7 +346,7 @@ export function vulnExportFilename(filters: VulnFilters, ctx: VulnFilterLabelCon
   if (filters.severity) parts.push(sanitizeFilenamePart(filters.severity));
   if (filters.state) parts.push(sanitizeFilenamePart(filters.state));
   const slug = parts.length ? parts.join('_') : 'all';
-  return `vulns_${slug}_${day}.csv`;
+  return `vulns_${slug}_${day}.${ext}`;
 }
 
 /** Toggle network scope only (heatmap row label / network facet), without touching severity. */

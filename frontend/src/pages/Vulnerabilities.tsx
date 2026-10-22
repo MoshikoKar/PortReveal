@@ -177,6 +177,7 @@ export default function Vulnerabilities() {
 
   const networks = useApi<Network[]>('/networks');
   const [exporting, setExporting] = useState(false);
+  const [exportingHtml, setExportingHtml] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [printFindings, setPrintFindings] = useState<VulnFindingListItem[]>([]);
   const [printLoading, setPrintLoading] = useState(false);
@@ -276,21 +277,38 @@ export default function Vulnerabilities() {
     setSp(next);
   };
 
+  const exportQuery = () => query(buildVulnQuery(filters, {
+    q: q || undefined,
+    only_hidden: q && onlyHidden ? 'true' : undefined,
+  }));
+
   const exportCsv = async () => {
     setExportError(null);
     setExporting(true);
     try {
       await downloadBlob(
-        `/vulns/export${query(buildVulnQuery(filters, {
-          q: q || undefined,
-          only_hidden: q && onlyHidden ? 'true' : undefined,
-        }))}`,
-        vulnExportFilename(filters, labelCtx),
+        `/vulns/export${exportQuery()}`,
+        vulnExportFilename(filters, labelCtx, 'csv'),
       );
     } catch (e: unknown) {
       setExportError(e instanceof Error ? e.message : 'Export failed.');
     } finally {
       setExporting(false);
+    }
+  };
+
+  const exportHtml = async () => {
+    setExportError(null);
+    setExportingHtml(true);
+    try {
+      await downloadBlob(
+        `/vulns/export/html${exportQuery()}`,
+        vulnExportFilename(filters, labelCtx, 'html'),
+      );
+    } catch (e: unknown) {
+      setExportError(e instanceof Error ? e.message : 'HTML report failed.');
+    } finally {
+      setExportingHtml(false);
     }
   };
 
@@ -414,8 +432,13 @@ export default function Vulnerabilities() {
             </select>
           </label>
           <Link className="btn" to="/vulnerabilities/watchlist">CVE Watchlist</Link>
-          <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
+          <button type="button" className="btn" disabled={exporting || exportingHtml} onClick={() => { void exportCsv(); }}>
             {exporting ? 'Exporting…' : 'Export CSV'}
+          </button>
+          <button type="button" className="btn" disabled={exporting || exportingHtml}
+            title="Download a self-contained HTML report for the current filters"
+            onClick={() => { void exportHtml(); }}>
+            {exportingHtml ? 'Preparing…' : 'HTML report'}
           </button>
           <button type="button" className="btn" disabled={printDisabled || !summaryReady}
             onClick={() => { void openPreview(); }}>

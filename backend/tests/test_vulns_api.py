@@ -806,3 +806,107 @@ def test_export_filename_ascii_drops_empty_slug_parts_for_hebrew_network(admin, 
     assert ascii_name.startswith("vulns_")
     assert "_-_" not in ascii_name
     assert ascii_name.endswith(".csv")
+
+
+# --- HTML report export ------------------------------------------------------------------------------
+
+
+def test_export_vulns_html_self_contained_with_counts(admin, db):
+    """HTML report is offline (no CDN), includes summary counts and both seeded findings."""
+    _seed_two_devices(db)
+    r = admin.get("/api/vulns/export/html")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    cd = r.headers["content-disposition"]
+    assert "attachment" in cd and ".html" in cd
+    assert 'filename="' in cd and "filename*=UTF-8''" in cd
+    body = r.text
+    assert "<!DOCTYPE html>" in body
+    assert "PortReveal vulnerability report" in body
+    assert "cdn." not in body.lower()
+    assert "http://cdn" not in body.lower() and "https://cdn" not in body.lower()
+    assert 'src="http' not in body.lower()  # no external script/img
+    assert "CVE-2024-CRIT" in body and "CVE-2024-MED" in body
+    # Summary cards: 2 findings, 1 KEV, 2 devices (in JSON payload and card markup).
+    assert ">2</div>" in body or "findings_total" in body or 'class="value">2</div>' in body
+    assert "window.__REPORT_DATA__=" in body
+    assert body.count("CVE-2024-CRIT") >= 1
+    assert "Filters:" in body
+    assert "All networks (no filters)" in body
+
+
+def test_export_vulns_html_respects_filters_and_search_line(admin, db):
+    net, _da, _db = _seed_two_devices(db)
+    r = admin.get("/api/vulns/export/html", params={"severity": "critical"})
+    assert r.status_code == 200
+    assert "CVE-2024-CRIT" in r.text
+    assert "CVE-2024-MED" not in r.text
+    assert "severity: Critical" in r.text
+
+    r2 = admin.get(
+        "/api/vulns/export/html",
+        params={"q": "2024", "network_id": net.id, "only_hidden": "false"},
+    )
+    assert "Includes hidden" in r2.text
+    assert "network:" in r2.text
+    assert "Search: &quot;2024&quot;" in r2.text or 'Search: "2024"' in r2.text
+
+
+def test_export_vulns_html_escapes_xss_in_hostname_and_title(admin, db):
+    """Untrusted hostname / summary must not break out of HTML or the JSON payload."""
+    net = make_network(db, cidr="10.50.0.0/24", name="Xss Lab")
+    scan(
+        ScriptedScanner(
+            [host("10.50.0.1", [port(22, "ssh", "OpenSSH", "7.4")], hostname="safe", mac="00:11:22:33:44:50")]
+        ),
+        network_id=net.id,
+    )
+    d = device_by_ip(db, "10.50.0.1")
+    d.hostname = '<img src=x onerror=alert(1)>evil'
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(
+        Vulnerability(
+            cve_id="CVE-2024-XSS",
+            cvss_base=7.5,
+            kev=False,
+            summary='</script><script>alert("xss")</script>',
+        )
+    )
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-XSS", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    r = admin.get("/api/vulns/export/html", params={"cve_id": "CVE-2024-XSS"})
+    assert r.status_code == 200
+    body = r.text
+    assert "<img src=x onerror=" not in body
+    assert "</script><script>" not in body
+    # Escaped forms present in JSON (\u003c) or HTML entities.
+    assert "\\u003c" in body or "&lt;" in body
+    assert "CVE-2024-XSS" in body
+    assert "alert" in body  # payload text may remain as escaped data
+    # Must not contain an executable script tag from the payload (only our two report scripts).
+    assert body.count("<script>") == 2
+
+
+def test_export_vulns_html_hebrew_filename_content_disposition(admin, db):
+    from urllib.parse import unquote
+
+    net = make_network(db, cidr="10.31.0.0/24", name="רשת-בדיקה")
+    scan(ScriptedScanner([host("10.31.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:32")]), network_id=net.id)
+    d = device_by_ip(db, "10.31.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-HEB3", cvss_base=9.8, kev=True, summary="html heb"))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-HEB3", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    r = admin.get("/api/vulns/export/html", params={"network_id": net.id})
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    cd.encode("latin-1")
+    assert ".html" in cd
+    assert "רשת" in unquote(cd) or "%D7%A8" in cd
+    ascii_name = cd.split("filename=")[1].split(";")[0].strip().strip('"')
+    assert ascii_name.endswith(".html")
+    assert "_-_" not in ascii_name

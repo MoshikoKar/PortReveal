@@ -850,11 +850,17 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
   }
   .vuln-print-state-main { white-space: nowrap; }
   .vuln-print-state .vuln-print-hidden-reason {
-    display: block;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
     width: 100%;
     max-width: 100%;
     box-sizing: border-box;
     margin: 1px 0 0;
+    height: auto;
+    min-height: 0;
+    line-height: 1.2;
     font-size: 6pt;
     white-space: normal;
     overflow-wrap: anywhere;
@@ -863,13 +869,20 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 
   /* Severity / KEV badges must stay readable on paper. */
   .vuln-print-report .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
     border: 1px solid #666;
     color: #111 !important;
     background: #f3f3f3 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
     font-size: 6.5pt;
-    padding: 0 2px;
+    height: auto;
+    min-height: 0;
+    line-height: 1.2;
+    padding: 1px 3px;
   }
   .vuln-print-report .badge.high { background: #fdd !important; border-color: #c66; }
   .vuln-print-report .badge.medium { background: #ffd !important; border-color: #cc6; }
