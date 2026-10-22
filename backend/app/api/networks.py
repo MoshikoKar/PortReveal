@@ -17,7 +17,7 @@ from ..core.intel import refresh_devices
 from ..core.mockdata import device_visible
 from ..db import get_db, utcnow
 from ..models import DEVICE_ACTIVE, NETWORK_ZONES, Device, Network, User
-from ..netutils import AddressSet, TargetError, validate_network_cidr
+from ..netutils import AddressSet, TargetError, validate_network_cidr, validate_network_name
 from ..security import encrypt_secret
 from .common import FULL_REPLACE, UNPAGED_LIST, Row, network_out
 
@@ -91,7 +91,11 @@ class NetworkIn(BaseModel):
     @field_validator("name")
     @classmethod
     def _name(cls, v: str) -> str:
-        return v.strip()
+        # Character-set rules run in create/update so legacy names can still be kept unchanged.
+        v = v.strip()
+        if not v:
+            raise ValueError("must not be empty")
+        return v
 
     @field_validator("cidr")
     @classmethod
@@ -176,11 +180,19 @@ def _check_name(db: Session, name: str, exclude_id: int | None = None) -> None:
         raise HTTPException(409, f"A network named '{name}' already exists{hint}")
 
 
+def _require_network_name(name: str) -> str:
+    try:
+        return validate_network_name(name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @router.post("", status_code=201)
 def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
-    _check_name(db, body.name)
-    net = Network(name=body.name, cidr=body.cidr, description=body.description, enabled=body.enabled,
+    name = _require_network_name(body.name)
+    _check_name(db, name)
+    net = Network(name=name, cidr=body.cidr, description=body.description, enabled=body.enabled,
                   zone=body.zone, vpn_s2s=body.vpn_s2s, expected_countries=body.expected_countries or None,
                   arp_snmp=_arp_snmp_stored(body.arp_snmp, None))
     db.add(net)
@@ -194,7 +206,9 @@ def create_network(body: NetworkIn, request: Request, db: Session = Depends(get_
 def update_network(network_id: int, body: NetworkIn, request: Request, db: Session = Depends(get_db),
                    user: User = Depends(require_admin)):
     net = _active_network(db, network_id)
-    _check_name(db, body.name, network_id)
+    # Renames must pass the charset; keeping a legacy name while editing other fields must not.
+    name = _require_network_name(body.name) if body.name != net.name else body.name
+    _check_name(db, name, network_id)
     before = {"name": net.name, "cidr": net.cidr, "enabled": net.enabled, "zone": net.zone,
               "vpn_s2s": net.vpn_s2s, "expected_countries": list(net.expected_countries or []),
               "arp_snmp_host": (net.arp_snmp or {}).get("host")}
@@ -202,7 +216,7 @@ def update_network(network_id: int, body: NetworkIn, request: Request, db: Sessi
         # A different scope needs a fresh baseline, otherwise every host in the new range would alert
         net.baseline_scan_id = None
         net.baseline_at = None
-    net.name, net.cidr, net.description, net.enabled = body.name, body.cidr, body.description, body.enabled
+    net.name, net.cidr, net.description, net.enabled = name, body.cidr, body.description, body.enabled
     net.vpn_s2s = body.vpn_s2s
     net.expected_countries = body.expected_countries or None
     net.arp_snmp = _arp_snmp_stored(body.arp_snmp, net.arp_snmp)

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { del, post, put } from '../../api';
 import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import { useApp } from '../../context';
+import { networkNameError } from '../../networkName';
 import type { ArpSnmp, Network } from '../../types';
 import { NETWORK_ZONES, fmtTime, useApi, useInFlight } from '../../util';
 
@@ -192,7 +193,11 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
   const [actionError, setActionError] = useState<string | null>(null);
   const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
-  const canSave = !!draft && !!draft.name.trim() && !!draft.cidr.trim() && (!draft.arp || !!draft.arp.host.trim());
+  // Legacy names with other characters stay editable for other fields; only validate when the name is new or changed.
+  const nameUnchanged = !!draft?.id && draft.name.trim() === (initial?.name ?? '').trim();
+  const nameErr = draft && !nameUnchanged ? networkNameError(draft.name) : null;
+  const canSave = !!draft && !!draft.name.trim() && !nameErr && !!draft.cidr.trim()
+    && (!draft.arp || !!draft.arp.host.trim());
   useReportDirty(!!draft && dirty, onDirtyChange);
 
   const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
@@ -327,10 +332,15 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
           dirty={dirty}
           footer={<>
             <button className="btn ghost" onClick={closeDraft}>Cancel</button>
-            <button className="btn primary" onClick={save} disabled={saving || !canSave} title={canSave ? undefined : 'Enter a name and a CIDR'}>{saving ? 'Saving…' : 'Save'}</button>
+            <button className="btn primary" onClick={save} disabled={saving || !canSave}
+              title={canSave ? undefined : (nameErr || 'Enter a name and a CIDR')}>{saving ? 'Saving…' : 'Save'}</button>
           </>}
         >
-          <label className="field">Name<input type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" /></label>
+          <label className="field">Name
+            <input type="text" value={draft.name} maxLength={120} aria-invalid={!!nameErr}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" />
+            {nameErr && <span className="hint" style={{ color: 'var(--high)' }}>{nameErr}</span>}
+          </label>
           <label className="field" title="IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline.">
             CIDR
             <input type="text" value={draft.cidr} onChange={(e) => setDraft({ ...draft, cidr: e.target.value })} placeholder="10.0.0.0/24"

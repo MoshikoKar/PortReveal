@@ -17,6 +17,10 @@ from collections.abc import Iterable, Iterator
 
 MAX_SCAN_ADDRESSES = 65536
 MIN_NETWORK_PREFIX = 16
+NETWORK_NAME_MAX = 120
+NETWORK_NAME_CHARS_MSG = "Use English letters, numbers, spaces and - _ . ( ) only"
+# New/renamed network names only; legacy rows with other characters remain readable.
+_NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9 ._()-]+$")
 
 _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
@@ -26,6 +30,18 @@ _SPLIT_RE = re.compile(r"[\s,;]+")
 
 class TargetError(ValueError):
     pass
+
+
+def validate_network_name(name: str) -> str:
+    """Trim and enforce the allowed character set for creating or renaming a network."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("must not be empty")
+    if len(name) > NETWORK_NAME_MAX:
+        raise ValueError(f"at most {NETWORK_NAME_MAX} characters")
+    if not _NETWORK_NAME_RE.fullmatch(name):
+        raise ValueError(NETWORK_NAME_CHARS_MSG)
+    return name
 
 
 def split_specs(text: str | Iterable[str]) -> list[str]:
