@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, formatVulnFilterSummary,
-  formatVulnFilterValue, localFilenameDay, parseVulnFilters, setVulnFilter, splitVendorProductKey,
-  toggleHeatmapCell, toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter,
-  vendorProductFacetActive, vulnExportFilename, vulnFilterLink,
+  buildVulnQuery, clearVulnFindingsHash, clearVulnFilters, formatVulnFilterChip,
+  formatVulnFilterSummary, formatVulnFilterValue, localFilenameDay, parseVulnFilters,
+  setVulnFilter, shouldScrollVulnFindingsHash, splitVendorProductKey, toggleHeatmapCell,
+  toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter, vendorProductFacetActive,
+  vulnExportFilename, vulnFilterLink, VULN_FINDINGS_HASH,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -216,5 +217,21 @@ describe('formatVulnFilterSummary / vulnExportFilename / toggleNetworkFilter', (
     const cleared = toggleNetworkFilter(set, 3);
     expect(cleared.get('network_id')).toBeNull();
     expect(cleared.get('severity')).toBe('high');
+  });
+});
+
+describe('vuln findings deep-link hash scroll', () => {
+  it('scrolls once per arrival key, not on every data refresh with the same hash', () => {
+    const key = `cve_id=CVE-1${VULN_FINDINGS_HASH}`;
+    expect(shouldScrollVulnFindingsHash(VULN_FINDINGS_HASH, key, null)).toBe(true);
+    expect(shouldScrollVulnFindingsHash(VULN_FINDINGS_HASH, key, key)).toBe(false);
+    expect(shouldScrollVulnFindingsHash('', key, null)).toBe(false);
+  });
+
+  it('clears only the findings hash for replaceState', () => {
+    expect(clearVulnFindingsHash('/vulnerabilities?cve_id=CVE-1#vuln-findings'))
+      .toBe('/vulnerabilities?cve_id=CVE-1');
+    expect(clearVulnFindingsHash('/vulnerabilities?cve_id=CVE-1#other'))
+      .toBe('/vulnerabilities?cve_id=CVE-1#other');
   });
 });

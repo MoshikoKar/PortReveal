@@ -90,6 +90,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   os_changed: 'OS changed',
   monitor_change: 'Monitor change',
   geo_mismatch: 'Geo mismatch',
+  cve_watch_match: 'CVE watchlist',
 };
 
 export const SCAN_TYPE_LABELS = { discovery: 'Discovery', standard: 'Standard', full: 'Full port' } as const;

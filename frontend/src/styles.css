@@ -117,6 +117,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 }
 .nav a:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
 .nav a.active { background: var(--panel-3); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.nav a.nav-sub { padding-left: 28px; font-size: 13px; }
 .nav svg { width: 16px; height: 16px; opacity: 0.85; }
 .sidebar-foot { margin-top: auto; padding: 14px 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; }
 

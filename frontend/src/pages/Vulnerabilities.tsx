@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { downloadBlob, get, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
 import { FINDING_DESC_FIRST, FINDING_SORTS, VulnFindingsTable, type FindingSort } from '../components/VulnFindingsTable';
@@ -12,7 +12,8 @@ import type { Network, Paged, VulnFindingListItem, VulnSummary } from '../types'
 import { fmtTime, relTime, useApi } from '../util';
 import {
   applyVulnSearchQ, buildVulnQuery, clearVulnFilters, formatVulnFilterChip, liveSearchParams,
-  parseVulnFilters, scrollToVulnFindings, setVulnFilter, shouldResyncVulnQInput, toggleHeatmapCell,
+  clearVulnFindingsHash, parseVulnFilters, scrollToVulnFindings, setVulnFilter,
+  shouldResyncVulnQInput, shouldScrollVulnFindingsHash, toggleHeatmapCell,
   toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter, withPendingVulnSearchQ,
   vulnExportFilename, VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
 } from '../vulnFilters';
@@ -188,6 +189,24 @@ export default function Vulnerabilities() {
   useEffect(() => {
     if (sp.get('print') === '1') setPendingPrint(true);
   }, [searchKey, sp]);
+
+  // Deep links from the watchlist (`?cve_id=…#vuln-findings`): scroll once per arrival, then drop
+  // the hash so the 30s /vulns/summary poll does not jump the page back to findings.
+  const scrolledFindingsHashKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const arrivalKey = `${searchKey}${window.location.hash}`;
+    if (!shouldScrollVulnFindingsHash(window.location.hash, arrivalKey, scrolledFindingsHashKey.current)) {
+      return;
+    }
+    if (!document.getElementById('vuln-findings')) return;
+    scrolledFindingsHashKey.current = arrivalKey;
+    const t = window.setTimeout(() => {
+      scrollToVulnFindings();
+      window.history.replaceState(null, '', clearVulnFindingsHash(window.location.href));
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, [searchKey, data]);
 
   const applySp = (next: URLSearchParams, scroll = true) => {
     cancelSearchDebounce();
@@ -394,6 +413,7 @@ export default function Vulnerabilities() {
               ))}
             </select>
           </label>
+          <Link className="btn" to="/vulnerabilities/watchlist">CVE Watchlist</Link>
           <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
             {exporting ? 'Exporting…' : 'Export CSV'}
           </button>

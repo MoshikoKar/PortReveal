@@ -78,6 +78,7 @@ EV_BANNER_CHANGED = "banner_changed"
 EV_OS_CHANGED = "os_changed"
 EV_MONITOR_CHANGE = "monitor_change"
 EV_GEO_MISMATCH = "geo_mismatch"
+EV_CVE_WATCH_MATCH = "cve_watch_match"
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -96,9 +97,10 @@ EVENT_TYPES = (
     EV_OS_CHANGED,
     EV_MONITOR_CHANGE,
     EV_GEO_MISMATCH,
+    EV_CVE_WATCH_MATCH,
 )
 # Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
-ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE)
+ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE, EV_CVE_WATCH_MATCH)
 EVENT_SEVERITY = {
     EV_DEVICE_DISCOVERED: "high",
     EV_PORT_OPENED: "high",
@@ -106,6 +108,7 @@ EVENT_SEVERITY = {
     EV_POLICY_VIOLATION: "high",
     EV_MONITOR_CHANGE: "high",
     EV_GEO_MISMATCH: "high",
+    EV_CVE_WATCH_MATCH: "high",
     EV_SERVICE_CHANGED: "medium",
     EV_DEVICE_DISAPPEARED: "medium",
     EV_PORT_CLOSED: "medium",
@@ -686,6 +689,41 @@ class VulnFindingLifecycle(Base):
     resolution: Mapped[str | None] = mapped_column(String(20))
     dismissed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class CveWatchlistEntry(Base):
+    """Admin-subscribed CVE IDs. No FK to `vulnerabilities`: a watched CVE may not be in the local
+    cache yet (weekly sync), so the id is stored as plain text after normalize/validate."""
+
+    __tablename__ = "cve_watchlist"
+    __table_args__ = (UniqueConstraint("cve_id", name="uq_cve_watchlist_cve_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cve_id: Mapped[str] = mapped_column(String(20), index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+
+
+class CveWatchlistAlert(Base):
+    """One alerted hit per (watch, device, port, protocol, cve). Cleared when the finding goes away
+    so a reopen (resolved then matched again) alerts again."""
+
+    __tablename__ = "cve_watchlist_alerts"
+    __table_args__ = (
+        UniqueConstraint(
+            "watch_id", "cve_id", "device_uuid", "port", "protocol",
+            name="uq_cve_watchlist_alert_hit",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    watch_id: Mapped[int] = mapped_column(ForeignKey("cve_watchlist.id", ondelete="CASCADE"), index=True)
+    cve_id: Mapped[str] = mapped_column(String(20), index=True)
+    device_uuid: Mapped[str] = mapped_column(String(36))
+    port: Mapped[int] = mapped_column(Integer)
+    protocol: Mapped[str] = mapped_column(String(8))
+    alerted_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"))
 
 
 class PortSnmp(Base):

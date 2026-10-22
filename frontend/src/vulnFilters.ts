@@ -181,6 +181,26 @@ export function scrollToVulnFindings(): void {
   });
 }
 
+export const VULN_FINDINGS_HASH = '#vuln-findings';
+
+/** Deep-link hash scroll runs once per arrival key (search + hash), not on every summary poll. */
+export function shouldScrollVulnFindingsHash(
+  hash: string,
+  arrivalKey: string,
+  alreadyScrolledKey: string | null,
+): boolean {
+  return hash === VULN_FINDINGS_HASH && alreadyScrolledKey !== arrivalKey;
+}
+
+/** Strip ``#vuln-findings`` from an href (pathname + search only) for history.replaceState. */
+export function clearVulnFindingsHash(href: string): string {
+  const url = new URL(href, 'http://local.invalid');
+  if (url.hash !== VULN_FINDINGS_HASH) {
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+  return `${url.pathname}${url.search}`;
+}
+
 const FILTER_KEY_LABELS: Record<VulnFilterKey, string> = {
   severity: 'severity',
   kev: 'KEV',

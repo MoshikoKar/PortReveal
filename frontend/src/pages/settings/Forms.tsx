@@ -264,6 +264,8 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
     enabled: s.enabled, smtp_host: s.smtp_host, smtp_port: s.smtp_port, security: s.security, username: s.username,
     ...(password !== null ? { password } : {}), sender: s.sender,
     recipients: recipients.split(/[\s,;]+/).filter(Boolean), event_types: s.event_types, digest_time: s.digest_time,
+    watchlist_email_enabled: s.watchlist_email_enabled,
+    watchlist_webhooks_enabled: s.watchlist_webhooks_enabled,
   });
   const save = async () => {
     if (await f.save(body())) {
@@ -317,13 +319,16 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
             {part === 'all' && (
               <div className="field"><span>Notify on</span>
                 <div className="row wrap" style={{ gap: 14 }}>
-                  {s.available_event_types.map((t: EventType) => (
+                  {s.available_event_types
+                    .filter((t: EventType) => t !== 'cve_watch_match')
+                    .map((t: EventType) => (
                     <label key={t} className="check small">
                       <input type="checkbox" checked={s.event_types.includes(t)} onChange={(e) => set({ event_types: e.target.checked ? [...s.event_types, t] : s.event_types.filter((x) => x !== t) })} />
                       {EVENT_LABELS[t]}
                     </label>
                   ))}
                 </div>
+                <span className="hint">CVE watchlist matches always appear in the daily digest when not already emailed immediately (see below).</span>
               </div>
             )}
             {part === 'all' && (
@@ -334,6 +339,40 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
                 </label>
               </div>
             )}
+            {part === 'all' && (() => {
+              const emailReady = s.enabled && !!s.smtp_host.trim() && s.recipients.length > 0;
+              return (
+                <div className="field" style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+                  <span style={{ fontWeight: 600 }}>CVE watchlist alerts</span>
+                  <div className="muted small" style={{ marginBottom: 8 }}>
+                    In-app events are always recorded when a watched CVE appears. Use these toggles for outbound delivery.
+                    Immediate email marks events as notified so they are not repeated in the daily digest; if immediate
+                    email is off or fails, the digest still includes them.
+                  </div>
+                  <div className="stack" style={{ gap: 8 }}>
+                    <label className="check small" title={!emailReady ? 'Turn on email notifications and configure SMTP first' : undefined}>
+                      <input
+                        type="checkbox"
+                        checked={emailReady ? s.watchlist_email_enabled : false}
+                        disabled={!emailReady}
+                        onChange={(e) => set({ watchlist_email_enabled: e.target.checked })}
+                      />
+                      Immediate email (does not wait for the daily digest)
+                    </label>
+                    {!emailReady && (
+                      <span className="hint">
+                        Enable &quot;Send email notifications&quot; and configure SMTP host + recipients above to use immediate watchlist email.
+                      </span>
+                    )}
+                    <label className="check small">
+                      <input type="checkbox" checked={s.watchlist_webhooks_enabled}
+                        onChange={(e) => set({ watchlist_webhooks_enabled: e.target.checked })} />
+                      Webhooks (respects each endpoint&apos;s event-type filter)
+                    </label>
+                  </div>
+                </div>
+              );
+            })()}
           </>
         )}
         <Msg msg={f.msg} />

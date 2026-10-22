@@ -325,8 +325,12 @@ def run_vuln_job(job_id: int, ctx: ScanContext) -> str:
         status = VULN_JOB_PARTIAL if partial_reason else VULN_JOB_COMPLETED
         _update(job_id, status=status, finished_at=utcnow(), stage=None, stats=stats,
                notes=partial_reason, error=partial_reason if status == VULN_JOB_PARTIAL else None)
+        event_ids: list[int] = []
         with session_scope() as db:
             refresh_after_scan_or_sync(db, now=utcnow())
+            from .watchlist import check_watchlist_safe, schedule_watchlist_delivery
+            event_ids = list(check_watchlist_safe(db, now=utcnow()).get("event_ids") or [])
+        schedule_watchlist_delivery(event_ids)
         return status
     except ScanCancelled:
         _update(job_id, status=VULN_JOB_CANCELLED, finished_at=utcnow(), stage=None,
