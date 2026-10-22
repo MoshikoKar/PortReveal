@@ -56,8 +56,8 @@ def _validate_url(url: str) -> str:
     u = url.strip()
     if not (u.startswith("https://") or u.startswith("http://")):
         raise HTTPException(422, "url must start with http:// or https://")
-    parsed = urlparse(u)
-    if not (parsed.netloc or "").strip():
+    # Prefer hostname over netloc: urlparse("http://:80/x").netloc is ":80" but hostname is None.
+    if not (urlparse(u).hostname or "").strip():
         raise HTTPException(422, "url must include a host")
     return u
 

@@ -270,8 +270,8 @@ def after_web_capture(capture_id: int) -> None:
     event_ids.extend(run_watches())
     if event_ids:
         try:
-            from .webhooks import deliver_event_ids
+            from .webhooks import schedule_event_delivery
 
-            deliver_event_ids(event_ids)
+            schedule_event_delivery(event_ids)
         except Exception:
             log.exception("web capture %s: webhook delivery failed", capture_id)

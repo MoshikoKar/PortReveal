@@ -434,9 +434,9 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
         )
         watch_ids = run_watches(scan_id=scan_id)
         try:
-            from .webhooks import deliver_event_ids
+            from .webhooks import schedule_event_delivery
 
-            deliver_event_ids(event_ids + watch_ids)
+            schedule_event_delivery(event_ids + watch_ids)
         except Exception:
             log.exception("scan %s: webhook delivery failed", scan_id)
         if auto_capture_id is not None:

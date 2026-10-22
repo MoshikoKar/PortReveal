@@ -246,9 +246,9 @@ def tick(now: datetime | None = None) -> None:
             set_value(db, STATE_KEY, state)
     if webhook_ids:
         try:
-            from .webhooks import deliver_event_ids
+            from .webhooks import schedule_event_delivery
 
-            deliver_event_ids(webhook_ids)
+            schedule_event_delivery(webhook_ids)
         except Exception:
             log.exception("presence absence webhook delivery failed")
     if retention_files is not None:

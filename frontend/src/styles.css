@@ -420,7 +420,7 @@ button.chip { cursor: pointer; }
 
 /* ---------- forms ---------- */
 input, select, textarea, button { font: inherit; color: inherit; }
-input[type='text'], input[type='password'], input[type='number'], input[type='time'], input[type='search'], input[type='email'], select, textarea {
+input[type='text'], input[type='password'], input[type='number'], input[type='time'], input[type='search'], input[type='email'], input[type='url'], select, textarea {
   background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 7px 10px; color: var(--text); min-width: 0;
 }
 textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }

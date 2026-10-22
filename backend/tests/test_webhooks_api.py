@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -86,13 +85,13 @@ def test_webhook_test_posts_signed_event(client, monkeypatch):
 
     seen = {}
 
-    def post(url, *, content=None, headers=None, timeout=None):
+    def post(url, body, headers, *, deadline=8.0):
         seen["url"] = url
         seen["headers"] = headers
-        seen["body"] = content
-        return httpx.Response(204)
+        seen["body"] = body
+        return 204
 
-    monkeypatch.setattr(webhooks.httpx, "post", post)
+    monkeypatch.setattr(webhooks, "_http_post", post)
     r = client.post(f"/api/webhooks/{wid}/test", headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["ok"] is True and r.json()["status_code"] == 204
@@ -128,12 +127,12 @@ def test_webhook_notify_flag_skips_record_unless_opt_in(db, monkeypatch):
     posted: list[str] = []
     bodies: dict[str, bytes] = {}
 
-    def post(url, *, content=None, headers=None, timeout=None):
+    def post(url, body, headers, *, deadline=8.0):
         posted.append(url)
-        bodies[url] = content
-        return httpx.Response(204)
+        bodies[url] = body
+        return 204
 
-    monkeypatch.setattr(webhooks.httpx, "post", post)
+    monkeypatch.setattr(webhooks, "_http_post", post)
     webhooks.deliver_event_ids([alert_ev.id, record_ev.id])
 
     # One POST per hook (batched): alert hook gets only the alert event; record hook gets both.
@@ -153,11 +152,11 @@ def test_webhook_master_switch_disables_delivery(db, monkeypatch):
     db.commit()
     posted = []
 
-    def post(url, **_k):
+    def post(url, body, headers, *, deadline=8.0):
         posted.append(url)
-        return httpx.Response(204)
+        return 204
 
-    monkeypatch.setattr(webhooks.httpx, "post", post)
+    monkeypatch.setattr(webhooks, "_http_post", post)
     webhooks.deliver_event_ids([ev.id])
     assert posted == []
 
@@ -166,6 +165,8 @@ def test_webhook_validation_strips_and_requires_host(client):
     h = csrf(client)
     assert client.post("/api/webhooks", json={"name": "   ", "url": "https://hooks.example.com/x"}, headers=h).status_code == 422
     assert client.post("/api/webhooks", json={"name": "ok", "url": "http://   "}, headers=h).status_code == 422
+    # netloc ":80" is non-empty but hostname is missing
+    assert client.post("/api/webhooks", json={"name": "ok", "url": "http://:80/x"}, headers=h).status_code == 422
     assert (
         client.post("/api/webhooks", json={"name": "  SIEM  ", "url": "  https://hooks.example.com/x  "}, headers=h).status_code
         == 201
@@ -191,10 +192,10 @@ def test_webhook_crud_writes_audit_without_secret(client):
     assert client.patch(f"/api/webhooks/{wid}", json={"enabled": False}, headers=h).status_code == 200
     assert client.patch(f"/api/webhooks/{wid}", json={"rotate_secret": True}, headers=h).status_code == 200
 
-    def post(url, **_k):
-        return httpx.Response(204)
+    def post(url, body, headers, *, deadline=8.0):
+        return 204
 
-    with patch.object(webhooks.httpx, "post", post):
+    with patch.object(webhooks, "_http_post", post):
         assert client.post(f"/api/webhooks/{wid}/test", headers=h).status_code == 200
     assert client.delete(f"/api/webhooks/{wid}", headers=h).status_code == 204
 

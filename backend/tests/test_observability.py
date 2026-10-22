@@ -290,12 +290,12 @@ def test_webhook_failures_are_warned_and_counted(db, monkeypatch, caplog):
     db.add(event)
     db.flush()
 
-    def post(url, **_k):
+    def post(url, body, headers, *, deadline=8.0):
         if "siem" in url:
             raise httpx.ConnectError("connection refused to siem.example.test?token=s3cr3t")
-        return httpx.Response(503 if "error" in url else 204)
+        return 503 if "error" in url else 204
 
-    monkeypatch.setattr(webhooks.httpx, "post", post)
+    monkeypatch.setattr(webhooks, "_http_post", post)
     metrics.reset()
     db.commit()  # durable event + hooks before deliver_event_ids opens its own sessions
     with caplog.at_level(logging.WARNING, logger="app.core.webhooks"):
