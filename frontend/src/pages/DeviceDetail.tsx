@@ -130,17 +130,22 @@ export default function DeviceDetail() {
           </h1>
           <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
         </div>
-        {isAdmin && (
-          <div className="row">
-            <button className="btn" onClick={() => setScanType('standard')}>Standard scan</button>
-            <button className="btn warn" onClick={() => setScanType('full')}>Full port scan</button>
-            <button className="btn" onClick={() => setWebCapture(true)}>Capture web interfaces</button>
-            <button className="btn" onClick={checkVulnerabilities} disabled={vulnChecking}>
-              {vulnChecking ? 'Checking…' : 'Check vulnerabilities'}
-            </button>
-            <button className="btn danger" onClick={remove} disabled={removing}>{removing ? 'Deleting…' : 'Delete'}</button>
-          </div>
-        )}
+        <div className="row wrap gap-2">
+          <Link className="btn" to={`/vulnerabilities?device_uuid=${encodeURIComponent(d.uuid)}&print=1`}>
+            Report for this device
+          </Link>
+          {isAdmin && (
+            <>
+              <button className="btn" onClick={() => setScanType('standard')}>Standard scan</button>
+              <button className="btn warn" onClick={() => setScanType('full')}>Full port scan</button>
+              <button className="btn" onClick={() => setWebCapture(true)}>Capture web interfaces</button>
+              <button className="btn" onClick={checkVulnerabilities} disabled={vulnChecking}>
+                {vulnChecking ? 'Checking…' : 'Check vulnerabilities'}
+              </button>
+              <button className="btn danger" onClick={remove} disabled={removing}>{removing ? 'Deleting…' : 'Delete'}</button>
+            </>
+          )}
+        </div>
       </div>
       <ErrorBox error={removeError} />
       {d.superseded_by && (

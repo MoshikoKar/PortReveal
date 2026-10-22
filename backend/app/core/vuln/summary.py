@@ -35,7 +35,8 @@ from ...models import (
 from ...settings_store import VulnSettings, get_section
 from ..mockdata import device_visible
 from .buckets import severity_bucket
-from .display import is_visible
+from .display import is_visible, normalize_cve_id
+from .filters import NETWORK_UNASSIGNED, FindingFilters, filters_active
 from .lifecycle import sync_finding_lifecycle
 from .score import RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
 
@@ -95,21 +96,26 @@ class _Finding:
     epss: float | None
     published_at: datetime | None
     first_seen_at: datetime | None
+    combined_score: int
 
 
-def _load_findings(db: Session) -> list[_Finding]:
-    """Every non-dismissed, visible finding, with its lifecycle first-seen date joined in.
+def _load_findings(db: Session, *, include_dismissed: bool = False) -> list[_Finding]:
+    """Every visible finding, with its lifecycle first-seen date joined in.
 
     The lifecycle join matches on (device uuid, port, protocol, cve_id) -- its natural identity,
     since it has no FK to device_port_vulns -- and only resolves once `sync_finding_lifecycle` has
-    run for the current state, which callers must do first.
+    run for the current state, which callers must do first. Dismissed rows are omitted unless
+    ``include_dismissed`` (summary filtered with ``state=dismissed``).
     """
+    cond = [device_visible(db)]
+    if not include_dismissed:
+        cond.append(DevicePortVuln.state != VULN_STATE_DISMISSED)
     rows = db.execute(
         select(Device.uuid, Device.current_ip, Device.network_id, Network.name, Device.os_name, Device.device_type,
                DevicePort.port, DevicePort.protocol, DevicePort.service,
                DevicePortVuln.cve_id, DevicePortVuln.state, DevicePortVuln.matched_cpe, DevicePortVuln.matched_at,
                Vulnerability.cvss_base, Vulnerability.kev, Vulnerability.epss, Vulnerability.published_at,
-               VulnFindingLifecycle.first_seen_at)
+               VulnFindingLifecycle.first_seen_at, Device.combined_score)
         .join(DevicePort, DevicePort.device_id == Device.id)
         .join(DevicePortVuln, DevicePortVuln.device_port_id == DevicePort.id)
         .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
@@ -120,13 +126,117 @@ def _load_findings(db: Session) -> list[_Finding]:
             VulnFindingLifecycle.protocol == DevicePort.protocol,
             VulnFindingLifecycle.cve_id == DevicePortVuln.cve_id,
         ))
-        .where(device_visible(db), DevicePortVuln.state != VULN_STATE_DISMISSED)
+        .where(*cond)
     ).all()
-    return [_Finding(*r) for r in rows]
+    return [
+        _Finding(
+            *r[:-1],
+            combined_score=int(r[-1] or 0),
+        )
+        for r in rows
+    ]
 
 
 def _visible(f: _Finding, cfg: VulnSettings) -> bool:
     return is_visible(f.state, f.kev, f.cvss_base, cfg)
+
+
+def _new_since_cutoff(db: Session, kind: str) -> datetime | None:
+    if kind == "scan":
+        return db.scalar(
+            select(Scan.finished_at)
+            .where(Scan.status.in_((SCAN_COMPLETED, SCAN_PARTIAL)), Scan.finished_at.isnot(None))
+            .order_by(Scan.finished_at.desc()).limit(1)
+        )
+    cfg = get_section(db, VulnSettings)
+    timestamps = list(db.scalars(
+        select(VulnFeedState.last_synced_at).where(
+            VulnFeedState.source.in_(cfg.sources),
+            VulnFeedState.last_synced_at.isnot(None),
+        )
+    ))
+    return max(timestamps) if timestamps else None
+
+
+def _cpe_match_exists_keys(vp_map: dict[tuple[str, str], str], f: _Finding, vendor: str | None, product: str | None) -> bool:
+    """Match the list API's vendor/product facet keys against the summary's CPE map."""
+    if vendor == "unknown" and not product:
+        return not f.matched_cpe or (f.cve_id, f.matched_cpe) not in vp_map
+    key = vp_map.get((f.cve_id, f.matched_cpe or ""))
+    if key is None:
+        return False
+    if vendor and product:
+        return key == f"{vendor}:{product}"
+    if vendor:
+        return key.startswith(f"{vendor}:")
+    if product:
+        return key.endswith(f":{product}")
+    return True
+
+
+def _apply_finding_filters(
+    findings: list[_Finding],
+    db: Session,
+    filters: FindingFilters | None,
+    now: datetime,
+    vp_map: dict[tuple[str, str], str],
+) -> list[_Finding]:
+    """Apply the same FindingFilters as GET /api/vulns to the in-memory summary rows."""
+    if not filters_active(filters):
+        return findings
+    assert filters is not None
+    out = findings
+    if filters.state:
+        out = [f for f in out if f.state == filters.state]
+    if filters.severity:
+        out = [f for f in out if severity_bucket(f.cvss_base) == filters.severity]
+    if filters.kev is not None:
+        out = [f for f in out if f.kev is filters.kev]
+    if filters.epss_min is not None:
+        out = [f for f in out if f.epss is not None and f.epss >= filters.epss_min]
+    if filters.network_id is not None:
+        if filters.network_id == NETWORK_UNASSIGNED:
+            out = [f for f in out if f.network_id is None]
+        else:
+            nid = int(filters.network_id)
+            out = [f for f in out if f.network_id == nid]
+    if filters.service is not None:
+        out = [f for f in out if f.service == filters.service]
+    if filters.port is not None:
+        out = [f for f in out if f.port == filters.port]
+    if filters.os_name is not None:
+        out = [f for f in out if f.os_name == filters.os_name]
+    if filters.device_type is not None:
+        out = [f for f in out if f.device_type == filters.device_type]
+    if filters.cve_age is not None:
+        out = [f for f in out if _age_bucket(f.published_at, now) == filters.cve_age]
+    if filters.exposure_duration is not None:
+        out = [f for f in out if _age_bucket(f.first_seen_at, now) == filters.exposure_duration]
+    if filters.risk_band is not None:
+        if filters.risk_band == "high":
+            out = [f for f in out if f.combined_score >= RISK_HIGH_THRESHOLD]
+        elif filters.risk_band == "medium":
+            out = [f for f in out
+                   if RISK_MEDIUM_THRESHOLD <= f.combined_score < RISK_HIGH_THRESHOLD]
+        else:
+            out = [f for f in out if f.combined_score < RISK_MEDIUM_THRESHOLD]
+    if filters.vendor is not None or filters.product is not None:
+        out = [f for f in out if _cpe_match_exists_keys(vp_map, f, filters.vendor, filters.product)]
+    if filters.cve_id is not None:
+        want = normalize_cve_id(filters.cve_id)
+        out = [f for f in out if f.cve_id == want]
+    if filters.device_uuid is not None:
+        out = [f for f in out if f.device_uuid == filters.device_uuid]
+    if filters.new_since is not None:
+        cutoff = _new_since_cutoff(db, filters.new_since)
+        if cutoff is None:
+            out = []
+        else:
+            def _ts(f: _Finding) -> datetime | None:
+                return f.first_seen_at or f.matched_at
+            out = [f for f in out if (ts := _ts(f)) is not None and ts >= cutoff]
+    # `q` is reserved for a future free-text search; ignored until the list API grows it.
+    return out
 
 
 def _top(counter: Counter, n: int = FACET_LIMIT) -> list[dict]:
@@ -184,18 +294,38 @@ def _week_index(ts: datetime | None, start: datetime, weeks: int) -> int | None:
     return min(weeks - 1, max(0, int((ts - start).days // 7)))
 
 
-def _weekly_series(db: Session, now: datetime, weeks: int = WEEKS) -> list[dict]:
+def _weekly_series(
+    db: Session,
+    now: datetime,
+    weeks: int = WEEKS,
+    *,
+    network_id: str | None = None,
+    device_uuid: str | None = None,
+    cve_id: str | None = None,
+) -> list[dict]:
     """New (first_seen_at) vs resolved (resolved_at, decision 3) vs dismissed (dismissed_at) per
     week, oldest first. A dismissed finding is never counted as resolved even if its device was
     later removed. Visibility: excluded when its device still exists and is mock/archived-hidden;
-    kept when the device is gone entirely, so a real resolution is never silently dropped."""
+    kept when the device is gone entirely, so a real resolution is never silently dropped.
+
+    Optional ``network_id`` / ``device_uuid`` / ``cve_id`` scope the series to the active page filters.
+    """
     start = now - timedelta(weeks=weeks)
     lc = VulnFindingLifecycle
     visible_or_gone = or_(Device.id.is_(None), device_visible(db))
+    cond = [visible_or_gone]
+    if network_id == NETWORK_UNASSIGNED:
+        cond.append(lc.network_id.is_(None))
+    elif network_id is not None:
+        cond.append(lc.network_id == int(network_id))
+    if device_uuid is not None:
+        cond.append(lc.device_uuid == device_uuid)
+    if cve_id is not None:
+        cond.append(lc.cve_id == normalize_cve_id(cve_id))
     rows = db.execute(
         select(lc.first_seen_at, lc.resolved_at, lc.dismissed_at)
         .outerjoin(Device, Device.uuid == lc.device_uuid)
-        .where(visible_or_gone)
+        .where(*cond)
     ).all()
     counts = {"new": [0] * weeks, "resolved": [0] * weeks, "dismissed": [0] * weeks}
     for first_seen_at, resolved_at, dismissed_at in rows:
@@ -217,11 +347,17 @@ def _weekly_series(db: Session, now: datetime, weeks: int = WEEKS) -> list[dict]
     ]
 
 
-def _top_lists(db: Session) -> dict:
+def _top_lists(db: Session, findings: list[_Finding] | None = None) -> dict:
     """Top CVEs by device count / top devices by combined score -- a superset of the existing
     `/api/reports/vulnerabilities` shape (adds device_type/network_name), just top 10 instead of
     top 20, so the dashboard and the Reports page vuln cards (decision 5) can share one
-    computation without diverging."""
+    computation without diverging.
+
+    When ``findings`` is provided (filtered summary), derive both lists from that set so cards
+    match the active page filters.
+    """
+    if findings is not None:
+        return _top_lists_from_findings(db, findings)
     ok = device_visible(db)
     names = {n.id: n.name for n in db.scalars(select(Network)).all()}
     top_devices = db.scalars(
@@ -249,6 +385,54 @@ def _top_lists(db: Session) -> dict:
         "top_cves": [
             {"cve_id": c, "cvss_base": cvss, "kev": bool(kev), "epss": epss, "device_count": int(n)}
             for c, cvss, kev, epss, n in cve_rows
+        ],
+    }
+
+
+def _top_lists_from_findings(db: Session, findings: list[_Finding]) -> dict:
+    """Top devices / CVEs derived from an already-filtered finding set."""
+    names = {n.id: n.name for n in db.scalars(select(Network)).all()}
+    by_device: dict[str, _Finding] = {}
+    device_risk: Counter = Counter()
+    for f in findings:
+        by_device[f.device_uuid] = f
+        device_risk[f.device_uuid] += 1
+    # Prefer devices that appear in findings; order by combined_score then finding count.
+    scored = sorted(
+        by_device.values(),
+        key=lambda f: (f.combined_score, device_risk[f.device_uuid]),
+        reverse=True,
+    )[:TOP_N]
+    uuids = [f.device_uuid for f in scored]
+    devices = {
+        d.uuid: d for d in db.scalars(select(Device).where(Device.uuid.in_(uuids))).all()
+    } if uuids else {}
+    top_devices = []
+    for f in scored:
+        d = devices.get(f.device_uuid)
+        if d is None:
+            continue
+        top_devices.append({
+            "uuid": d.uuid, "ip": d.current_ip, "hostname": d.hostname, "device_type": d.device_type,
+            "network_name": names.get(d.network_id), "exposure_score": d.exposure_score or 0,
+            "risk_score": d.risk_score or 0, "combined_score": d.combined_score or 0,
+        })
+    cve_devices: dict[str, set[str]] = defaultdict(set)
+    cve_meta: dict[str, _Finding] = {}
+    for f in findings:
+        cve_devices[f.cve_id].add(f.device_uuid)
+        cve_meta[f.cve_id] = f
+    top_cves = sorted(
+        cve_meta.values(),
+        key=lambda f: (f.kev, f.cvss_base or 0, len(cve_devices[f.cve_id])),
+        reverse=True,
+    )[:TOP_N]
+    return {
+        "top_devices": top_devices,
+        "top_cves": [
+            {"cve_id": f.cve_id, "cvss_base": f.cvss_base, "kev": bool(f.kev), "epss": f.epss,
+             "device_count": len(cve_devices[f.cve_id])}
+            for f in top_cves
         ],
     }
 
@@ -315,14 +499,26 @@ def _decimate_weekly(rows: list[VulnDailySnapshot]) -> list[VulnDailySnapshot]:
     return [by_week[w] for w in sorted(by_week)]
 
 
-def _snapshot_trend(db: Session, now: datetime) -> list[dict]:
-    """Global (network_id=None) daily snapshot history for the "vuln count over time by severity"
-    and "average network risk score over time" trend charts: full resolution for the last 90 days,
-    one point per week beyond that (decision 6), read-time only -- no second physical table."""
-    rows = list(db.scalars(
-        select(VulnDailySnapshot).where(VulnDailySnapshot.network_id.is_(None))
-        .order_by(VulnDailySnapshot.snapshot_date)
-    ))
+def _snapshot_trend(db: Session, now: datetime, *, network_id: str | None = None) -> list[dict]:
+    """Daily snapshot history for the "vuln count over time by severity" and "average network risk
+    score over time" trend charts: full resolution for the last 90 days, one point per week beyond
+    that (decision 6), read-time only -- no second physical table.
+
+    Default is the global row (``network_id`` NULL). When the page is scoped to a network, read
+    that network's snapshot series instead (unassigned has no dedicated snapshot rows → empty).
+    """
+    if network_id == NETWORK_UNASSIGNED:
+        rows = []
+    elif network_id is not None:
+        rows = list(db.scalars(
+            select(VulnDailySnapshot).where(VulnDailySnapshot.network_id == int(network_id))
+            .order_by(VulnDailySnapshot.snapshot_date)
+        ))
+    else:
+        rows = list(db.scalars(
+            select(VulnDailySnapshot).where(VulnDailySnapshot.network_id.is_(None))
+            .order_by(VulnDailySnapshot.snapshot_date)
+        ))
     cutoff = (now - timedelta(days=SNAPSHOT_DECIMATE_AFTER_DAYS)).date()
     recent = [r for r in rows if r.snapshot_date >= cutoff]
     old = _decimate_weekly([r for r in rows if r.snapshot_date < cutoff])
@@ -333,31 +529,62 @@ def _snapshot_trend(db: Session, now: datetime) -> list[dict]:
     ]
 
 
-def _risk_device_levels(db: Session) -> dict[str, int]:
-    """Device counts by combined-score band - same cut points as GET /api/vulns?risk_band=."""
+def _risk_device_levels(db: Session, findings: list[_Finding] | None = None,
+                       *, network_id: str | None = None) -> dict[str, int]:
+    """Device counts by combined-score band - same cut points as GET /api/vulns?risk_band=.
+
+    With filtered findings, count distinct devices in that set. With only a network scope and no
+    finding set, restrict the device query to that network.
+    """
+    if findings is not None:
+        levels = {"high": 0, "medium": 0, "low": 0}
+        seen: set[str] = set()
+        for f in findings:
+            if f.device_uuid in seen:
+                continue
+            seen.add(f.device_uuid)
+            if f.combined_score >= RISK_HIGH_THRESHOLD:
+                levels["high"] += 1
+            elif f.combined_score >= RISK_MEDIUM_THRESHOLD:
+                levels["medium"] += 1
+            else:
+                levels["low"] += 1
+        return levels
     expr = case(
         (Device.combined_score >= RISK_HIGH_THRESHOLD, "high"),
         (Device.combined_score >= RISK_MEDIUM_THRESHOLD, "medium"),
         else_="low",
     )
+    cond = [device_visible(db)]
+    if network_id == NETWORK_UNASSIGNED:
+        cond.append(Device.network_id.is_(None))
+    elif network_id is not None:
+        cond.append(Device.network_id == int(network_id))
     levels = {"high": 0, "medium": 0, "low": 0}
     levels.update({
-        k: int(v) for k, v in db.execute(select(expr, func.count(Device.id)).where(device_visible(db)).group_by(expr))
+        k: int(v) for k, v in db.execute(select(expr, func.count(Device.id)).where(*cond).group_by(expr))
     })
     return levels
 
 
-def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
+def refresh_vuln_summary(db: Session, *, now: datetime, filters: FindingFilters | None = None) -> dict:
     cfg = get_section(db, VulnSettings)
-    findings = [f for f in _load_findings(db) if _visible(f, cfg)]
+    include_dismissed = filters is not None and filters.state == VULN_STATE_DISMISSED
+    loaded = _load_findings(db, include_dismissed=include_dismissed)
+    # Vendor/product map needs the pre-filter CPE pairs so facet keys stay consistent with the list API.
+    pairs_all = {(f.cve_id, f.matched_cpe) for f in loaded if f.matched_cpe}
+    vp_map = _vendor_product_map(db, pairs_all)
+
+    if filters is not None and filters.state:
+        findings = [f for f in loaded if f.state == filters.state]
+    else:
+        findings = [f for f in loaded if _visible(f, cfg)]
+    findings = _apply_finding_filters(findings, db, filters, now, vp_map)
 
     severity_counts = Counter(severity_bucket(f.cvss_base) for f in findings)
     state_counts = Counter(f.state for f in findings)
     kev_count = sum(1 for f in findings if f.kev)
     epss_high_count = sum(1 for f in findings if f.epss is not None and f.epss >= cfg.epss_high_threshold)
-
-    pairs = {(f.cve_id, f.matched_cpe) for f in findings if f.matched_cpe}
-    vp_map = _vendor_product_map(db, pairs)
 
     facets = {
         "os": _top(Counter(f.os_name or "unknown" for f in findings)),
@@ -365,12 +592,16 @@ def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
         "port": _top(Counter(f.port for f in findings)),
         "network": _network_facet(findings),
         "device_type": _top(Counter(f.device_type or "unknown" for f in findings)),
-        "vendor_product": _top(Counter(vp_map.get((f.cve_id, f.matched_cpe), "unknown") for f in findings)),
+        "vendor_product": _top(Counter(
+            vp_map.get((f.cve_id, f.matched_cpe), "unknown") for f in findings
+        )),
         "cve_age": {b: 0 for b in AGE_BUCKETS} | dict(Counter(_age_bucket(f.published_at, now) for f in findings)),
         "exposure_duration": {b: 0 for b in AGE_BUCKETS}
         | dict(Counter(_age_bucket(f.first_seen_at, now) for f in findings)),
     }
     feed = _feed_staleness(db, cfg, now)
+    net_scope = filters.network_id if filters else None
+    filtered = filters_active(filters)
 
     result = {
         "generated_at": now,
@@ -381,25 +612,36 @@ def refresh_vuln_summary(db: Session, *, now: datetime) -> dict:
         "epss_high_count": epss_high_count,
         "confirmed_count": int(state_counts.get(VULN_STATE_CONFIRMED, 0)),
         "potential_count": int(state_counts.get(VULN_STATE_POTENTIAL, 0)),
-        "risk_device_levels": _risk_device_levels(db),
+        "risk_device_levels": _risk_device_levels(
+            db, findings if filtered else None, network_id=net_scope,
+        ),
         "feed": feed,
         "facets": facets,
         "severity_by_network": _severity_by_network(findings),
-        "weekly": _weekly_series(db, now),
-        "snapshot_trend": _snapshot_trend(db, now),
-        **_top_lists(db),
+        "weekly": _weekly_series(
+            db, now,
+            network_id=net_scope,
+            device_uuid=filters.device_uuid if filters else None,
+            cve_id=filters.cve_id if filters else None,
+        ),
+        "snapshot_trend": _snapshot_trend(db, now, network_id=net_scope),
+        **_top_lists(db, findings if filtered else None),
         **_new_lists(db, findings, feed),
     }
-    _cache[_cache_key(db)] = (time.monotonic() + _CACHE_TTL_SECONDS, result)
+    # Only the unfiltered snapshot is cached; filtered views recompute (and leave the cache alone).
+    if not filtered:
+        _cache[_cache_key(db)] = (time.monotonic() + _CACHE_TTL_SECONDS, result)
     return result
 
 
-def get_vuln_summary(db: Session, *, now: datetime) -> dict:
-    """Read-path for the API: serve the cache if warm, else compute (and cache) once."""
-    hit = _cache.get(_cache_key(db))
-    if hit is not None and hit[0] > time.monotonic():
-        return hit[1]
-    return refresh_vuln_summary(db, now=now)
+def get_vuln_summary(db: Session, *, now: datetime, filters: FindingFilters | None = None) -> dict:
+    """Read-path for the API: serve the cache if warm (unfiltered only), else compute once."""
+    if not filters_active(filters):
+        hit = _cache.get(_cache_key(db))
+        if hit is not None and hit[0] > time.monotonic():
+            return hit[1]
+        return refresh_vuln_summary(db, now=now, filters=None)
+    return refresh_vuln_summary(db, now=now, filters=filters)
 
 
 def write_daily_snapshot(db: Session, now: datetime) -> None:

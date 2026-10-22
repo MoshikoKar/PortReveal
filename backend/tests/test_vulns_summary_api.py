@@ -135,3 +135,68 @@ def test_viewer_can_read_summary(db, client):
     client.post("/api/auth/logout", headers=csrf(client))
     assert client.post("/api/auth/login", json={"username": "viewer1", "password": "correct-horse-1"}).status_code == 200
     assert client.get("/api/vulns/summary").status_code == 200
+
+
+def _seed_two_networks(db):
+    """Two placeholder networks with one finding each (critical KEV vs medium)."""
+    from app.core.vuln.lifecycle import sync_finding_lifecycle
+
+    net_a = make_network(db, cidr="10.10.0.0/24", name="Lab Alpha")
+    net_b = make_network(db, cidr="10.20.0.0/24", name="Lab Beta")
+    scan(ScriptedScanner([host("10.10.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:11")]),
+         network_id=net_a.id)
+    scan(ScriptedScanner([host("10.20.0.1", [port(80, "http", "nginx", "1.18")], mac="00:11:22:33:44:22")]),
+         network_id=net_b.id)
+    da = device_by_ip(db, "10.10.0.1")
+    db_ = device_by_ip(db, "10.20.0.1")
+    pa = next(p for p in da.ports if p.port == 22)
+    pb = next(p for p in db_.ports if p.port == 80)
+    db.add(Vulnerability(cve_id="CVE-2024-ALPHA", cvss_base=9.8, kev=True, epss=0.9))
+    db.add(Vulnerability(cve_id="CVE-2024-BETA", cvss_base=5.0, kev=False, epss=0.01))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=pa.id, cve_id="CVE-2024-ALPHA", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.add(DevicePortVuln(device_port_id=pb.id, cve_id="CVE-2024-BETA", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+    sync_finding_lifecycle(db, now=utcnow())
+    db.commit()
+    return net_a, net_b, da, db_
+
+
+def test_summary_respects_network_device_cve_kev_filters(admin, db):
+    net_a, net_b, da, _db = _seed_two_networks(db)
+    invalidate_vuln_summary_cache()
+
+    all_body = admin.get("/api/vulns/summary").json()
+    assert all_body["severity_counts"]["critical"] == 1
+    assert all_body["severity_counts"]["medium"] == 1
+    assert all_body["kev_count"] == 1
+
+    by_a = admin.get("/api/vulns/summary", params={"network_id": net_a.id}).json()
+    assert by_a["severity_counts"]["critical"] == 1
+    assert by_a["severity_counts"]["medium"] == 0
+    assert by_a["kev_count"] == 1
+    assert len(by_a["severity_by_network"]) == 1
+    assert by_a["severity_by_network"][0]["network_id"] == net_a.id
+
+    by_b = admin.get("/api/vulns/summary", params={"network_id": net_b.id}).json()
+    assert by_b["severity_counts"]["critical"] == 0
+    assert by_b["severity_counts"]["medium"] == 1
+    assert by_b["kev_count"] == 0
+
+    by_device = admin.get("/api/vulns/summary", params={"device_uuid": da.uuid}).json()
+    assert by_device["severity_counts"]["critical"] == 1
+    assert by_device["severity_counts"]["medium"] == 0
+
+    by_cve = admin.get("/api/vulns/summary", params={"cve_id": "CVE-2024-BETA"}).json()
+    assert by_cve["severity_counts"]["medium"] == 1
+    assert by_cve["kev_count"] == 0
+
+    kev_yes = admin.get("/api/vulns/summary", params={"kev": "true"}).json()
+    assert kev_yes["kev_count"] == 1 and kev_yes["severity_counts"]["critical"] == 1
+    kev_no = admin.get("/api/vulns/summary", params={"kev": "false"}).json()
+    assert kev_no["kev_count"] == 0 and kev_no["severity_counts"]["medium"] == 1
+
+    # Filtered responses must not poison the unfiltered cache.
+    again = admin.get("/api/vulns/summary").json()
+    assert again["severity_counts"]["critical"] == 1
+    assert again["severity_counts"]["medium"] == 1

@@ -195,7 +195,9 @@ export default function Reports() {
           <ReportBlurb>
             Devices ranked by combined score (risk from matched CVEs, boosted by exposure) - same numbers as
             the <Link to="/vulnerabilities">vulnerabilities dashboard</Link>. Requires the vulnerability feed
-            to be enabled in Settings.
+            to be enabled in Settings. For a printable findings report scoped to a network, device, or CVE,
+            use <Link to="/vulnerabilities">Vulnerabilities → Print / PDF report</Link> (filters apply to
+            CSV export too).
           </ReportBlurb>
           <ErrorBox error={vuln.error} />
           {!vuln.data ? (!vuln.error && <Loading />) : !topDevices.length ? (

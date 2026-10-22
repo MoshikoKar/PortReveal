@@ -343,31 +343,65 @@ def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
 
 
 # --- CSV export --------------------------------------------------------------------------------------
+CSV_HEADER = [
+    "network", "device_name", "hostname", "ip", "mac", "port", "protocol", "service",
+    "product", "version", "cve", "title", "cvss", "severity", "kev", "epss", "state",
+    "first_seen", "last_matched", "cve_link",
+]
+
+
+def _csv_lines(text: str) -> list[str]:
+    """Strip UTF-8 BOM then split rows."""
+    return text.lstrip("\ufeff").strip().splitlines()
+
+
 def test_export_vulns_streams_header_and_rows(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/export")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert "attachment" in r.headers["content-disposition"]
-    lines = r.text.strip().splitlines()
+    assert r.content.startswith(b"\xef\xbb\xbf")  # UTF-8 BOM for Excel
+    lines = _csv_lines(r.text)
     header = lines[0].split(",")
-    assert header == ["cve_id", "device_ip", "device_hostname", "network", "port", "protocol", "service",
-                      "cvss_base", "severity", "kev", "epss", "state", "first_seen", "matched_at"]
+    assert header == CSV_HEADER
     assert len(lines) == 3  # header + 2 findings
     body = "\n".join(lines)
     assert "CVE-2024-CRIT" in body and "CVE-2024-MED" in body
+    assert "Yes" in body and "No" in body
+    assert "nvd.nist.gov/vuln/detail/CVE-2024-CRIT" in body
 
 
 def test_export_vulns_respects_filters(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/export", params={"severity": "critical"})
-    lines = r.text.strip().splitlines()
+    lines = _csv_lines(r.text)
     assert len(lines) == 2  # header + 1 finding
     assert "CVE-2024-CRIT" in lines[1] and "CVE-2024-MED" not in lines[1]
+
+
+def test_export_vulns_respects_network_device_cve_kev(admin, db):
+    net, da, _db = _seed_two_devices(db)
+    by_net = _csv_lines(admin.get("/api/vulns/export", params={"network_id": net.id}).text)
+    assert len(by_net) == 3
+    assert "vulns_" in admin.get("/api/vulns/export", params={"network_id": net.id}).headers["content-disposition"]
+    assert "test-net" in admin.get("/api/vulns/export", params={"network_id": net.id}).headers["content-disposition"].lower()
+
+    by_device = _csv_lines(admin.get("/api/vulns/export", params={"device_uuid": da.uuid}).text)
+    assert len(by_device) == 2 and "CVE-2024-CRIT" in by_device[1]
+
+    by_cve = _csv_lines(admin.get("/api/vulns/export", params={"cve_id": "CVE-2024-MED"}).text)
+    assert len(by_cve) == 2 and "CVE-2024-MED" in by_cve[1]
+
+    kev_yes = _csv_lines(admin.get("/api/vulns/export", params={"kev": "true"}).text)
+    assert len(kev_yes) == 2 and "CVE-2024-CRIT" in kev_yes[1]
+    kev_no = _csv_lines(admin.get("/api/vulns/export", params={"kev": "false"}).text)
+    assert len(kev_no) == 2 and "CVE-2024-MED" in kev_no[1]
 
 
 def test_export_vulns_no_rows_still_returns_header_only(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/export", params={"network_id": 999999})
-    lines = r.text.strip().splitlines()
+    lines = _csv_lines(r.text)
     assert len(lines) == 1
+    assert lines[0].split(",") == CSV_HEADER

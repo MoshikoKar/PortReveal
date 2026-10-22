@@ -3,10 +3,13 @@
  * query params 1:1 so the same filter object can feed both the summary cards and the list below.
  */
 
+/** URL/query keys shared by the dashboard, findings list, CSV export, and print report.
+ *  A future free-text ``q`` param should be appended here so parse/build/clear stay in sync. */
 export const VULN_FILTER_KEYS = [
   'severity', 'kev', 'epss_min', 'network_id', 'service', 'port', 'os_name', 'device_type',
   'state', 'cve_age', 'exposure_duration', 'risk_band', 'vendor', 'product',
   'cve_id', 'device_uuid', 'new_since',
+  // 'q',  // reserved: search-including-hidden / free-text findings search
 ] as const;
 
 export type VulnFilterKey = typeof VULN_FILTER_KEYS[number];
@@ -182,7 +185,7 @@ export function formatVulnFilterValue(
     case 'risk_band':
       return titleCase(value);
     case 'kev':
-      return value === 'true' ? 'yes' : value;
+      return value === 'true' ? 'yes' : value === 'false' ? 'no' : value;
     case 'epss_min': {
       const n = Number(value);
       if (!Number.isFinite(n)) return value;
@@ -202,4 +205,52 @@ export function formatVulnFilterChip(
   ctx: VulnFilterLabelContext = {},
 ): string {
   return `${FILTER_KEY_LABELS[key]}: ${formatVulnFilterValue(key, value, ctx)}`;
+}
+
+/** Human-readable summary of active filters for the print report header (empty → "All networks"). */
+export function formatVulnFilterSummary(
+  filters: VulnFilters,
+  ctx: VulnFilterLabelContext = {},
+): string {
+  const parts = (Object.entries(filters) as [VulnFilterKey, string][])
+    .filter(([, v]) => !!v)
+    .map(([key, value]) => formatVulnFilterChip(key, value, ctx));
+  return parts.length ? parts.join(' · ') : 'All networks (no filters)';
+}
+
+/** Sanitize a token for download filenames (matches backend ``sanitize_filename_part`` intent). */
+export function sanitizeFilenamePart(value: string, maxLen = 40): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+  return (slug || 'filtered').slice(0, maxLen);
+}
+
+/** Client-side CSV filename hint; the server Content-Disposition is preferred when present. */
+export function vulnExportFilename(filters: VulnFilters, ctx: VulnFilterLabelContext = {}): string {
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const parts: string[] = [];
+  if (filters.network_id === 'unassigned') parts.push('unassigned');
+  else if (filters.network_id) {
+    parts.push(sanitizeFilenamePart(ctx.networkNames?.[filters.network_id] ?? `net${filters.network_id}`));
+  }
+  if (filters.device_uuid) {
+    parts.push(sanitizeFilenamePart(`device-${filters.device_uuid.slice(0, 8)}`));
+  }
+  if (filters.cve_id) parts.push(sanitizeFilenamePart(filters.cve_id));
+  if (filters.kev === 'true') parts.push('kev');
+  else if (filters.kev === 'false') parts.push('not-kev');
+  if (filters.severity) parts.push(sanitizeFilenamePart(filters.severity));
+  if (filters.state) parts.push(sanitizeFilenamePart(filters.state));
+  const slug = parts.length ? parts.join('_') : 'all';
+  return `vulns_${slug}_${day}.csv`;
+}
+
+/** Toggle network scope only (heatmap row label / network facet), without touching severity. */
+export function toggleNetworkFilter(sp: URLSearchParams, networkId: number | null): URLSearchParams {
+  const netKey = networkId != null ? String(networkId) : 'unassigned';
+  return toggleVulnFilter(sp, 'network_id', netKey);
 }

@@ -1,18 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { downloadBlob, query } from '../api';
+import { downloadBlob, get, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
 import { FINDING_DESC_FIRST, FINDING_SORTS, VulnFindingsTable, type FindingSort } from '../components/VulnFindingsTable';
 import { VulnHeatmap } from '../components/VulnHeatmap';
+import { VulnPrintReport } from '../components/VulnPrintReport';
 import { VulnTopLists } from '../components/VulnTopLists';
 import { VulnRiskTrend, VulnSeverityTrend, VulnTrend } from '../components/VulnTrend';
 import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
-import type { VulnSummary } from '../types';
+import type { Network, Paged, VulnFindingListItem, VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
 import {
   buildVulnQuery, clearVulnFilters, formatVulnFilterChip, parseVulnFilters, scrollToVulnFindings,
-  setVulnFilter, toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter,
-  VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
+  setVulnFilter, toggleHeatmapCell, toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter,
+  vulnExportFilename, VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
 } from '../vulnFilters';
 
 /** Merge optimistic filters into the current URL (keeps page/sort until applySp drops page). */
@@ -30,9 +31,14 @@ const SEVERITY_COLOR: Record<string, string> = {
   critical: 'var(--high)', high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)',
 };
 
-function labelContextFromSummary(summary: VulnSummary | null | undefined) {
+const REPORT_PAGE_SIZE = 500;
+
+function labelContextFromSummary(summary: VulnSummary | null | undefined, networks: Network[] | null | undefined) {
   const networkNames: Record<string, string> = {};
   const deviceLabels: Record<string, string> = {};
+  for (const n of networks ?? []) {
+    networkNames[String(n.id)] = n.name;
+  }
   if (!summary) return { networkNames, deviceLabels };
   for (const b of summary.facets.network) {
     networkNames[String(b.key)] = b.label ?? String(b.key);
@@ -50,6 +56,25 @@ function labelContextFromSummary(summary: VulnSummary | null | undefined) {
   return { networkNames, deviceLabels };
 }
 
+/** Fetch every finding matching the active filters (for print/PDF), paging at the API max. */
+async function fetchAllFindings(filters: VulnFilters): Promise<VulnFindingListItem[]> {
+  const items: VulnFindingListItem[] = [];
+  let page = 1;
+  let total = Infinity;
+  while (items.length < total) {
+    const body = await get<Paged<VulnFindingListItem>>(
+      '/vulns',
+      buildVulnQuery(filters, { page, page_size: REPORT_PAGE_SIZE, sort: 'risk' }),
+    );
+    total = body.total;
+    items.push(...body.items);
+    if (!body.items.length) break;
+    page += 1;
+    if (page > 100) break; // hard stop: 50k rows
+  }
+  return items;
+}
+
 export default function Vulnerabilities() {
   const [sp, setSp] = useSearchParams();
   const searchKey = sp.toString();
@@ -60,10 +85,15 @@ export default function Vulnerabilities() {
   }, [searchKey]);
 
   const page = Number(sp.get('page') || 1);
-  const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', undefined, 30000);
+  const summaryParams = useMemo(() => buildVulnQuery(filters), [filters]);
+  const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', summaryParams, 30000);
+  const networks = useApi<Network[]>('/networks');
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const labelCtx = useMemo(() => labelContextFromSummary(data), [data]);
+  const [printFindings, setPrintFindings] = useState<VulnFindingListItem[]>([]);
+  const [printLoading, setPrintLoading] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const labelCtx = useMemo(() => labelContextFromSummary(data, networks.data), [data, networks.data]);
 
   const applySp = (next: URLSearchParams, scroll = true) => {
     setFilters(parseVulnFilters(next));
@@ -106,7 +136,7 @@ export default function Vulnerabilities() {
     try {
       await downloadBlob(
         `/vulns/export${query(buildVulnQuery(filters))}`,
-        `portreveal-vulns-${new Date().toISOString().slice(0, 10)}.csv`,
+        vulnExportFilename(filters, labelCtx),
       );
     } catch (e: unknown) {
       setExportError(e instanceof Error ? e.message : 'Export failed.');
@@ -115,14 +145,41 @@ export default function Vulnerabilities() {
     }
   };
 
+  const printReport = useCallback(async () => {
+    setPrintError(null);
+    setPrintLoading(true);
+    try {
+      const rows = await fetchAllFindings(filters);
+      setPrintFindings(rows);
+      // Let React paint the print-only report before opening the dialog.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => window.print());
+      });
+    } catch (e: unknown) {
+      setPrintError(e instanceof Error ? e.message : 'Could not prepare the print report.');
+    } finally {
+      setPrintLoading(false);
+    }
+  }, [filters]);
+
+  // Deep-link: ?print=1 from DeviceDetail / CveDetail "Report for this …" entry points.
+  useEffect(() => {
+    if (sp.get('print') !== '1') return;
+    const next = new URLSearchParams(sp);
+    next.delete('print');
+    setSp(next, { replace: true });
+    void printReport();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one-shot on mount
+
   const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
   const epssPct = data ? Math.round(data.epss_threshold * 100) : 0;
   const epssValue = data ? String(data.epss_threshold) : '0.1';
+  const networkSelectValue = filters.network_id ?? '';
 
   return (
     <>
-      <div className="page-head">
+      <div className="page-head no-print">
         <div>
           <h1>Vulnerabilities</h1>
           <p>
@@ -131,18 +188,35 @@ export default function Vulnerabilities() {
             own severity label. CVEs with no score in the cache are shown as unscored.
           </p>
         </div>
-        <div className="row wrap gap-2 no-print">
+        <div className="row wrap gap-2">
+          <label className="row gap-2" style={{ alignItems: 'center' }}>
+            <span className="muted small">Network</span>
+            <select
+              aria-label="Filter by network"
+              value={networkSelectValue}
+              onChange={(e) => set('network_id', e.target.value || undefined, false)}
+            >
+              <option value="">All networks</option>
+              <option value="unassigned">Unassigned</option>
+              {(networks.data ?? []).map((n) => (
+                <option key={n.id} value={String(n.id)}>{n.name}</option>
+              ))}
+            </select>
+          </label>
           <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
             {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
-          <button type="button" className="btn" onClick={() => window.print()}>Print report</button>
+          <button type="button" className="btn" disabled={printLoading} onClick={() => { void printReport(); }}>
+            {printLoading ? 'Preparing…' : 'Print / PDF report'}
+          </button>
         </div>
       </div>
       {exportError && <div className="alert error no-print">{exportError}</div>}
+      {printError && <div className="alert error no-print">{printError}</div>}
       <ErrorBox error={error} />
       {/* Chips stay outside the summary loading gate so filter state paints immediately on click. */}
       {activeFilters.length > 0 && (
-        <div className="row wrap gap-2">
+        <div className="row wrap gap-2 no-print">
           <span className="muted small">Filters:</span>
           {activeFilters.map(([key, value]) => (
             <button key={key} type="button" className="btn sm toggle on" aria-pressed="true" title="Remove this filter"
@@ -154,6 +228,17 @@ export default function Vulnerabilities() {
             onClick={() => applySp(clearVulnFilters(sp), false)}>Clear all</button>
         </div>
       )}
+
+      <VulnPrintReport
+        filters={filters}
+        labelCtx={labelCtx}
+        summary={data}
+        findings={printFindings}
+        loading={printLoading}
+        error={printError}
+      />
+
+      <div className="vuln-screen no-print">
       {!data ? (!error && <Loading />) : (
         <>
           {/* Five columns: KEV + severities on the first row, the remaining figures on the second. */}
@@ -220,8 +305,12 @@ export default function Vulnerabilities() {
             </Card>
           </div>
 
-          <VulnHeatmap rows={data.severity_by_network} filters={filters}
-            onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))} />
+          <VulnHeatmap
+            rows={data.severity_by_network}
+            filters={filters}
+            onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))}
+            onNetworkClick={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
+          />
 
           <VulnFacets summary={data} filters={filters} onToggle={toggle}
             onToggleVendorProduct={toggleVendorProduct} />
@@ -245,6 +334,7 @@ export default function Vulnerabilities() {
           </div>
         </>
       )}
+      </div>
     </>
   );
 }

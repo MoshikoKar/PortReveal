@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, formatVulnFilterValue, parseVulnFilters,
-  setVulnFilter, splitVendorProductKey, toggleHeatmapCell, toggleVulnFilter,
-  toggleVendorProductFilter, vendorProductFacetActive, vulnFilterLink,
+  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, formatVulnFilterSummary,
+  formatVulnFilterValue, parseVulnFilters, setVulnFilter, splitVendorProductKey,
+  toggleHeatmapCell, toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter,
+  vendorProductFacetActive, vulnExportFilename, vulnFilterLink,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -175,5 +176,33 @@ describe('formatVulnFilterChip', () => {
     expect(formatVulnFilterChip('new_since', 'scan')).toBe('new since: last scan');
     expect(formatVulnFilterChip('device_uuid', 'abc', { deviceLabels: { abc: '10.0.0.1' } }))
       .toBe('device: 10.0.0.1');
+    expect(formatVulnFilterChip('kev', 'false')).toBe('KEV: no');
+  });
+});
+
+describe('formatVulnFilterSummary / vulnExportFilename / toggleNetworkFilter', () => {
+  it('summarizes active filters for the print report header', () => {
+    expect(formatVulnFilterSummary({})).toBe('All networks (no filters)');
+    expect(formatVulnFilterSummary(
+      { network_id: '1', kev: 'true' },
+      { networkNames: { '1': 'Lab Alpha' } },
+    )).toBe('network: Lab Alpha · KEV: yes');
+  });
+
+  it('builds a sanitized CSV filename with filter context', () => {
+    const name = vulnExportFilename(
+      { network_id: '1', severity: 'critical' },
+      { networkNames: { '1': 'Lab Alpha' } },
+    );
+    expect(name).toMatch(/^vulns_lab-alpha_critical_\d{8}\.csv$/);
+  });
+
+  it('toggles network scope without touching severity', () => {
+    const set = toggleNetworkFilter(new URLSearchParams('severity=high'), 3);
+    expect(set.get('network_id')).toBe('3');
+    expect(set.get('severity')).toBe('high');
+    const cleared = toggleNetworkFilter(set, 3);
+    expect(cleared.get('network_id')).toBeNull();
+    expect(cleared.get('severity')).toBe('high');
   });
 });
