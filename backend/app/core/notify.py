@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from ..db import session_scope, utcnow
 from ..models import (
     ALWAYS_NOTIFY_TYPES,
+    EV_CVE_WATCH_MATCH,
     EV_DEVICE_DISAPPEARED,
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_REAPPEARED,
@@ -62,11 +63,12 @@ TITLES = {
     EV_POLICY_VIOLATION: "Policy violations",
     EV_MONITOR_CHANGE: "Monitored changes",
     EV_GEO_MISMATCH: "Geo mismatches",
+    EV_CVE_WATCH_MATCH: "CVE watchlist matches",
 }
 
 # Ordered categories for the daily summary email.
 CATEGORIES: list[tuple[str, list[str]]] = [
-    ("Watches", [EV_POLICY_VIOLATION, EV_WATCH_MATCH, EV_MONITOR_CHANGE]),
+    ("Watches", [EV_POLICY_VIOLATION, EV_WATCH_MATCH, EV_MONITOR_CHANGE, EV_CVE_WATCH_MATCH]),
     ("Geo", [EV_GEO_MISMATCH]),
     ("Devices", [EV_DEVICE_DISCOVERED, EV_DEVICE_DISAPPEARED, EV_DEVICE_REAPPEARED, EV_IP_CHANGED]),
     ("Ports", [EV_PORT_OPENED, EV_PORT_CLOSED]),
@@ -134,7 +136,7 @@ def _line_for(ev: Event) -> str:
         return f"{who} - {port} {_short(ev.new_value, 28)}".rstrip()
     if ev.event_type in (EV_SERVICE_CHANGED, EV_VERSION_CHANGED):
         return f"{who} - {port}: {_short(ev.old_value, 22)} → {_short(ev.new_value, 22)}"
-    if ev.event_type in (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE):
+    if ev.event_type in (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE, EV_CVE_WATCH_MATCH):
         return f"{who} - {_short(ev.new_value, 40)}"
     if ev.event_type in (EV_TAG_ADDED, EV_TAG_REMOVED):
         return f"{who} - {_short(ev.new_value or ev.old_value, 30)}"

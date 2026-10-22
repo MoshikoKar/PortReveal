@@ -30,6 +30,8 @@ def _sign(secret: str, body: bytes) -> str:
 
 
 def deliver_event(db: Session, event: Event) -> None:
+    from ..models import EV_CVE_WATCH_MATCH
+
     hooks = db.scalars(select(WebhookEndpoint).where(WebhookEndpoint.enabled.is_(True))).all()
     if not hooks:
         return
@@ -45,6 +47,19 @@ def deliver_event(db: Session, event: Event) -> None:
         "old_value": event.old_value,
         "new_value": event.new_value,
     }
+    # cve_watch_match stores structured detail in old_value; promote fields for SIEM consumers.
+    if event.event_type == EV_CVE_WATCH_MATCH and event.old_value:
+        try:
+            detail = json.loads(event.old_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            detail = None
+        if isinstance(detail, dict):
+            for key in (
+                "cve_id", "device_uuid", "hostname", "ip", "port", "protocol",
+                "state", "cvss", "kev",
+            ):
+                if key in detail and detail[key] is not None:
+                    payload[key] = detail[key]
     body = json.dumps(payload, default=str).encode()
     for hook in hooks:
         types = hook.event_types or []
