@@ -49,6 +49,7 @@ export default function CveDetail() {
         <div className="row wrap gap-2">
           <Link className="btn" to={`/vulnerabilities?cve_id=${encodeURIComponent(cve_id)}&print=1`}>
             Report for this CVE
+            {data ? ` (${data.affected_devices.length})` : ''}
           </Link>
           <Link className="btn" to="/vulnerabilities">&larr; Back to vulnerabilities</Link>
         </div>

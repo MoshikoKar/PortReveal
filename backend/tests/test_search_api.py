@@ -103,6 +103,21 @@ def test_export_csv_and_ndjson(seeded):
     assert seeded.get("/api/search/export", params={"q": "nosuch:1"}).status_code == 400
 
 
+def test_export_csv_formula_injection_prefix(seeded, db):
+    """Hostname (and other text cells) starting with =+-@ get a leading apostrophe."""
+    import csv
+    import io
+
+    d = device_by_ip(db, "10.0.0.10")
+    d.hostname = "=1+2"
+    db.commit()
+    r = seeded.get("/api/search/export", params={"q": "ip:10.0.0.10", "format": "csv"})
+    assert r.status_code == 200
+    rows = list(csv.reader(io.StringIO(r.text)))
+    header, data = rows[0], rows[1]
+    assert data[header.index("hostname")].startswith("'=")
+
+
 def test_point_in_time_search(seeded):
     from datetime import date
 

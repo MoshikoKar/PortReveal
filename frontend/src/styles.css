@@ -683,8 +683,59 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 .heatmap-network-btn:hover { color: var(--accent); text-decoration: underline; }
 .heatmap-network-btn.active { color: var(--accent); font-weight: 600; }
 
-/* Screen: print report is off-canvas until printing. */
+/* Screen: print report is off-canvas until printing or explicit Preview. */
 .vuln-print-report { display: none; }
+.vuln-print-report.is-preview {
+  display: block;
+  margin: 0 0 var(--space-5);
+  padding: var(--space-4);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  max-height: 70vh;
+  overflow: auto;
+}
+.vuln-print-preview {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+}
+
+/* Prominent network scope control on the vulnerabilities page head. */
+.vuln-network-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+}
+.vuln-network-select.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.vuln-network-select-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.vuln-network-select.active .vuln-network-select-label { color: var(--accent); }
+.vuln-network-select select {
+  border: none;
+  background: transparent;
+  padding: 4px 2px;
+  font-weight: 600;
+  min-width: 10rem;
+  cursor: pointer;
+}
+.vuln-network-select select:focus { outline: none; box-shadow: none; }
+.vuln-snapshot-note { margin: 0 0 0.5rem; }
 
 /* ---------- print (vulnerabilities report) ---------- */
 @media print {
@@ -693,34 +744,48 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
   .main, .content { margin: 0; padding: 0; max-width: none; }
   .card { break-inside: avoid; box-shadow: none; }
   a { color: inherit; text-decoration: none; }
-  body { background: #fff; color: #111; }
+  /* White page: dark theme --bg otherwise prints as gray margins with "background graphics". */
+  html, body, #root, .app, .main, .content {
+    background: #fff !important;
+    color: #111 !important;
+  }
 
-  .vuln-print-report {
+  .vuln-print-report,
+  .vuln-print-report.is-preview {
     display: block !important;
     color: #111;
-    font-size: 11pt;
-    line-height: 1.35;
+    font-size: 9pt;
+    line-height: 1.25;
+    max-height: none;
+    overflow: visible;
+    margin: 0;
+    padding: 0;
+    background: #fff !important;
+    border: none;
   }
-  .vuln-print-header { margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #ccc; }
-  .vuln-print-header h1 { margin: 0 0 0.35rem; font-size: 18pt; color: #111; }
-  .vuln-print-meta, .vuln-print-filters { margin: 0.2rem 0; color: #333; }
-  .vuln-print-exec h2, .vuln-print-findings h2 { font-size: 13pt; margin: 1rem 0 0.4rem; color: #111; }
-  .vuln-print-exec h3 { font-size: 11pt; margin: 0.6rem 0 0.25rem; }
-  .vuln-print-kpis { display: flex; flex-wrap: wrap; gap: 0.35rem 1.25rem; list-style: none; padding: 0; margin: 0.4rem 0; }
+  .vuln-print-header { margin-bottom: 0.6rem; padding-bottom: 0.35rem; border-bottom: 1px solid #ccc; }
+  .vuln-print-header h1 { margin: 0 0 0.25rem; font-size: 14pt; color: #111; }
+  .vuln-print-meta, .vuln-print-filters { margin: 0.15rem 0; color: #333; font-size: 8.5pt; }
+  .vuln-print-exec h2, .vuln-print-findings h2 { font-size: 11pt; margin: 0.6rem 0 0.3rem; color: #111; }
+  .vuln-print-exec h3 { font-size: 9.5pt; margin: 0.4rem 0 0.2rem; }
+  .vuln-print-kpis { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; list-style: none; padding: 0; margin: 0.25rem 0; }
   .vuln-print-sev-label { text-transform: capitalize; }
-  .vuln-print-tops { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-  .vuln-print-tops ol { margin: 0; padding-left: 1.2rem; }
+  .vuln-print-tops { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  .vuln-print-tops ol { margin: 0; padding-left: 1.1rem; }
   .vuln-print-empty { color: #444; font-style: italic; }
+  .vuln-print-hostname { font-size: 7.5pt; color: #444; line-height: 1.15; }
+  .vuln-print-title { overflow: hidden; text-overflow: ellipsis; }
+  .nowrap { white-space: nowrap; }
 
   .vuln-print-table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
-    font-size: 9pt;
+    font-size: 7.5pt;
   }
   .vuln-print-table th, .vuln-print-table td {
     border: 1px solid #bbb;
-    padding: 4px 6px;
+    padding: 2px 4px;
     vertical-align: top;
     word-wrap: break-word;
   }
@@ -732,16 +797,17 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
   }
   .vuln-print-table thead { display: table-header-group; }
   .vuln-print-table tr { break-inside: avoid; page-break-inside: avoid; }
-  .vuln-print-table col:nth-child(1) { width: 6%; }
-  .vuln-print-table th:nth-child(1), .vuln-print-table td:nth-child(1) { width: 6%; }
-  .vuln-print-table th:nth-child(2), .vuln-print-table td:nth-child(2) { width: 9%; }
-  .vuln-print-table th:nth-child(3), .vuln-print-table td:nth-child(3) { width: 6%; }
-  .vuln-print-table th:nth-child(4), .vuln-print-table td:nth-child(4) { width: 14%; }
-  .vuln-print-table th:nth-child(5), .vuln-print-table td:nth-child(5) { width: 16%; }
-  .vuln-print-table th:nth-child(6), .vuln-print-table td:nth-child(6) { width: 12%; }
-  .vuln-print-table th:nth-child(7), .vuln-print-table td:nth-child(7) { width: 18%; }
-  .vuln-print-table th:nth-child(8), .vuln-print-table td:nth-child(8) { width: 9%; }
-  .vuln-print-table th:nth-child(9), .vuln-print-table td:nth-child(9) { width: 10%; }
+  .vuln-print-table th:nth-child(1), .vuln-print-table td:nth-child(1) { width: 4%; }   /* KEV */
+  .vuln-print-table th:nth-child(2), .vuln-print-table td:nth-child(2) { width: 7%; }   /* Severity */
+  .vuln-print-table th:nth-child(3), .vuln-print-table td:nth-child(3) { width: 5%; }   /* CVSS */
+  .vuln-print-table th:nth-child(4), .vuln-print-table td:nth-child(4) { width: 5%; }   /* EPSS */
+  .vuln-print-table th:nth-child(5), .vuln-print-table td:nth-child(5) { width: 11%; white-space: nowrap; } /* CVE */
+  .vuln-print-table th:nth-child(6), .vuln-print-table td:nth-child(6) { width: 16%; }  /* Title */
+  .vuln-print-table th:nth-child(7), .vuln-print-table td:nth-child(7) { width: 12%; }  /* Device */
+  .vuln-print-table th:nth-child(8), .vuln-print-table td:nth-child(8) { width: 9%; }   /* Network */
+  .vuln-print-table th:nth-child(9), .vuln-print-table td:nth-child(9) { width: 12%; }  /* Port */
+  .vuln-print-table th:nth-child(10), .vuln-print-table td:nth-child(10) { width: 8%; white-space: nowrap; } /* State */
+  .vuln-print-table th:nth-child(11), .vuln-print-table td:nth-child(11) { width: 11%; white-space: nowrap; } /* First seen */
 
   /* Severity / KEV badges must stay readable on paper. */
   .vuln-print-report .badge {
@@ -750,6 +816,8 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
     background: #f3f3f3 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    font-size: 7pt;
+    padding: 0 3px;
   }
   .vuln-print-report .badge.high { background: #fdd !important; border-color: #c66; }
   .vuln-print-report .badge.medium { background: #ffd !important; border-color: #cc6; }
@@ -759,10 +827,11 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
     position: running(vulnFooter);
   }
   @page {
-    margin: 14mm 12mm 16mm;
+    size: landscape;
+    margin: 8mm 8mm 10mm;
     @bottom-center {
       content: "Page " counter(page) " of " counter(pages);
-      font-size: 9pt;
+      font-size: 8pt;
       color: #555;
     }
   }

@@ -343,16 +343,23 @@ def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
 
 
 # --- CSV export --------------------------------------------------------------------------------------
-CSV_HEADER = [
+CSV_HEADER_PREFIX = [
     "network", "device_name", "hostname", "ip", "mac", "port", "protocol", "service",
     "product", "version", "cve", "title", "cvss", "severity", "kev", "epss", "state",
-    "first_seen", "last_matched", "cve_link",
 ]
 
 
 def _csv_lines(text: str) -> list[str]:
     """Strip UTF-8 BOM then split rows."""
     return text.lstrip("\ufeff").strip().splitlines()
+
+
+def _assert_csv_header(header: list[str]) -> None:
+    """Date columns name the local timezone; everything before them is stable."""
+    assert header[:17] == CSV_HEADER_PREFIX
+    assert header[17].startswith("first_seen (") and header[17].endswith(")")
+    assert header[18].startswith("last_matched (") and header[18].endswith(")")
+    assert header[19] == "cve_link"
 
 
 def test_export_vulns_streams_header_and_rows(admin, db):
@@ -364,7 +371,7 @@ def test_export_vulns_streams_header_and_rows(admin, db):
     assert r.content.startswith(b"\xef\xbb\xbf")  # UTF-8 BOM for Excel
     lines = _csv_lines(r.text)
     header = lines[0].split(",")
-    assert header == CSV_HEADER
+    _assert_csv_header(header)
     assert len(lines) == 3  # header + 2 findings
     body = "\n".join(lines)
     assert "CVE-2024-CRIT" in body and "CVE-2024-MED" in body
@@ -404,4 +411,94 @@ def test_export_vulns_no_rows_still_returns_header_only(admin, db):
     r = admin.get("/api/vulns/export", params={"network_id": 999999})
     lines = _csv_lines(r.text)
     assert len(lines) == 1
-    assert lines[0].split(",") == CSV_HEADER
+    _assert_csv_header(lines[0].split(","))
+
+
+def test_export_vulns_hebrew_network_name_content_disposition(admin, db):
+    """Non-ASCII network names must not 500: ASCII filename= + RFC 5987 filename*."""
+    from urllib.parse import unquote
+
+    # Generic Hebrew placeholder network name (not a real org/site).
+    net = make_network(db, cidr="10.30.0.0/24", name="רשת-בדיקה")
+    scan(ScriptedScanner([host("10.30.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:30")]),
+         network_id=net.id)
+    d = device_by_ip(db, "10.30.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-HEB", cvss_base=9.8, kev=True, summary="hebrew net"))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-HEB", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    r = admin.get("/api/vulns/export", params={"network_id": net.id})
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    # Starlette encodes headers as latin-1; this must not raise.
+    cd.encode("latin-1")
+    assert 'filename="' in cd
+    assert "filename*=UTF-8''" in cd
+    # UTF-8 form keeps the Hebrew slug; ASCII fallback stays latin-1-safe.
+    assert "רשת" in unquote(cd) or "%D7%A8" in cd
+    assert "vulns_" in cd
+    assert "CVE-2024-HEB" in r.text
+
+
+def test_export_vulns_csv_injection_prefix(admin, db):
+    """Hostname / title / product cells starting with =+-@ get a leading apostrophe."""
+    net = make_network(db, cidr="10.40.0.0/24", name="Inj Net")
+    scan(ScriptedScanner([
+        host("10.40.0.1", [port(22, "ssh", "=EvilProduct", "1.0")],
+             hostname="=cmd|' /C calc'!A0", mac="00:11:22:33:44:40"),
+    ]), network_id=net.id)
+    d = device_by_ip(db, "10.40.0.1")
+    d.hostname = "=cmd|' /C calc'!A0"
+    p = next(pp for pp in d.ports if pp.port == 22)
+    p.product = "+1+1"
+    db.add(Vulnerability(
+        cve_id="CVE-2024-INJ", cvss_base=5.0, kev=False,
+        summary="@SUM(A1:A10) formula title",
+    ))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-INJ", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    import csv
+    import io
+
+    r = admin.get("/api/vulns/export", params={"cve_id": "CVE-2024-INJ"})
+    assert r.status_code == 200
+    rows = list(csv.reader(io.StringIO(r.text.lstrip("\ufeff"))))
+    assert len(rows) == 2
+    header, data = rows
+    hostname = data[header.index("hostname")]
+    product = data[header.index("product")]
+    title = data[header.index("title")]
+    assert hostname.startswith("'=")
+    assert product.startswith("'+")
+    assert title.startswith("'@")
+
+
+def test_export_vulns_unassigned_network_label(admin, db):
+    _seed_two_devices(db)
+    orphan = device_by_ip(db, "10.0.0.2")
+    orphan.network_id = None
+    db.commit()
+
+    import csv
+    import io
+
+    r = admin.get("/api/vulns/export", params={"network_id": "unassigned"})
+    rows = list(csv.reader(io.StringIO(r.text.lstrip("\ufeff"))))
+    assert len(rows) == 2
+    assert rows[1][rows[0].index("network")] == "Unassigned"
+    assert "CVE-2024-MED" in rows[1]
+
+
+def test_vulns_routes_do_not_accept_q_query_param():
+    """``q`` stays off the API surface here so a parallel free-text PR can own it."""
+    import inspect
+
+    from app.api import vulns as vulns_api
+
+    for fn in (vulns_api.list_vulns, vulns_api.export_vulns, vulns_api.vuln_summary_route):
+        params = inspect.signature(fn).parameters
+        assert "q" not in params, f"{fn.__name__} must not accept q"

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import and_, case, delete, func, or_, select
@@ -235,7 +235,6 @@ def _apply_finding_filters(
             def _ts(f: _Finding) -> datetime | None:
                 return f.first_seen_at or f.matched_at
             out = [f for f in out if (ts := _ts(f)) is not None and ts >= cutoff]
-    # `q` is reserved for a future free-text search; ignored until the list API grows it.
     return out
 
 
@@ -299,52 +298,112 @@ def _weekly_series(
     now: datetime,
     weeks: int = WEEKS,
     *,
-    network_id: str | None = None,
-    device_uuid: str | None = None,
-    cve_id: str | None = None,
+    filters: FindingFilters | None = None,
+    findings: list[_Finding] | None = None,
 ) -> list[dict]:
     """New (first_seen_at) vs resolved (resolved_at, decision 3) vs dismissed (dismissed_at) per
     week, oldest first. A dismissed finding is never counted as resolved even if its device was
     later removed. Visibility: excluded when its device still exists and is mock/archived-hidden;
     kept when the device is gone entirely, so a real resolution is never silently dropped.
 
-    Optional ``network_id`` / ``device_uuid`` / ``cve_id`` scope the series to the active page filters.
+    When page filters are active, ``new`` comes from the already-filtered findings list (matches
+    KPI cards). Resolved/dismissed use the lifecycle table joined to Vulnerability/Device with
+    kev/severity/epss/network/device/cve/os/device_type. Port/service/vendor/product/state/age/
+    risk_band/new_since still shape ``new`` via findings but may not apply to historical resolved
+    rows.
     """
     start = now - timedelta(weeks=weeks)
+    counts = {"new": [0] * weeks, "resolved": [0] * weeks, "dismissed": [0] * weeks}
     lc = VulnFindingLifecycle
     visible_or_gone = or_(Device.id.is_(None), device_visible(db))
-    cond = [visible_or_gone]
-    if network_id == NETWORK_UNASSIGNED:
-        cond.append(lc.network_id.is_(None))
-    elif network_id is not None:
-        cond.append(lc.network_id == int(network_id))
-    if device_uuid is not None:
-        cond.append(lc.device_uuid == device_uuid)
-    if cve_id is not None:
-        cond.append(lc.cve_id == normalize_cve_id(cve_id))
-    rows = db.execute(
-        select(lc.first_seen_at, lc.resolved_at, lc.dismissed_at)
-        .outerjoin(Device, Device.uuid == lc.device_uuid)
-        .where(*cond)
-    ).all()
-    counts = {"new": [0] * weeks, "resolved": [0] * weeks, "dismissed": [0] * weeks}
-    for first_seen_at, resolved_at, dismissed_at in rows:
-        i = _week_index(first_seen_at, start, weeks)
-        if i is not None:
-            counts["new"][i] += 1
-        if resolved_at is not None and dismissed_at is None:
-            i = _week_index(resolved_at, start, weeks)
+
+    if filters_active(filters) and findings is not None:
+        assert filters is not None
+        for f in findings:
+            i = _week_index(f.first_seen_at or f.matched_at, start, weeks)
             if i is not None:
-                counts["resolved"][i] += 1
-        if dismissed_at is not None:
-            i = _week_index(dismissed_at, start, weeks)
+                counts["new"][i] += 1
+        cond = [visible_or_gone]
+        if filters.network_id == NETWORK_UNASSIGNED:
+            cond.append(lc.network_id.is_(None))
+        elif filters.network_id is not None:
+            cond.append(lc.network_id == int(filters.network_id))
+        if filters.device_uuid is not None:
+            cond.append(lc.device_uuid == filters.device_uuid)
+        if filters.cve_id is not None:
+            cond.append(lc.cve_id == normalize_cve_id(filters.cve_id))
+        if filters.kev is not None:
+            cond.append(Vulnerability.kev.is_(filters.kev))
+        if filters.epss_min is not None:
+            cond.append(and_(Vulnerability.epss.isnot(None), Vulnerability.epss >= filters.epss_min))
+        if filters.os_name is not None:
+            cond.append(Device.os_name == filters.os_name)
+        if filters.device_type is not None:
+            cond.append(Device.device_type == filters.device_type)
+        rows = db.execute(
+            select(lc.resolved_at, lc.dismissed_at, Vulnerability.cvss_base)
+            .outerjoin(Device, Device.uuid == lc.device_uuid)
+            .outerjoin(Vulnerability, Vulnerability.cve_id == lc.cve_id)
+            .where(*cond)
+        ).all()
+        for resolved_at, dismissed_at, cvss_base in rows:
+            if filters.severity is not None and severity_bucket(cvss_base) != filters.severity:
+                continue
+            if resolved_at is not None and dismissed_at is None:
+                i = _week_index(resolved_at, start, weeks)
+                if i is not None:
+                    counts["resolved"][i] += 1
+            if dismissed_at is not None:
+                i = _week_index(dismissed_at, start, weeks)
+                if i is not None:
+                    counts["dismissed"][i] += 1
+    else:
+        rows = db.execute(
+            select(lc.first_seen_at, lc.resolved_at, lc.dismissed_at)
+            .outerjoin(Device, Device.uuid == lc.device_uuid)
+            .where(visible_or_gone)
+        ).all()
+        for first_seen_at, resolved_at, dismissed_at in rows:
+            i = _week_index(first_seen_at, start, weeks)
             if i is not None:
-                counts["dismissed"][i] += 1
+                counts["new"][i] += 1
+            if resolved_at is not None and dismissed_at is None:
+                i = _week_index(resolved_at, start, weeks)
+                if i is not None:
+                    counts["resolved"][i] += 1
+            if dismissed_at is not None:
+                i = _week_index(dismissed_at, start, weeks)
+                if i is not None:
+                    counts["dismissed"][i] += 1
+
     return [
         {"week_start": (start + timedelta(weeks=w)).date().isoformat(),
          "new": counts["new"][w], "resolved": counts["resolved"][w], "dismissed": counts["dismissed"][w]}
         for w in range(weeks)
     ]
+
+
+# Snapshot history is pre-aggregated per network (or global); only network_id can reshape it.
+_SNAPSHOT_HONORED_FILTERS = frozenset({"network_id"})
+
+
+def _snapshot_trend_note(filters: FindingFilters | None) -> str | None:
+    """Explain when trend charts cannot honor every active filter."""
+    if not filters_active(filters):
+        return None
+    assert filters is not None
+    ignored = [
+        f.name for f in fields(FindingFilters)
+        if getattr(filters, f.name) is not None
+        and f.name not in _SNAPSHOT_HONORED_FILTERS
+        and f.name != "q"
+    ]
+    if not ignored:
+        return None
+    return (
+        "Open-vulns / risk trend charts use network-scoped daily snapshots only; "
+        f"not re-filtered by: {', '.join(ignored)}."
+    )
 
 
 def _top_lists(db: Session, findings: list[_Finding] | None = None) -> dict:
@@ -378,7 +437,8 @@ def _top_lists(db: Session, findings: list[_Finding] | None = None) -> dict:
     return {
         "top_devices": [
             {"uuid": d.uuid, "ip": d.current_ip, "hostname": d.hostname, "device_type": d.device_type,
-             "network_name": names.get(d.network_id), "exposure_score": d.exposure_score or 0,
+             "network_id": d.network_id, "network_name": names.get(d.network_id),
+             "exposure_score": d.exposure_score or 0,
              "risk_score": d.risk_score or 0, "combined_score": d.combined_score or 0}
             for d in top_devices
         ],
@@ -414,7 +474,8 @@ def _top_lists_from_findings(db: Session, findings: list[_Finding]) -> dict:
             continue
         top_devices.append({
             "uuid": d.uuid, "ip": d.current_ip, "hostname": d.hostname, "device_type": d.device_type,
-            "network_name": names.get(d.network_id), "exposure_score": d.exposure_score or 0,
+            "network_id": d.network_id, "network_name": names.get(d.network_id),
+            "exposure_score": d.exposure_score or 0,
             "risk_score": d.risk_score or 0, "combined_score": d.combined_score or 0,
         })
     cve_devices: dict[str, set[str]] = defaultdict(set)
@@ -529,12 +590,11 @@ def _snapshot_trend(db: Session, now: datetime, *, network_id: str | None = None
     ]
 
 
-def _risk_device_levels(db: Session, findings: list[_Finding] | None = None,
-                       *, network_id: str | None = None) -> dict[str, int]:
+def _risk_device_levels(db: Session, findings: list[_Finding] | None = None) -> dict[str, int]:
     """Device counts by combined-score band - same cut points as GET /api/vulns?risk_band=.
 
-    With filtered findings, count distinct devices in that set. With only a network scope and no
-    finding set, restrict the device query to that network.
+    When ``findings`` is provided (any active page filter), count distinct devices in that set
+    so the High-risk devices KPI matches the filtered findings. Unfiltered: all visible devices.
     """
     if findings is not None:
         levels = {"high": 0, "medium": 0, "low": 0}
@@ -555,14 +615,11 @@ def _risk_device_levels(db: Session, findings: list[_Finding] | None = None,
         (Device.combined_score >= RISK_MEDIUM_THRESHOLD, "medium"),
         else_="low",
     )
-    cond = [device_visible(db)]
-    if network_id == NETWORK_UNASSIGNED:
-        cond.append(Device.network_id.is_(None))
-    elif network_id is not None:
-        cond.append(Device.network_id == int(network_id))
     levels = {"high": 0, "medium": 0, "low": 0}
     levels.update({
-        k: int(v) for k, v in db.execute(select(expr, func.count(Device.id)).where(*cond).group_by(expr))
+        k: int(v) for k, v in db.execute(
+            select(expr, func.count(Device.id)).where(device_visible(db)).group_by(expr)
+        )
     })
     return levels
 
@@ -612,19 +669,14 @@ def refresh_vuln_summary(db: Session, *, now: datetime, filters: FindingFilters 
         "epss_high_count": epss_high_count,
         "confirmed_count": int(state_counts.get(VULN_STATE_CONFIRMED, 0)),
         "potential_count": int(state_counts.get(VULN_STATE_POTENTIAL, 0)),
-        "risk_device_levels": _risk_device_levels(
-            db, findings if filtered else None, network_id=net_scope,
-        ),
+        "findings_total": len(findings),
+        "risk_device_levels": _risk_device_levels(db, findings if filtered else None),
         "feed": feed,
         "facets": facets,
         "severity_by_network": _severity_by_network(findings),
-        "weekly": _weekly_series(
-            db, now,
-            network_id=net_scope,
-            device_uuid=filters.device_uuid if filters else None,
-            cve_id=filters.cve_id if filters else None,
-        ),
+        "weekly": _weekly_series(db, now, filters=filters, findings=findings if filtered else None),
         "snapshot_trend": _snapshot_trend(db, now, network_id=net_scope),
+        "snapshot_trend_note": _snapshot_trend_note(filters),
         **_top_lists(db, findings if filtered else None),
         **_new_lists(db, findings, feed),
     }

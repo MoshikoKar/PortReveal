@@ -26,6 +26,7 @@ from ..core.query.search import (
     search_hosts,
     search_services,
 )
+from ..core.vuln.filters import csv_safe_cell
 from ..db import SessionLocal, get_db
 from ..models import User
 from .common import Paging, paging_with
@@ -120,13 +121,14 @@ def _service_label(s: dict) -> str:
 
 
 def _csv_row(h: dict) -> list:
-    return [
+    cells = [
         h["ip"], h["hostname"] or "", h["mac"] or "", h["vendor"] or "", h["os"] or "", h["status"],
         h["network"] or "", h["type"] or "", h["score"], " ".join(h["tags"]),
         h["first_seen"].isoformat() if h["first_seen"] else "",
         h["last_seen"].isoformat() if h["last_seen"] else "",
         "; ".join(_service_label(s) for s in h["services"]),
     ]
+    return [csv_safe_cell(c) for c in cells]
 
 
 def _export_lines(q: str, fmt: str) -> Iterator[str]:

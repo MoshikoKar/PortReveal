@@ -3,7 +3,7 @@ import { fmtTime } from '../util';
 import {
   formatVulnFilterSummary, type VulnFilterLabelContext, type VulnFilters,
 } from '../vulnFilters';
-import { formatCvss } from '../vulnFormat';
+import { formatCvss, formatEpssPct } from '../vulnFormat';
 
 const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'unknown'] as const;
 
@@ -14,9 +14,15 @@ function severityClass(sev: string | null | undefined): string {
   return 'outline';
 }
 
+function truncateTitle(text: string | null | undefined, max = 48): string {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '—';
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
 /** Print-only vulnerability findings report: filter summary, executive counts, full findings table. */
 export function VulnPrintReport({
-  filters, labelCtx, summary, findings, loading, error,
+  filters, labelCtx, summary, findings, loading, error, preview = false,
 }: {
   filters: VulnFilters;
   labelCtx: VulnFilterLabelContext;
@@ -24,6 +30,8 @@ export function VulnPrintReport({
   findings: VulnFindingListItem[];
   loading: boolean;
   error: string | null;
+  /** When true, show the report on-screen (before opening the system print dialog). */
+  preview?: boolean;
 }) {
   const generatedAt = new Date();
   const filterSummary = formatVulnFilterSummary(filters, labelCtx);
@@ -32,9 +40,10 @@ export function VulnPrintReport({
   const sev = summary?.severity_counts;
   const topCves = summary?.top_cves?.slice(0, 5) ?? [];
   const topDevices = summary?.top_devices?.slice(0, 5) ?? [];
+  const findingsTotal = summary?.findings_total ?? findings.length;
 
   return (
-    <div className="vuln-print-report">
+    <div className={`vuln-print-report${preview ? ' is-preview' : ''}`}>
       <header className="vuln-print-header">
         <h1>PortReveal vulnerability report</h1>
         <p className="vuln-print-meta">
@@ -56,8 +65,7 @@ export function VulnPrintReport({
             ) : (
               <>
                 <ul className="vuln-print-kpis">
-                  <li>Findings: <strong>{findings.length || (sev
-                    ? SEV_ORDER.reduce((n, k) => n + (sev[k] ?? 0), 0) : 0)}</strong></li>
+                  <li>Findings: <strong>{findings.length || findingsTotal}</strong></li>
                   <li>KEV (actively exploited): <strong>{kevCount}</strong></li>
                   <li>Affected devices: <strong>{deviceCount || (summary?.top_devices.length ?? 0)}</strong></li>
                   {sev && SEV_ORDER.map((k) => (sev[k] ?? 0) > 0 && (
@@ -112,7 +120,9 @@ export function VulnPrintReport({
                     <th>KEV</th>
                     <th>Severity</th>
                     <th>CVSS</th>
+                    <th>EPSS</th>
                     <th>CVE</th>
+                    <th>Title</th>
                     <th>Device</th>
                     <th>Network</th>
                     <th>Port / service</th>
@@ -130,18 +140,20 @@ export function VulnPrintReport({
                         </span>
                       </td>
                       <td className="mono">{formatCvss(f.cvss_base)}</td>
-                      <td className="mono">{f.cve_id}</td>
-                      <td>
+                      <td className="mono small">{formatEpssPct(f.epss)}</td>
+                      <td className="mono nowrap">{f.cve_id}</td>
+                      <td className="small vuln-print-title">{truncateTitle(f.summary)}</td>
+                      <td className="vuln-print-host">
                         <span className="mono">{f.device_ip}</span>
-                        {f.device_hostname && <div className="small muted">{f.device_hostname}</div>}
+                        {f.device_hostname && <div className="vuln-print-hostname">{f.device_hostname}</div>}
                       </td>
-                      <td>{f.network ?? '—'}</td>
+                      <td>{f.network ?? 'Unassigned'}</td>
                       <td className="small">
                         {f.protocol.toUpperCase()}/{f.port}
                         {' '}
                         {[f.product, f.version].filter(Boolean).join(' ') || f.service || ''}
                       </td>
-                      <td>{f.state}</td>
+                      <td className="nowrap">{f.state}</td>
                       <td className="small nowrap">{fmtTime(f.first_seen_at ?? f.matched_at)}</td>
                     </tr>
                   ))}

@@ -229,9 +229,17 @@ export function sanitizeFilenamePart(value: string, maxLen = 40): string {
   return (slug || 'filtered').slice(0, maxLen);
 }
 
+/** Local calendar day as ``YYYYMMDD`` (matches server ``datetime.now().strftime("%Y%m%d")``). */
+export function localFilenameDay(now: Date = new Date()): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+
 /** Client-side CSV filename hint; the server Content-Disposition is preferred when present. */
 export function vulnExportFilename(filters: VulnFilters, ctx: VulnFilterLabelContext = {}): string {
-  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const day = localFilenameDay();
   const parts: string[] = [];
   if (filters.network_id === 'unassigned') parts.push('unassigned');
   else if (filters.network_id) {

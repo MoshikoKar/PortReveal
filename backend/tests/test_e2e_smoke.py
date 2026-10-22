@@ -348,15 +348,58 @@ def test_vulnerabilities_network_facet_export_and_print(live_app_env, browser):
         assert name_a in text or "10.10.0.1" in text
         assert name_b not in text
 
-        # Print report: load findings into the print-only block and assert filter summary.
-        page.evaluate("() => { window.__pr_print_calls = 0; window.print = () => { window.__pr_print_calls++; }; }")
+        # Print report: must wait for filtered summary + findings before window.print().
+        def install_print_mock() -> None:
+            page.evaluate(
+                """() => {
+                  window.__pr_print_calls = 0;
+                  window.__pr_print_had_summary = false;
+                  window.__pr_print_had_findings = false;
+                  window.print = () => {
+                    const report = document.querySelector('.vuln-print-report');
+                    const kpis = report && report.querySelector('.vuln-print-kpis');
+                    const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+                    window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+                    window.__pr_print_had_findings = !!(rows && rows.length > 0);
+                    window.__pr_print_calls++;
+                  };
+                }"""
+            )
+
+        install_print_mock()
         page.get_by_role("button", name="Print / PDF report").click()
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=15_000)
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
+        assert page.evaluate("() => window.__pr_print_had_findings") is True
         report = page.locator(".vuln-print-report")
         # Force print stylesheet visibility for assertion without an actual print dialog.
         page.add_style_tag(content=".vuln-print-report { display: block !important; }")
         expect(report.locator(".vuln-print-filters")).to_contain_text(f"network: {name_a}", timeout=10_000)
         expect(report.get_by_role("heading", name="PortReveal vulnerability report")).to_be_visible()
+
+        # Deep-link ?print=1 also waits for summary + findings (Report for this … entry points).
+        # add_init_script must be a bare script body (not an unused () => {} expression).
+        net_id = re.search(r"network_id=(\d+)", page.url)
+        assert net_id is not None
+        page.add_init_script(
+            """
+            window.__pr_print_calls = 0;
+            window.__pr_print_had_summary = false;
+            window.__pr_print_had_findings = false;
+            window.print = () => {
+              const report = document.querySelector('.vuln-print-report');
+              const kpis = report && report.querySelector('.vuln-print-kpis');
+              const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+              window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+              window.__pr_print_had_findings = !!(rows && rows.length > 0);
+              window.__pr_print_calls++;
+            };
+            """
+        )
+        page.goto(f"{base}/vulnerabilities?network_id={net_id.group(1)}&print=1")
+        page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
+        assert page.evaluate("() => window.__pr_print_had_findings") is True
     finally:
         page.close()
     assert errors == []

@@ -22,6 +22,8 @@ from ..core.vuln.display import is_visible, normalize_cve_id
 from ..core.vuln.filters import (
     NETWORK_UNASSIGNED,
     FindingFilters,
+    content_disposition_attachment,
+    csv_safe_cell,
     parse_network_id_param,
     sanitize_filename_part,
 )
@@ -89,19 +91,14 @@ def _finding_filters_from_request(
     cve_id: str | None = None,
     device_uuid: str | None = None,
     new_since: str | None = None,
-    q: str | None = None,
 ) -> FindingFilters:
-    """Shared query→FindingFilters mapping for list, export, and summary.
-
-    ``q`` is accepted (and currently ignored) so a future free-text search can land without
-    reshaping every route signature.
-    """
+    """Shared query→FindingFilters mapping for list, export, and summary."""
     return FindingFilters(
         severity=severity, kev=kev, epss_min=epss_min, network_id=_parse_network_id_param(network_id),
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration,
         risk_band=risk_band, vendor=vendor, product=product,
-        cve_id=cve_id, device_uuid=device_uuid, new_since=new_since, q=q,
+        cve_id=cve_id, device_uuid=device_uuid, new_since=new_since,
     )
 
 
@@ -124,7 +121,6 @@ def vuln_summary_route(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
-    q: str | None = Query(None, max_length=200),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -139,7 +135,7 @@ def vuln_summary_route(
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
         vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid,
-        new_since=new_since, q=q,
+        new_since=new_since,
     )
     return get_vuln_summary(db, now=utcnow(), filters=filters)
 
@@ -331,7 +327,6 @@ def list_vulns(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
-    q: str | None = Query(None, max_length=200),
     sort: str = Query("risk", pattern=FINDING_SORT_PATTERN),
     order: str = Query("asc", pattern="^(asc|desc)$"),
     paging: Paging = Depends(),
@@ -347,7 +342,7 @@ def list_vulns(
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
         vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid,
-        new_since=new_since, q=q,
+        new_since=new_since,
     )
     total = db.scalar(_apply_filters(_count_base(), db, cfg, filters, now)) or 0
     rows = db.execute(
@@ -362,42 +357,52 @@ def list_vulns(
     return paged(items, total, paging)
 
 
-# Stable CSV headers (Excel-friendly). Order matches the printed report columns where practical.
-CSV_COLUMNS = [
-    "network",
-    "device_name",
-    "hostname",
-    "ip",
-    "mac",
-    "port",
-    "protocol",
-    "service",
-    "product",
-    "version",
-    "cve",
-    "title",
-    "cvss",
-    "severity",
-    "kev",
-    "epss",
-    "state",
-    "first_seen",
-    "last_matched",
-    "cve_link",
-]
+def _csv_local_tz_label() -> str:
+    """Short timezone label for CSV date column headers (e.g. IDT, UTC, EST)."""
+    return datetime.now().astimezone().tzname() or "local"
 
 
-def _iso_date(ts: datetime | None) -> str:
-    """UTC ISO-8601 for CSV (Excel-safe); empty when unknown."""
-    return ts.isoformat() if ts else ""
+def _csv_columns() -> list[str]:
+    """Stable headers; date columns name the local timezone Excel will see."""
+    tz = _csv_local_tz_label()
+    return [
+        "network",
+        "device_name",
+        "hostname",
+        "ip",
+        "mac",
+        "port",
+        "protocol",
+        "service",
+        "product",
+        "version",
+        "cve",
+        "title",
+        "cvss",
+        "severity",
+        "kev",
+        "epss",
+        "state",
+        f"first_seen ({tz})",
+        f"last_matched ({tz})",
+        "cve_link",
+    ]
+
+
+def _csv_local_date(ts: datetime | None) -> str:
+    """Excel-friendly local wall time ``YYYY-MM-DD HH:MM:SS``; empty when unknown."""
+    if ts is None:
+        return ""
+    local = ts.astimezone() if ts.tzinfo is not None else ts.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return local.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _export_row(dpv: DevicePortVuln, port_row: DevicePort, device: Device, vuln: Vulnerability,
                 network_name: str | None, first_seen_at: datetime | None) -> list:
     device_name = device.hostname or device.discovery_name or device.current_ip or ""
     title = (vuln.summary or "").replace("\r\n", " ").replace("\n", " ").strip()
-    return [
-        network_name or "",
+    cells = [
+        network_name or "Unassigned",
         device_name,
         device.hostname or "",
         device.current_ip or "",
@@ -414,14 +419,19 @@ def _export_row(dpv: DevicePortVuln, port_row: DevicePort, device: Device, vuln:
         "Yes" if vuln.kev else "No",
         vuln.epss if vuln.epss is not None else "",
         dpv.state,
-        _iso_date(first_seen_at),
-        _iso_date(dpv.matched_at),
+        _csv_local_date(first_seen_at),
+        _csv_local_date(dpv.matched_at),
         CVE_NVD_URL.format(cve_id=vuln.cve_id),
     ]
+    return [csv_safe_cell(c) for c in cells]
 
 
 def _export_filename(db: Session, filters: FindingFilters) -> str:
-    """``vulns_<context>_<yyyymmdd>.csv`` with a sanitized filter slug when scoped."""
+    """``vulns_<context>_<yyyymmdd>.csv`` with a sanitized filter slug when scoped.
+
+    Unicode network names are preserved in the filename (paired with an ASCII
+    ``Content-Disposition`` fallback via ``content_disposition_attachment``).
+    """
     day = datetime.now().strftime("%Y%m%d")
     parts: list[str] = []
     if filters.network_id == NETWORK_UNASSIGNED:
@@ -453,7 +463,7 @@ def _export_lines(filters: FindingFilters, now: datetime) -> Iterator[str]:
         # UTF-8 BOM so Excel on Windows opens Hebrew / non-ASCII titles correctly.
         buf.write("\ufeff")
         writer = csv.writer(buf)
-        writer.writerow(CSV_COLUMNS)
+        writer.writerow(_csv_columns())
         rows = db.execute(
             _apply_filters(_rows_base(), db, cfg, filters, now)
             .order_by(Vulnerability.kev.desc(), Vulnerability.cvss_base.desc().nulls_last(), DevicePortVuln.id)
@@ -488,7 +498,6 @@ def export_vulns(
     cve_id: str | None = Query(None, max_length=32),
     device_uuid: str | None = Query(None, max_length=64),
     new_since: str | None = Query(None, pattern=NEW_SINCE_PATTERN),
-    q: str | None = Query(None, max_length=200),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
@@ -498,13 +507,13 @@ def export_vulns(
         service=service, port=port, os_name=os_name, device_type=device_type,
         state=state, cve_age=cve_age, exposure_duration=exposure_duration, risk_band=risk_band,
         vendor=vendor, product=product, cve_id=cve_id, device_uuid=device_uuid,
-        new_since=new_since, q=q,
+        new_since=new_since,
     )
     filename = _export_filename(db, filters)
     return StreamingResponse(
         _export_lines(filters, utcnow()),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 

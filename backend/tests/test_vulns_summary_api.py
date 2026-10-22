@@ -40,6 +40,8 @@ def test_summary_empty_state_is_zeroed_not_an_error(admin):
     assert body["severity_counts"] == {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 0}
     assert body["kev_count"] == 0 and body["epss_high_count"] == 0
     assert body["confirmed_count"] == 0 and body["potential_count"] == 0
+    assert body["findings_total"] == 0
+    assert body["snapshot_trend_note"] is None
     assert body["top_devices"] == [] and body["top_cves"] == []
     assert body["new_since_last_scan"] == [] and body["new_since_last_db_update"] == []
     assert body["severity_by_network"] == [] and body["snapshot_trend"] == []
@@ -200,3 +202,52 @@ def test_summary_respects_network_device_cve_kev_filters(admin, db):
     again = admin.get("/api/vulns/summary").json()
     assert again["severity_counts"]["critical"] == 1
     assert again["severity_counts"]["medium"] == 1
+
+
+def _sev_total(body: dict) -> int:
+    return sum(body["severity_counts"].values())
+
+
+def test_summary_findings_total_matches_list_for_filter_combos(admin, db):
+    """Parity: summary findings_total (== severity sum) equals GET /api/vulns total per filter."""
+    net_a, net_b, da, _db = _seed_two_networks(db)
+    invalidate_vuln_summary_cache()
+
+    combos = [
+        {},
+        {"network_id": net_a.id},
+        {"network_id": net_b.id},
+        {"device_uuid": da.uuid},
+        {"cve_id": "CVE-2024-BETA"},
+        {"kev": "true"},
+        {"kev": "false"},
+        {"severity": "critical"},
+        {"severity": "medium"},
+        {"network_id": net_a.id, "kev": "true"},
+        {"network_id": net_b.id, "severity": "medium"},
+    ]
+    for params in combos:
+        summary = admin.get("/api/vulns/summary", params=params).json()
+        listing = admin.get("/api/vulns", params=params).json()
+        assert summary["findings_total"] == listing["total"], params
+        assert _sev_total(summary) == listing["total"], params
+
+
+def test_summary_weekly_respects_kev_and_snapshot_note_when_partial(admin, db):
+    net_a, _net_b, _da, _db = _seed_two_networks(db)
+    invalidate_vuln_summary_cache()
+
+    kev = admin.get("/api/vulns/summary", params={"kev": "true"}).json()
+    assert kev["findings_total"] == 1
+    assert sum(w["new"] for w in kev["weekly"]) == 1
+    assert kev["snapshot_trend_note"] is not None
+    assert "kev" in kev["snapshot_trend_note"]
+
+    # Network-only filter can reshape snapshots; no partial-filter note.
+    by_net = admin.get("/api/vulns/summary", params={"network_id": net_a.id}).json()
+    assert by_net["snapshot_trend_note"] is None
+    assert by_net["findings_total"] == 1
+
+    # High-risk devices among matching findings (filtered path).
+    assert "high" in kev["risk_device_levels"]
+    assert sum(kev["risk_device_levels"].values()) == 1

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildVulnQuery, clearVulnFilters, formatVulnFilterChip, formatVulnFilterSummary,
-  formatVulnFilterValue, parseVulnFilters, setVulnFilter, splitVendorProductKey,
+  formatVulnFilterValue, localFilenameDay, parseVulnFilters, setVulnFilter, splitVendorProductKey,
   toggleHeatmapCell, toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter,
   vendorProductFacetActive, vulnExportFilename, vulnFilterLink,
 } from './vulnFilters';
@@ -195,6 +195,11 @@ describe('formatVulnFilterSummary / vulnExportFilename / toggleNetworkFilter', (
       { networkNames: { '1': 'Lab Alpha' } },
     );
     expect(name).toMatch(/^vulns_lab-alpha_critical_\d{8}\.csv$/);
+  });
+
+  it('uses local calendar day for the filename date (not UTC ISO)', () => {
+    const local = new Date(2026, 0, 5, 23, 30, 0); // Jan 5 local
+    expect(localFilenameDay(local)).toBe('20260105');
   });
 
   it('toggles network scope without touching severity', () => {

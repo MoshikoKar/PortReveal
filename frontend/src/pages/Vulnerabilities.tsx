@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { downloadBlob, get, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
@@ -93,7 +93,16 @@ export default function Vulnerabilities() {
   const [printFindings, setPrintFindings] = useState<VulnFindingListItem[]>([]);
   const [printLoading, setPrintLoading] = useState(false);
   const [printError, setPrintError] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  /** Deep-link `?print=1`: wait for filtered summary + findings before opening the dialog.
+   * Keep `print=1` in the URL until after print so StrictMode remount still sees it. */
+  const [pendingPrint, setPendingPrint] = useState(() => sp.get('print') === '1');
+  const printInFlight = useRef(false);
   const labelCtx = useMemo(() => labelContextFromSummary(data, networks.data), [data, networks.data]);
+
+  useEffect(() => {
+    if (sp.get('print') === '1') setPendingPrint(true);
+  }, [searchKey, sp]);
 
   const applySp = (next: URLSearchParams, scroll = true) => {
     setFilters(parseVulnFilters(next));
@@ -145,37 +154,97 @@ export default function Vulnerabilities() {
     }
   };
 
-  const printReport = useCallback(async () => {
+  const prepareReport = useCallback(async () => {
     setPrintError(null);
     setPrintLoading(true);
     try {
       const rows = await fetchAllFindings(filters);
       setPrintFindings(rows);
-      // Let React paint the print-only report before opening the dialog.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => window.print());
-      });
+      return true;
     } catch (e: unknown) {
       setPrintError(e instanceof Error ? e.message : 'Could not prepare the print report.');
+      return false;
     } finally {
       setPrintLoading(false);
     }
   }, [filters]);
 
-  // Deep-link: ?print=1 from DeviceDetail / CveDetail "Report for this …" entry points.
+  const waitForPrintPaint = () => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+
+  const printReport = useCallback(async () => {
+    // Need the filtered summary painted into the print report before opening the dialog.
+    if (!data) {
+      setPendingPrint(true);
+      return;
+    }
+    if (printInFlight.current) return;
+    printInFlight.current = true;
+    try {
+      const ok = await prepareReport();
+      if (!ok) return;
+      // prepareReport clears loading; wait for the report DOM (summary + rows) to commit.
+      await waitForPrintPaint();
+      window.print();
+    } finally {
+      printInFlight.current = false;
+    }
+  }, [data, prepareReport]);
+
+  const openPreview = useCallback(async () => {
+    const ok = await prepareReport();
+    if (ok) setPreviewOpen(true);
+  }, [prepareReport]);
+
+  // Deep-link / deferred print: wait until summary for the current filters is loaded, then findings.
+  // Cleanup flips `alive` so React StrictMode double-invoke only prints from the active run.
+  // `print=1` stays in the URL until after a successful print (StrictMode remount-safe).
   useEffect(() => {
-    if (sp.get('print') !== '1') return;
-    const next = new URLSearchParams(sp);
-    next.delete('print');
-    setSp(next, { replace: true });
-    void printReport();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one-shot on mount
+    if (!pendingPrint || !data) return;
+    let alive = true;
+    setPrintError(null);
+    setPrintLoading(true);
+    (async () => {
+      try {
+        const rows = await fetchAllFindings(filters);
+        if (!alive) return;
+        setPrintFindings(rows);
+        setPrintLoading(false);
+        // Commit summary + findings into the print report before opening the dialog.
+        await waitForPrintPaint();
+        if (!alive) return;
+        window.print();
+        if (sp.get('print') === '1') {
+          const next = new URLSearchParams(sp);
+          next.delete('print');
+          setSp(next, { replace: true });
+        }
+      } catch (e: unknown) {
+        if (alive) {
+          setPrintError(e instanceof Error ? e.message : 'Could not prepare the print report.');
+          setPrintLoading(false);
+        }
+      } finally {
+        if (alive) setPendingPrint(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pendingPrint, data, filters, sp, setSp]);
 
   const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
   const epssPct = data ? Math.round(data.epss_threshold * 100) : 0;
   const epssValue = data ? String(data.epss_threshold) : '0.1';
   const networkSelectValue = filters.network_id ?? '';
+  const hasUnassigned = (data?.facets.network ?? []).some((b) => String(b.key) === 'unassigned');
+  const networkActive = !!networkSelectValue;
+  const filtered = activeFilters.length > 0;
+  const snapshotNote = data?.snapshot_trend_note ?? null;
 
   return (
     <>
@@ -188,16 +257,19 @@ export default function Vulnerabilities() {
             own severity label. CVEs with no score in the cache are shown as unscored.
           </p>
         </div>
-        <div className="row wrap gap-2">
-          <label className="row gap-2" style={{ alignItems: 'center' }}>
-            <span className="muted small">Network</span>
+        <div className="row wrap gap-2" style={{ alignItems: 'center' }}>
+          <label
+            className={`vuln-network-select ${networkActive ? 'active' : ''}`}
+            title="Scope the dashboard and reports to one network"
+          >
+            <span className="vuln-network-select-label">Network</span>
             <select
-              aria-label="Filter by network"
+              aria-label="All networks"
               value={networkSelectValue}
               onChange={(e) => set('network_id', e.target.value || undefined, false)}
             >
               <option value="">All networks</option>
-              <option value="unassigned">Unassigned</option>
+              {hasUnassigned && <option value="unassigned">Unassigned</option>}
               {(networks.data ?? []).map((n) => (
                 <option key={n.id} value={String(n.id)}>{n.name}</option>
               ))}
@@ -206,8 +278,12 @@ export default function Vulnerabilities() {
           <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
             {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
-          <button type="button" className="btn" disabled={printLoading} onClick={() => { void printReport(); }}>
-            {printLoading ? 'Preparing…' : 'Print / PDF report'}
+          <button type="button" className="btn" disabled={printLoading} onClick={() => { void openPreview(); }}>
+            {printLoading && !previewOpen ? 'Preparing…' : 'Preview'}
+          </button>
+          <button type="button" className="btn" disabled={printLoading || pendingPrint}
+            onClick={() => { void printReport(); }}>
+            {printLoading || pendingPrint ? 'Preparing…' : 'Print / PDF report'}
           </button>
         </div>
       </div>
@@ -229,6 +305,23 @@ export default function Vulnerabilities() {
         </div>
       )}
 
+      {previewOpen && (
+        <div className="vuln-print-preview no-print" role="region" aria-label="Report preview">
+          <div className="row wrap gap-2" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+            <strong>Report preview</strong>
+            <div className="row gap-2">
+              <button type="button" className="btn" disabled={printLoading}
+                onClick={() => { window.print(); }}>
+                Print / PDF
+              </button>
+              <button type="button" className="btn ghost" onClick={() => setPreviewOpen(false)}>
+                Close preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <VulnPrintReport
         filters={filters}
         labelCtx={labelCtx}
@@ -236,6 +329,7 @@ export default function Vulnerabilities() {
         findings={printFindings}
         loading={printLoading}
         error={printError}
+        preview={previewOpen}
       />
 
       <div className="vuln-screen no-print">
@@ -265,7 +359,10 @@ export default function Vulnerabilities() {
               sub="FIRST.org exploitation-probability score"
               active={filters.epss_min === epssValue}
               onClick={() => toggle('epss_min', epssValue)} />
-            <Kpi label="High-risk devices" value={risk.high} sub={`${risk.medium} medium · ${risk.low} low`}
+            <Kpi label="High-risk devices" value={risk.high}
+              sub={filtered
+                ? `Among matching findings · ${risk.medium} medium · ${risk.low} low`
+                : `${risk.medium} medium · ${risk.low} low`}
               color={risk.high ? 'var(--high)' : undefined}
               active={filters.risk_band === 'high'} onClick={() => toggle('risk_band', 'high')} />
             <Kpi label="Confirmed findings" value={data.confirmed_count}
@@ -298,9 +395,11 @@ export default function Vulnerabilities() {
               <VulnTrend points={data.weekly} />
             </Card>
             <Card title="Open vulnerabilities over time (by severity)">
+              {snapshotNote && <p className="muted small vuln-snapshot-note">{snapshotNote}</p>}
               <VulnSeverityTrend points={data.snapshot_trend} />
             </Card>
             <Card title="Average network risk score over time">
+              {snapshotNote && <p className="muted small vuln-snapshot-note">{snapshotNote}</p>}
               <VulnRiskTrend points={data.snapshot_trend} />
             </Card>
           </div>
@@ -319,6 +418,7 @@ export default function Vulnerabilities() {
             filters={filters}
             onToggleCve={(id) => toggle('cve_id', id)}
             onToggleDevice={(uuid) => toggle('device_uuid', uuid)}
+            onToggleNetwork={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
             onToggleNewSince={(v) => toggle('new_since', v)}
           />
           <div id="vuln-findings">
@@ -329,6 +429,7 @@ export default function Vulnerabilities() {
               sort={findingSort}
               onSort={setFindingSort}
               onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined, false)}
+              onToggleNetwork={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
               onChanged={() => { void reload(); }}
             />
           </div>
