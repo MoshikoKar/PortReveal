@@ -49,8 +49,42 @@ export function toggleVulnFilter(sp: URLSearchParams, key: VulnFilterKey, value:
 export function clearVulnFilters(sp: URLSearchParams): URLSearchParams {
   const next = new URLSearchParams(sp);
   for (const key of VULN_FILTER_KEYS) next.delete(key);
+  next.delete('q');
+  next.delete('only_hidden');
   next.delete('page');
   return next;
+}
+
+/**
+ * Apply a debounced findings-search term to the current URL params without dropping other
+ * filters (facet clicks may have updated the URL while the debounce was pending).
+ * Returns null when `q` is already in sync (no navigation needed).
+ */
+export function applyVulnSearchQ(prev: URLSearchParams, qInput: string): URLSearchParams | null {
+  if ((prev.get('q') ?? '') === qInput) return null;
+  const next = new URLSearchParams(prev);
+  if (qInput) next.set('q', qInput);
+  else {
+    next.delete('q');
+    next.delete('only_hidden');
+  }
+  next.delete('page');
+  return next;
+}
+
+/** True when URL `q` changed outside this box's last write (back/forward/shared link). */
+export function shouldResyncVulnQInput(urlQ: string, lastWrittenQ: string): boolean {
+  return urlQ !== lastWrittenQ;
+}
+
+/** Drop state-redundant hidden_reasons that duplicate the state pill (Dismissed / Potential). */
+export function displayHiddenReasons(state: string, reasons: string[] | undefined): string[] {
+  if (!reasons?.length) return [];
+  return reasons.filter((r) => {
+    if (r === 'Dismissed' && state === 'dismissed') return false;
+    if (r === 'Potential (hidden)' && state === 'potential') return false;
+    return true;
+  });
 }
 
 /** A shareable `/vulnerabilities?...` link for a given filter set (e.g. from a top-list row). */

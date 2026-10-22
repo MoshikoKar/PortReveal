@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { downloadBlob, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
@@ -10,9 +10,9 @@ import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
 import type { VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
 import {
-  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, parseVulnFilters, scrollToVulnFindings,
-  setVulnFilter, toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter,
-  VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
+  applyVulnSearchQ, buildVulnQuery, clearVulnFilters, formatVulnFilterChip, parseVulnFilters,
+  scrollToVulnFindings, setVulnFilter, shouldResyncVulnQInput, toggleHeatmapCell, toggleVulnFilter,
+  toggleVendorProductFilter, VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
 } from '../vulnFilters';
 
 /** Merge optimistic filters into the current URL (keeps page/sort until applySp drops page). */
@@ -61,22 +61,38 @@ export default function Vulnerabilities() {
 
   const page = Number(sp.get('page') || 1);
   const q = sp.get('q') ?? '';
-  // Local input + debounce into URL (same pattern as Devices / Changes); kept out of VULN_FILTER_KEYS.
+  const onlyHidden = sp.get('only_hidden') === '1';
+  // Local input + debounce into URL. Do NOT sync q→qInput on every URL write (that drops keystrokes);
+  // only resync when URL q changed externally (back/forward/link).
   const [qInput, setQInput] = useState(q);
+  const lastWrittenQ = useRef(q);
   useEffect(() => {
-    setQInput(q);
+    if (shouldResyncVulnQInput(q, lastWrittenQ.current)) {
+      lastWrittenQ.current = q;
+      setQInput(q);
+    }
   }, [q]);
   useEffect(() => {
     const t = window.setTimeout(() => {
-      if ((sp.get('q') ?? '') === qInput) return;
-      const next = new URLSearchParams(sp);
-      if (qInput) next.set('q', qInput);
-      else next.delete('q');
-      next.delete('page');
-      setSp(next, { replace: true });
+      // Functional updater reads current params at fire time so a facet click during the 300ms
+      // window is not discarded by a stale `sp` closure.
+      setSp((prev) => {
+        const next = applyVulnSearchQ(prev, qInput);
+        if (!next) return prev;
+        lastWrittenQ.current = qInput;
+        return next;
+      }, { replace: true });
     }, 300);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
+
+  // First keystroke of a new search scrolls the findings table into view.
+  const wasSearching = useRef(Boolean(q));
+  useEffect(() => {
+    const nowSearching = Boolean(qInput.trim());
+    if (nowSearching && !wasSearching.current) scrollToVulnFindings();
+    wasSearching.current = nowSearching;
   }, [qInput]);
 
   const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', undefined, 30000);
@@ -96,27 +112,59 @@ export default function Vulnerabilities() {
     applySp(setVulnFilter(liveSp(), key, value), scroll);
   const toggleVendorProduct = (facetKey: string) => applySp(toggleVendorProductFilter(liveSp(), facetKey));
   const setPage = (p: number) => {
-    const next = new URLSearchParams(sp);
-    if (p <= 1) next.delete('page');
-    else next.set('page', String(p));
-    setSp(next);
+    setSp((prev) => {
+      const next = new URLSearchParams(prev);
+      if (p <= 1) next.delete('page');
+      else next.set('page', String(p));
+      return next;
+    });
+  };
+  const clearSearch = () => {
+    lastWrittenQ.current = '';
+    setQInput('');
+    setSp((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('q');
+      next.delete('only_hidden');
+      next.delete('page');
+      return next;
+    }, { replace: true });
+  };
+  const clearAll = () => {
+    lastWrittenQ.current = '';
+    setQInput('');
+    applySp(clearVulnFilters(sp), false);
+  };
+  const toggleOnlyHidden = () => {
+    setSp((prev) => {
+      const next = new URLSearchParams(prev);
+      if (next.get('only_hidden') === '1') next.delete('only_hidden');
+      else next.set('only_hidden', '1');
+      next.delete('page');
+      return next;
+    });
+    scrollToVulnFindings();
   };
   const activeFilters = Object.entries(filters) as [VulnFilterKey, string][];
+  const hasSearch = Boolean(q);
+  const showFilterBar = activeFilters.length > 0 || hasSearch;
   // Findings sort lives in the URL next to the filters (filter helpers keep it, and drop only `page`).
   const sortKey: FindingSort = FINDING_SORTS.find((k) => k === sp.get('sort')) ?? 'risk';
   const findingSort = { key: sortKey, desc: sp.get('order') === 'desc' };
   const setFindingSort = (key: FindingSort) => {
-    const next = new URLSearchParams(sp);
-    if (key === 'risk') {
-      next.delete('sort');
-      next.delete('order');
-    } else {
-      const desc = key === sortKey ? !findingSort.desc : FINDING_DESC_FIRST.includes(key);
-      next.set('sort', key);
-      next.set('order', desc ? 'desc' : 'asc');
-    }
-    next.delete('page');
-    setSp(next);
+    setSp((prev) => {
+      const next = new URLSearchParams(prev);
+      if (key === 'risk') {
+        next.delete('sort');
+        next.delete('order');
+      } else {
+        const desc = key === sortKey ? !findingSort.desc : FINDING_DESC_FIRST.includes(key);
+        next.set('sort', key);
+        next.set('order', desc ? 'desc' : 'asc');
+      }
+      next.delete('page');
+      return next;
+    });
   };
 
   const exportCsv = async () => {
@@ -124,7 +172,10 @@ export default function Vulnerabilities() {
     setExporting(true);
     try {
       await downloadBlob(
-        `/vulns/export${query(buildVulnQuery(filters, { q: q || undefined }))}`,
+        `/vulns/export${query(buildVulnQuery(filters, {
+          q: q || undefined,
+          only_hidden: onlyHidden ? 'true' : undefined,
+        }))}`,
         `portreveal-vulns-${new Date().toISOString().slice(0, 10)}.csv`,
       );
     } catch (e: unknown) {
@@ -157,20 +208,56 @@ export default function Vulnerabilities() {
           <button type="button" className="btn" onClick={() => window.print()}>Print report</button>
         </div>
       </div>
+
+      <div className="vuln-search-bar no-print">
+        <div className="row wrap gap-2" style={{ alignItems: 'center' }}>
+          <div className="row gap-1" style={{ flex: 1, minWidth: 260, alignItems: 'center' }}>
+            <input
+              type="search"
+              placeholder="Search CVE, device, product, port…"
+              aria-label="Search findings"
+              title="Also shows findings normally hidden by the CVSS floor, dismissal, or potential filter"
+              value={qInput}
+              onChange={(e) => setQInput(e.target.value)}
+              style={{ flex: 1, minWidth: 200 }}
+            />
+            {qInput && (
+              <button type="button" className="btn sm ghost" aria-label="Clear search"
+                onClick={clearSearch} title="Clear search">✕</button>
+            )}
+          </div>
+          {(qInput.trim() || hasSearch) && (
+            <span className="badge accent" title="Search lifts the display floor for matching rows">
+              Includes hidden findings
+            </span>
+          )}
+        </div>
+        {hasSearch && (
+          <p className="muted small" style={{ margin: '8px 0 0' }}>
+            Cards and charts above are not filtered by this search - only the findings table is.
+          </p>
+        )}
+      </div>
+
       {exportError && <div className="alert error no-print">{exportError}</div>}
       <ErrorBox error={error} />
       {/* Chips stay outside the summary loading gate so filter state paints immediately on click. */}
-      {activeFilters.length > 0 && (
+      {showFilterBar && (
         <div className="row wrap gap-2">
           <span className="muted small">Filters:</span>
+          {hasSearch && (
+            <button type="button" className="btn sm toggle on" aria-pressed="true" title="Clear search"
+              onClick={clearSearch}>
+              Search: &quot;{q}&quot; <span aria-hidden>✕</span>
+            </button>
+          )}
           {activeFilters.map(([key, value]) => (
             <button key={key} type="button" className="btn sm toggle on" aria-pressed="true" title="Remove this filter"
               onClick={() => set(key, undefined, false)}>
               {formatVulnFilterChip(key, value, labelCtx)} <span aria-hidden>✕</span>
             </button>
           ))}
-          <button type="button" className="btn sm ghost"
-            onClick={() => applySp(clearVulnFilters(sp), false)}>Clear all</button>
+          <button type="button" className="btn sm ghost" onClick={clearAll}>Clear all</button>
         </div>
       )}
       {!data ? (!error && <Loading />) : (
@@ -255,8 +342,8 @@ export default function Vulnerabilities() {
             <VulnFindingsTable
               filters={filters}
               q={q}
-              qInput={qInput}
-              onQInput={setQInput}
+              onlyHidden={onlyHidden}
+              onToggleOnlyHidden={toggleOnlyHidden}
               page={page}
               onPage={setPage}
               sort={findingSort}

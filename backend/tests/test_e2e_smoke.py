@@ -273,9 +273,9 @@ def test_vulnerabilities_search_shows_below_floor_finding(live_app, browser):
         page.get_by_role("link", name="Vulnerabilities", exact=True).click()
         expect(page).to_have_url(f"{base}/vulnerabilities")
         expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible()
-        findings = page.locator("#vuln-findings")
-        search = findings.get_by_label("Search findings")
+        search = page.get_by_label("Search findings")
         expect(search).to_be_visible(timeout=15_000)
+        findings = page.locator("#vuln-findings")
 
         # Default findings table must not show the below-floor row (summary cards may lag cache).
         expect(findings.get_by_role("link", name=cve_id)).to_have_count(0)

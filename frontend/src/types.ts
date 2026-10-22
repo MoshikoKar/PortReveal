@@ -804,6 +804,12 @@ export interface VulnFindingListItem extends DeviceVuln {
   hidden_reasons?: string[];
 }
 
+/** GET /api/vulns list envelope; `hidden_total` / `total_matches` appear when `q` is set. */
+export interface VulnFindingsPage extends Paged<VulnFindingListItem> {
+  hidden_total?: number;
+  total_matches?: number;
+}
+
 export interface CveAffectedDevice {
   device_uuid: string;
   device_ip: string;
