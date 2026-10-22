@@ -214,23 +214,29 @@ def cmd_vuln_import(args) -> int:
     from .core.vuln.match import match_all
     from .core.vuln.score import apply_risk_scores
     from .core.vuln.sync import import_nvd_json
-    from .db import session_scope
+    from .core.vuln.watchlist import check_watchlist_safe, schedule_watchlist_delivery
+    from .db import session_scope, utcnow
     from .models import Device
 
+    event_ids: list[int] = []
     try:
         with session_scope() as db:
             result = import_nvd_json(db, args.path)
-            result["match"] = match_all(db)
+            now = utcnow()
+            result["match"] = match_all(db, now=now)
             ids = list(db.scalars(select(Device.id)))
-            from .db import utcnow
-            apply_risk_scores(db, ids, now=utcnow())
+            apply_risk_scores(db, ids, now=now)
+            wl = check_watchlist_safe(db, now=now)
+            event_ids = list(wl.get("event_ids") or [])
+            result["watchlist"] = {k: v for k, v in wl.items() if k != "event_ids"}
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except Exception as exc:
         print(f"vuln-import failed: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps(result, indent=2))
+    schedule_watchlist_delivery(event_ids)
+    print(json.dumps(result, indent=2, default=str))
     return 0
 
 

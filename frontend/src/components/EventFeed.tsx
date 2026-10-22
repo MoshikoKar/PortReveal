@@ -23,6 +23,28 @@ export function EventFeed({ events, empty = 'No changes recorded yet.' }: { even
   );
 }
 
+type WatchDetail = {
+  cve_id?: string;
+  device_uuid?: string;
+  hostname?: string | null;
+  ip?: string | null;
+  port?: number;
+  protocol?: string;
+  state?: string;
+  cvss?: number | null;
+  kev?: boolean;
+};
+
+function parseWatchDetail(ev: ChangeEvent): WatchDetail | null {
+  if (ev.event_type !== 'cve_watch_match' || !ev.old_value) return null;
+  try {
+    const parsed = JSON.parse(ev.old_value) as WatchDetail;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function EventDetail({ ev }: { ev: ChangeEvent }) {
   const port = ev.port != null ? <span className="chip new">{(ev.protocol || 'tcp').toUpperCase()}/{ev.port}</span> : null;
   switch (ev.event_type) {
@@ -43,8 +65,40 @@ export function EventDetail({ ev }: { ev: ChangeEvent }) {
       return <span><span className="mono">{ev.ip}</span>{ev.new_value && <span className="muted"> · {ev.new_value}</span>}</span>;
     case 'watch_match':
     case 'policy_violation':
-    case 'cve_watch_match':
       return <span>{ev.new_value ?? ev.message}</span>;
+    case 'cve_watch_match': {
+      const detail = parseWatchDetail(ev);
+      const cveId = detail?.cve_id;
+      const stateLabel = detail?.state === 'potential' ? 'potential' : 'confirmed';
+      return (
+        <span>
+          {cveId ? (
+            <Link className="mono" to={`/vulnerabilities/${encodeURIComponent(cveId)}`}>{cveId}</Link>
+          ) : (
+            <span className="mono">{ev.new_value ?? ev.message}</span>
+          )}
+          {detail && (
+            <>
+              <span className="muted"> · {stateLabel}</span>
+              {detail.port != null && (
+                <span className="chip new">{(detail.protocol || 'tcp').toUpperCase()}/{detail.port}</span>
+              )}
+              {detail.cvss != null && <span className="muted"> · CVSS {detail.cvss}</span>}
+              {detail.kev && <span className="badge high" style={{ marginLeft: 6 }}>KEV</span>}
+              {detail.device_uuid && (
+                <>
+                  <span className="muted"> · </span>
+                  <Link to={`/devices/${detail.device_uuid}`}>
+                    {detail.hostname || detail.ip || 'device'}
+                  </Link>
+                </>
+              )}
+            </>
+          )}
+          {!detail && ev.new_value && <span className="muted"> · {ev.new_value}</span>}
+        </span>
+      );
+    }
     case 'monitor_change':
       return <span>{ev.new_value}{port && <> {port}</>}</span>;
     case 'geo_mismatch':

@@ -3,20 +3,51 @@ import { Link } from 'react-router-dom';
 import { del, patch, post } from '../api';
 import { Card, Empty, ErrorBox, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
-import type { CveWatchlistEntry } from '../types';
+import type { CveWatchlistAddResult, CveWatchlistEntry } from '../types';
 import { fmtTime, relTime, useApi, useInFlight } from '../util';
 
 const STATUS_BADGE: Record<CveWatchlistEntry['status'], string> = {
   pending: 'medium',
   not_found: 'outline',
   found: 'high',
+  only_dismissed: 'outline',
 };
 
 const STATUS_LABEL: Record<CveWatchlistEntry['status'], string> = {
   pending: 'Pending sync',
   not_found: 'Not found',
   found: 'Found',
+  only_dismissed: 'Only dismissed findings',
 };
+
+const BULK_EXAMPLE = 'CVE-2024-1234, CVE-2024-5678 and CVE-2025-1111';
+
+function findingsHref(cveId: string) {
+  return `/vulnerabilities?cve_id=${encodeURIComponent(cveId)}#vuln-findings`;
+}
+
+function pendingTitle(entry: CveWatchlistEntry) {
+  if (entry.status !== 'pending') return undefined;
+  if (entry.next_sync_at) {
+    return `Not in the local CVE cache yet. Next scheduled sync: ${fmtTime(entry.next_sync_at)}`;
+  }
+  return 'Not in the local CVE cache yet. Waiting for the next CVE feed sync.';
+}
+
+function deviceCell(entry: CveWatchlistEntry) {
+  if (entry.status !== 'found' || !entry.affected_devices) {
+    return <span className="muted">-</span>;
+  }
+  const parts: string[] = [];
+  if (entry.confirmed_count) parts.push(`${entry.confirmed_count} confirmed`);
+  if (entry.potential_count) parts.push(`${entry.potential_count} potential`);
+  return (
+    <Link to={findingsHref(entry.cve_id)} title={parts.join(', ') || undefined}>
+      {entry.affected_devices}
+      {parts.length > 0 && <div className="muted small">{parts.join(' · ')}</div>}
+    </Link>
+  );
+}
 
 export default function CveWatchlist() {
   const { isAdmin } = useApp();
@@ -25,6 +56,7 @@ export default function CveWatchlist() {
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const { pending, track } = useInFlight();
 
@@ -32,10 +64,17 @@ export default function CveWatchlist() {
     if (!bulk.trim() || saving) return;
     setSaving(true);
     setSaveError(null);
+    setAddMsg(null);
     try {
-      await post('/cve-watchlist', { cve_ids: bulk, note: note.trim() || null });
+      const result = await post<CveWatchlistAddResult>('/cve-watchlist', {
+        cve_ids: bulk,
+        note: note.trim() || null,
+      });
       setBulk('');
       setNote('');
+      const added = result.added?.length ?? 0;
+      const already = result.already_watched?.length ?? 0;
+      setAddMsg(`Added ${added}, already watched ${already}.`);
       reload();
     } catch (e: any) {
       setSaveError(e.message);
@@ -85,7 +124,10 @@ export default function CveWatchlist() {
             next sync.
           </p>
         </div>
-        <Link className="btn" to="/vulnerabilities">&larr; Back to vulnerabilities</Link>
+        <div className="row" style={{ gap: 8 }}>
+          {isAdmin && <Link className="btn" to="/settings/notifications">Delivery settings</Link>}
+          <Link className="btn" to="/vulnerabilities">&larr; Back to vulnerabilities</Link>
+        </div>
       </div>
       <ErrorBox error={error || actionError} />
 
@@ -99,15 +141,16 @@ export default function CveWatchlist() {
                 className="mono"
                 value={bulk}
                 onChange={(e) => setBulk(e.target.value)}
-                placeholder={'CVE-2026-109618\nCVE-2026-109619'}
+                placeholder={BULK_EXAMPLE}
               />
-              <span className="hint">Separate with spaces, commas, newlines, or &quot;and&quot;.</span>
+              <span className="hint">Separate with spaces, commas, newlines, or &quot;and&quot;. Example: {BULK_EXAMPLE}</span>
             </label>
             <label className="field">
               Note (optional)
               <input type="text" value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)} />
             </label>
             <ErrorBox error={saveError} />
+            {addMsg && <div className="alert ok">{addMsg}</div>}
             <div>
               <button type="button" className="btn primary" disabled={saving || !bulk.trim()} onClick={() => { void add(); }}>
                 {saving ? 'Adding…' : 'Add to watchlist'}
@@ -119,7 +162,15 @@ export default function CveWatchlist() {
 
       <Card flush title="Watched CVEs">
         {loading && !data ? <SkeletonRows cols={6} /> : !data?.length ? (
-          <Empty>No CVEs on the watchlist yet.{isAdmin ? ' Add one above.' : ''}</Empty>
+          <Empty>
+            No CVEs on the watchlist yet.
+            {isAdmin ? (
+              <>
+                {' '}Paste IDs above to subscribe — for example{' '}
+                <span className="mono">{BULK_EXAMPLE}</span>.
+              </>
+            ) : null}
+          </Empty>
         ) : (
           <div className="table-wrap">
             <table>
@@ -145,9 +196,11 @@ export default function CveWatchlist() {
                       )}
                     </td>
                     <td>
-                      <span className={`badge ${STATUS_BADGE[e.status]}`}>{STATUS_LABEL[e.status]}</span>
+                      <span className={`badge ${STATUS_BADGE[e.status]}`} title={pendingTitle(e)}>
+                        {STATUS_LABEL[e.status]}
+                      </span>
                     </td>
-                    <td className="right">{e.status === 'found' ? e.affected_devices : <span className="muted">-</span>}</td>
+                    <td className="right">{deviceCell(e)}</td>
                     <td className="small">{e.note || <span className="muted">-</span>}</td>
                     <td>
                       {isAdmin ? (

@@ -603,7 +603,7 @@ export interface NotificationSettings {
   watchlist_webhooks_enabled: boolean;
 }
 
-export type CveWatchlistStatus = 'pending' | 'not_found' | 'found';
+export type CveWatchlistStatus = 'pending' | 'not_found' | 'found' | 'only_dismissed';
 
 export interface CveWatchlistEntry {
   id: number;
@@ -615,8 +615,19 @@ export interface CveWatchlistEntry {
   status: CveWatchlistStatus;
   affected_devices: number;
   finding_count: number;
+  confirmed_count: number;
+  potential_count: number;
+  dismissed_count: number;
   last_alert_at: string | null;
   cve_known: boolean;
+  /** Present on pending rows: estimated next CVE feed sync. */
+  next_sync_at: string | null;
+}
+
+export interface CveWatchlistAddResult {
+  added: string[];
+  already_watched: string[];
+  entries: CveWatchlistEntry[];
 }
 
 export interface LdapSettings {

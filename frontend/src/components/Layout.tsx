@@ -32,6 +32,7 @@ const NAV: { to: string; label: string; icon: keyof typeof ICONS; end?: boolean 
   { to: '/scans', label: 'Scans', icon: 'scans' },
   { to: '/devices', label: 'Devices', icon: 'devices' },
   { to: '/ports', label: 'Ports', icon: 'ports' },
+  { to: '/vulnerabilities/watchlist', label: 'CVE Watchlist', icon: 'vulnerabilities' },
   { to: '/vulnerabilities', label: 'Vulnerabilities', icon: 'vulnerabilities' },
   { to: '/changes', label: 'Changes', icon: 'changes' },
   { to: '/watches', label: 'Watches', icon: 'watches' },

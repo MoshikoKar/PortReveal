@@ -15,7 +15,7 @@ from ..core.notify import format_sample_digest, send_email, smtp_failure_reason
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
 from ..db import get_db
-from ..models import EVENT_TYPES, GeoFeedState, User, Vulnerability, VulnFeedState
+from ..models import EV_CVE_WATCH_MATCH, EVENT_TYPES, GeoFeedState, User, Vulnerability, VulnFeedState
 from ..security import encrypt_secret
 from ..settings_store import (
     CdnAsnEntry,
@@ -313,14 +313,17 @@ class NotificationIn(BaseModel):
     recipients: list[str] = Field(default_factory=list, max_length=100)
     event_types: list[str] = Field(default_factory=list)
     digest_time: str = Field("08:00", max_length=5)
-    watchlist_email_enabled: bool = True
-    watchlist_webhooks_enabled: bool = True
+    # Optional: omit (null) to preserve the stored watchlist delivery toggles on partial updates.
+    watchlist_email_enabled: bool | None = None
+    watchlist_webhooks_enabled: bool | None = None
 
 
 def notifications_out(cfg: NotificationSettings) -> dict:
     data = cfg.model_dump(exclude={"password_enc"})
     data["password_set"] = bool(cfg.password_enc)
-    data["available_event_types"] = list(EVENT_TYPES)
+    # Digest "Notify on" checkboxes: CVE watchlist is always included via ALWAYS_NOTIFY_TYPES and
+    # has its own delivery toggles — omit it from the generic event-type list.
+    data["available_event_types"] = [t for t in EVENT_TYPES if t != EV_CVE_WATCH_MATCH]
     return data
 
 
@@ -335,6 +338,10 @@ def put_notifications(body: NotificationIn, request: Request, db: Session = Depe
     current = get_section(db, NotificationSettings)
     data = body.model_dump(exclude={"password"})
     data["password_enc"] = encrypt_secret(body.password) if body.password is not None else current.password_enc
+    if body.watchlist_email_enabled is None:
+        data["watchlist_email_enabled"] = current.watchlist_email_enabled
+    if body.watchlist_webhooks_enabled is None:
+        data["watchlist_webhooks_enabled"] = current.watchlist_webhooks_enabled
     try:
         cfg = NotificationSettings.model_validate(data)
     except ValueError as exc:

@@ -625,6 +625,32 @@ def sync_due(db: Session, cfg: VulnSettings, *, now: datetime | None = None) -> 
     return now >= due
 
 
+def estimate_next_cve_sync_at(db: Session, *, now: datetime | None = None) -> datetime | None:
+    """Best-effort next scheduled CVE feed sync (for UI tooltips). None when sync is disabled."""
+    from ...settings_store import get_section
+
+    cfg = get_section(db, VulnSettings)
+    if not cfg.enabled or cfg.offline_mode:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if is_cache_empty(db) or mirror_incomplete(db):
+        return now
+    if db.scalar(select(VulnFeedState.source).where(VulnFeedState.last_error.isnot(None)).limit(1)):
+        return now
+    last = db.scalar(select(func.max(VulnFeedState.last_synced_at)))
+    if last is None:
+        return now
+    earliest = last + timedelta(hours=cfg.sync_interval_hours)
+    if now < earliest:
+        return earliest
+    try:
+        hh, mm = (int(x) for x in cfg.sync_time.split(":"))
+        due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    except ValueError:
+        return now
+    return now if now >= due else due
+
+
 def sync_all(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = None,
             now: datetime | None = None) -> dict:
     """Run every configured source. Best-effort per source: one failing source does not stop the rest."""
@@ -667,9 +693,10 @@ def sync_and_rescore(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = 
     refresh_after_scan_or_sync(db, now=now)
     db.commit()
     _release_session_memory(db)
-    from .watchlist import check_watchlist_safe
-    check_watchlist_safe(db, now=now)
+    from .watchlist import check_watchlist_safe, schedule_watchlist_delivery
+    wl = check_watchlist_safe(db, now=now)
     db.commit()
+    schedule_watchlist_delivery(wl.get("event_ids") or [])
     return results
 
 
