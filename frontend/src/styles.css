@@ -143,6 +143,19 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .page-head p { margin: 4px 0 0; color: var(--muted); }
+/* Findings search: stays under the top bar while scrolling the long dashboard. */
+.vuln-search-bar {
+  position: sticky; top: 58px; z-index: 4;
+  padding: 10px 12px; margin: 0 calc(-1 * var(--space-1, 0px));
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+}
+/* type=text avoids the native search cancel; we render a single explicit ✕. */
+.vuln-search-input::-webkit-search-cancel-button { display: none; }
+@media (max-width: 900px) {
+  .vuln-search-bar { top: 0; }
+}
 
 .banner {
   padding: 8px 24px; font-weight: 600; font-size: 13px; letter-spacing: 0.02em;
