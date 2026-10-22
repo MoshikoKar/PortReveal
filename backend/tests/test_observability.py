@@ -209,6 +209,7 @@ def test_smtp_test_endpoint_hides_raw_error_from_ui_and_audit(client, monkeypatc
         "ok": False,
         "error": "authentication failed (check username and password)",
         "error_type": "SMTPAuthenticationError",
+        "persisted": False,
     }
     assert "corp.example" not in json.dumps(entry)
 
