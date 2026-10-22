@@ -790,28 +790,28 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
   .vuln-print-tops { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
   .vuln-print-tops ol { margin: 0; padding-left: 1.1rem; }
   .vuln-print-empty { color: #444; font-style: italic; }
-  .vuln-print-hostname { font-size: 6.5pt; color: #555; white-space: nowrap; }
-  .vuln-print-title {
+  .vuln-print-hostname { color: #555; }
+  .nowrap { white-space: nowrap; }
+  /* Only title / hostname / port·service may ellipsize — never CVE, IP, First seen, scores. */
+  .vuln-print-clip {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
   }
-  .nowrap { white-space: nowrap; }
 
   .vuln-print-table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
-    font-size: 6.5pt;
+    font-size: 7.5pt;
   }
   .vuln-print-table th, .vuln-print-table td {
     border: 1px solid #bbb;
     padding: 1px 3px;
     vertical-align: middle;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
-    line-height: 1.15;
+    line-height: 1.2;
   }
   .vuln-print-table th {
     background: #eee !important;
@@ -825,13 +825,31 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
   .vuln-print-table th:nth-child(2), .vuln-print-table td:nth-child(2) { width: 7%; }   /* Severity */
   .vuln-print-table th:nth-child(3), .vuln-print-table td:nth-child(3) { width: 5%; }   /* CVSS */
   .vuln-print-table th:nth-child(4), .vuln-print-table td:nth-child(4) { width: 5%; }   /* EPSS */
-  .vuln-print-table th:nth-child(5), .vuln-print-table td:nth-child(5) { width: 11%; }  /* CVE */
-  .vuln-print-table th:nth-child(6), .vuln-print-table td:nth-child(6) { width: 16%; }  /* Title */
+  .vuln-print-table th:nth-child(5), .vuln-print-table td:nth-child(5) { width: 13%; }  /* CVE — full id */
+  .vuln-print-table th:nth-child(6), .vuln-print-table td:nth-child(6) { width: 14%; }  /* Title (clip) */
   .vuln-print-table th:nth-child(7), .vuln-print-table td:nth-child(7) { width: 14%; }  /* Device */
-  .vuln-print-table th:nth-child(8), .vuln-print-table td:nth-child(8) { width: 9%; }   /* Network */
-  .vuln-print-table th:nth-child(9), .vuln-print-table td:nth-child(9) { width: 12%; }  /* Port */
-  .vuln-print-table th:nth-child(10), .vuln-print-table td:nth-child(10) { width: 7%; } /* State */
+  .vuln-print-table th:nth-child(8), .vuln-print-table td:nth-child(8) { width: 8%; }   /* Network */
+  .vuln-print-table th:nth-child(9), .vuln-print-table td:nth-child(9) { width: 10%; }  /* Port (clip) */
+  .vuln-print-table th:nth-child(10), .vuln-print-table td:nth-child(10) { width: 10%; } /* State + hidden tags */
   .vuln-print-table th:nth-child(11), .vuln-print-table td:nth-child(11) { width: 10%; } /* First seen */
+
+  .vuln-print-host {
+    display: flex;
+    align-items: baseline;
+    gap: 0;
+    min-width: 0;
+  }
+  .vuln-print-host > .mono { flex: 0 0 auto; }
+  .vuln-print-host > .vuln-print-hostname { flex: 1 1 auto; min-width: 0; }
+  .vuln-print-state {
+    white-space: normal;
+    line-height: 1.15;
+  }
+  .vuln-print-state .vuln-print-hidden-reason {
+    display: inline-block;
+    margin-inline-start: 2px;
+    font-size: 6.5pt;
+  }
 
   /* Severity / KEV badges must stay readable on paper. */
   .vuln-print-report .badge {
@@ -840,7 +858,7 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
     background: #f3f3f3 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
-    font-size: 6pt;
+    font-size: 6.5pt;
     padding: 0 2px;
   }
   .vuln-print-report .badge.high { background: #fdd !important; border-color: #c66; }

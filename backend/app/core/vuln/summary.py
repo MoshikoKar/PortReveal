@@ -36,7 +36,7 @@ from ...models import (
 from ...settings_store import VulnSettings, get_section
 from ..mockdata import device_visible
 from .buckets import severity_bucket
-from .display import is_visible, normalize_cve_id
+from .display import hidden_reasons, is_visible, normalize_cve_id
 from .filters import NETWORK_UNASSIGNED, FindingFilters, filters_active, search_term
 from .lifecycle import sync_finding_lifecycle
 from .score import RISK_HIGH_THRESHOLD, RISK_MEDIUM_THRESHOLD
@@ -266,7 +266,9 @@ def _apply_finding_filters(
     if term is not None:
         out = [f for f in out if _finding_matches_search(f, term, vp_map)]
         if filters.only_hidden and cfg is not None:
-            out = [f for f in out if not _visible(f, cfg)]
+            # Match GET /api/vulns ``only_hidden`` / ``hidden_reasons`` (dismissed is hidden
+            # from the default list even though ``is_visible`` treats it as floor-visible).
+            out = [f for f in out if hidden_reasons(f.state, f.kev, f.cvss_base, cfg)]
     if filters.state:
         out = [f for f in out if f.state == filters.state]
     if filters.severity:

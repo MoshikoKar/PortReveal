@@ -14,12 +14,6 @@ function severityClass(sev: string | null | undefined): string {
   return 'outline';
 }
 
-function truncateTitle(text: string | null | undefined, max = 36): string {
-  const t = (text || '').replace(/\s+/g, ' ').trim();
-  if (!t) return '—';
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
-}
-
 /** Print-only vulnerability findings report: filter summary, executive counts, full findings table. */
 export function VulnPrintReport({
   filters, labelCtx, summary, findings, loading, error, preview = false, searchQ,
@@ -148,22 +142,33 @@ export function VulnPrintReport({
                       </td>
                       <td className="mono">{formatCvss(f.cvss_base)}</td>
                       <td className="mono small">{formatEpssPct(f.epss)}</td>
-                      <td className="mono nowrap">{f.cve_id}</td>
-                      <td className="small vuln-print-title nowrap">{truncateTitle(f.summary)}</td>
-                      <td className="vuln-print-host nowrap">
+                      <td className="mono">{f.cve_id}</td>
+                      <td className="small vuln-print-title vuln-print-clip">
+                        {(f.summary || '').replace(/\s+/g, ' ').trim() || '—'}
+                      </td>
+                      <td className="vuln-print-host">
                         <span className="mono">{f.device_ip}</span>
                         {f.device_hostname && (
-                          <span className="vuln-print-hostname"> · {truncateTitle(f.device_hostname, 24)}</span>
+                          <span className="vuln-print-hostname vuln-print-clip">
+                            {' '}· {f.device_hostname}
+                          </span>
                         )}
                       </td>
                       <td>{f.network ?? 'Unassigned'}</td>
-                      <td className="small">
+                      <td className="small vuln-print-clip">
                         {f.protocol.toUpperCase()}/{f.port}
                         {' '}
                         {[f.product, f.version].filter(Boolean).join(' ') || f.service || ''}
                       </td>
-                      <td className="nowrap">{f.state}</td>
-                      <td className="small nowrap">{fmtTime(f.first_seen_at ?? f.matched_at)}</td>
+                      <td className="vuln-print-state">
+                        <span>{f.state}</span>
+                        {(f.hidden_reasons ?? []).map((reason) => (
+                          <span key={reason} className="badge outline vuln-print-hidden-reason">
+                            {reason}
+                          </span>
+                        ))}
+                      </td>
+                      <td className="small">{fmtTime(f.first_seen_at ?? f.matched_at)}</td>
                     </tr>
                   ))}
                 </tbody>

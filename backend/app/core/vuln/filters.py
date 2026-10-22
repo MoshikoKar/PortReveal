@@ -114,9 +114,13 @@ def content_disposition_attachment(filename: str) -> str:
 
     Starlette/uvicorn encode response headers as latin-1; a raw Hebrew ``filename="…"`` 500s.
     Underscores in the ASCII fallback are preserved (``vulns_net_YYYYMMDD.csv``).
+    Empty / dash-only underscore segments (e.g. a Hebrew slug dropped by ``ascii_only``)
+    are removed so ``vulns_-_YYYYMMDD.csv`` becomes ``vulns_YYYYMMDD.csv``.
     """
     stem, ext = (filename.rsplit(".", 1) + [""])[:2] if "." in filename else (filename, "")
     ascii_stem = sanitize_filename_part(stem, max_len=80, ascii_only=True)
+    parts = [p for p in ascii_stem.split("_") if p and p.strip("-")]
+    ascii_stem = "_".join(parts) if parts else "vulns"
     ascii_name = f"{ascii_stem}.{ext}" if ext else ascii_stem
     ascii_name = ascii_name.replace("\\", "_").replace('"', "_")
     encoded = quote(filename, safe="")

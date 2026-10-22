@@ -650,9 +650,13 @@ def test_export_vulns_hebrew_network_name_content_disposition(admin, db):
     cd.encode("latin-1")
     assert 'filename="' in cd
     assert "filename*=UTF-8''" in cd
-    # UTF-8 form keeps the Hebrew slug; ASCII fallback stays latin-1-safe.
+    # UTF-8 form keeps the Hebrew slug; ASCII fallback stays latin-1-safe and drops empty segments.
     assert "רשת" in unquote(cd) or "%D7%A8" in cd
     assert "vulns_" in cd
+    assert "vulns_-_" not in cd
+    ascii_name = cd.split("filename=")[1].split(";")[0].strip().strip('"')
+    assert ascii_name.startswith("vulns_") and ascii_name.endswith(".csv")
+    assert "_-_" not in ascii_name
     assert "CVE-2024-HEB" in r.text
 
 
@@ -771,3 +775,34 @@ def test_export_filename_preserves_underscores_in_ascii_fallback(admin, db):
     cd = content_disposition_attachment("vulns_network_a_20261022.csv")
     assert 'filename="vulns_network_a_20261022.csv"' in cd
     assert "filename*=UTF-8''vulns_network_a_20261022.csv" in cd
+
+
+def test_export_filename_ascii_drops_empty_slug_parts_for_hebrew_network(admin, db):
+    """Hebrew network slug → ASCII fallback drops empty/dash segments (not ``vulns_-_YYYYMMDD``)."""
+    from urllib.parse import unquote
+
+    from app.core.vuln.filters import content_disposition_attachment
+
+    cd = content_disposition_attachment("vulns_רשת-בדיקה_20261022.csv")
+    assert 'filename="vulns_20261022.csv"' in cd
+    assert "vulns_-_" not in cd
+    assert "רשת" in unquote(cd) or "%D7%A8" in cd
+
+    net = make_network(db, cidr="10.30.0.0/24", name="רשת-בדיקה")
+    scan(
+        ScriptedScanner([host("10.30.0.2", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:31")]),
+        network_id=net.id,
+    )
+    d = device_by_ip(db, "10.30.0.2")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-HEB2", cvss_base=9.8, kev=True, summary="hebrew net 2"))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-HEB2", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    r = admin.get("/api/vulns/export", params={"network_id": net.id})
+    assert r.status_code == 200
+    ascii_name = r.headers["content-disposition"].split("filename=")[1].split(";")[0].strip().strip('"')
+    assert ascii_name.startswith("vulns_")
+    assert "_-_" not in ascii_name
+    assert ascii_name.endswith(".csv")
