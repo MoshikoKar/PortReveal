@@ -1,4 +1,5 @@
 """FastAPI application entry point (uvicorn app.main:app)."""
+
 from __future__ import annotations
 
 import logging
@@ -46,6 +47,7 @@ from .core.query import QueryError
 from .core.scheduler import scheduler
 from .core.vuln.manager import vuln_job_manager
 from .core.web_capture import web_capture_manager
+from .core.webhooks import start_delivery_worker, stop_delivery_worker
 from .db import init_engine
 from .logging_setup import setup_logging
 from .migrate import upgrade
@@ -69,27 +71,34 @@ async def lifespan(app: FastAPI):
     try:
         upgrade()
     except Exception:
-        log.exception("DATABASE MIGRATION FAILED - check DATABASE_URL / database availability. "
-                      "For a disposable dev database run: npm run db:reset")
+        log.exception(
+            "DATABASE MIGRATION FAILED - check DATABASE_URL / database availability. "
+            "For a disposable dev database run: npm run db:reset"
+        )
         raise
     init_engine()
     st = scanner_status(refresh=True)
     (log.warning if st.effective_mode != "nmap" else log.info)("Scanner: %s", st.message)
     if not st.nmap_detected:
-        log.warning("nmap executable not found (NMAP_PATH=%s). Real network scans cannot run until nmap is "
-                    "installed (e.g. apt-get install nmap). The application keeps working.", s.nmap_path)
+        log.warning(
+            "nmap executable not found (NMAP_PATH=%s). Real network scans cannot run until nmap is "
+            "installed (e.g. apt-get install nmap). The application keeps working.",
+            s.nmap_path,
+        )
     seed_dev()
     if s.background_jobs:
         manager.start()
         web_capture_manager.start()
         vuln_job_manager.start()
         scheduler.start()
+        start_delivery_worker()
     stop_watcher = watcher_from_env()  # set by scripts/run.ps1 (Windows production)
     if stop_watcher:
         stop_watcher.start()
     yield
     if stop_watcher:
         stop_watcher.stop()
+    stop_delivery_worker()
     scheduler.stop()
     web_capture_manager.stop()
     vuln_job_manager.stop()
@@ -124,9 +133,31 @@ app = FastAPI(
     redoc_url=None,
 )
 
-for r in (auth, setup, system, dashboard, devices, events, scans, networks, exclusions, settings, users, misc,
-          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks, vuln_jobs, vulns,
-          cve_watchlist):
+for r in (
+    auth,
+    setup,
+    system,
+    dashboard,
+    devices,
+    events,
+    scans,
+    networks,
+    exclusions,
+    settings,
+    users,
+    misc,
+    web_captures,
+    data_transfer,
+    search,
+    watches,
+    reports,
+    tokens,
+    host,
+    webhooks,
+    vuln_jobs,
+    vulns,
+    cve_watchlist,
+):
     app.include_router(r.router)
 
 
@@ -136,8 +167,7 @@ async def http_error_handler(request: Request, exc: StarletteHTTPException):
     if isinstance(exc.detail, str):
         body = error_body(exc.status_code, exc.detail, getattr(exc, "code", None))
     else:
-        body = error_body(exc.status_code, f"Request failed ({exc.status_code})", getattr(exc, "code", None),
-                          detail=exc.detail)
+        body = error_body(exc.status_code, f"Request failed ({exc.status_code})", getattr(exc, "code", None), detail=exc.detail)
     return JSONResponse(status_code=exc.status_code, content=jsonable_encoder(body), headers=exc.headers)
 
 
@@ -186,8 +216,15 @@ async def request_timing(request: Request, call_next):
         # Parameter names only: values (search text, filters) stay out of the rotating log files.
         names = sorted({k for k, _ in request.query_params.multi_items()})
         target = request.url.path + (f"?{'&'.join(names)}" if names else "")
-        perf_log.log(logging.WARNING if slow else logging.DEBUG, "%s %s -> %s in %.0f ms%s",
-                     request.method, target, response.status_code, ms, " (slow)" if slow else "")
+        perf_log.log(
+            logging.WARNING if slow else logging.DEBUG,
+            "%s %s -> %s in %.0f ms%s",
+            request.method,
+            target,
+            response.status_code,
+            ms,
+            " (slow)" if slow else "",
+        )
     return response
 
 
@@ -234,7 +271,7 @@ class VersionedPathAlias:
         if scope["type"] in ("http", "websocket"):
             path: str = scope["path"]
             if path == API_VERSIONED_PREFIX or path.startswith(API_VERSIONED_PREFIX + "/"):
-                canonical = API_PREFIX + path[len(API_VERSIONED_PREFIX):]
+                canonical = API_PREFIX + path[len(API_VERSIONED_PREFIX) :]
                 scope = {**scope, "path": canonical, "raw_path": canonical.encode()}
         await self.app(scope, receive, send)
 
@@ -257,6 +294,7 @@ if (_dist / "index.html").exists():
             return FileResponse(candidate)
         return FileResponse(_dist / "index.html")
 else:
+
     @app.get("/", include_in_schema=False)
     async def root():
         body = {

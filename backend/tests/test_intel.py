@@ -1,4 +1,5 @@
 """Inventory intelligence: rule tags, device types, exposure score, HTTP sync, watches, digest."""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -33,18 +34,23 @@ from .helpers import ScriptedScanner, device_by_ip, event_types, host, make_netw
 
 
 def facts(ports: list[tuple], *, vendor=None, os_name=None, hostname=None, zone=None, first_seen=None) -> DeviceFacts:
-    d = Device(current_ip="10.0.0.5", vendor=vendor, os_name=os_name, hostname=hostname,
-               first_seen=first_seen or utcnow() - timedelta(days=30))
+    d = Device(
+        current_ip="10.0.0.5",
+        vendor=vendor,
+        os_name=os_name,
+        hostname=hostname,
+        first_seen=first_seen or utcnow() - timedelta(days=30),
+    )
     net = Network(name="n", cidr="10.0.0.0/24", zone=zone)
-    svcs = [Service(p[0], "tcp", p[1] if len(p) > 1 else None, p[2] if len(p) > 2 else None, None, None, None)
-            for p in ports]
+    svcs = [Service(p[0], "tcp", p[1] if len(p) > 1 else None, p[2] if len(p) > 2 else None, None, None, None) for p in ports]
     return DeviceFacts(d, net, svcs)
 
 
 # --- rules ---------------------------------------------------------------------------------------------
 def test_rules_tag_and_pick_highest_priority_type():
     tags, dtype, confidence, evidence = classify(
-        facts([(88, "kerberos-sec"), (389, "ldap"), (445, "microsoft-ds"), (3389, "ms-wbt-server")]))
+        facts([(88, "kerberos-sec"), (389, "ldap"), (445, "microsoft-ds"), (3389, "ms-wbt-server")])
+    )
     assert dtype == "domain-controller"
     assert {"domain-controller", "windows", "remote-access"} <= tags.keys()
     assert tags["domain-controller"] == "ports 88, 389, 445 open"
@@ -66,11 +72,15 @@ def test_rules_tag_and_pick_highest_priority_type():
 
 def test_media_device_not_printer_or_camera_on_weak_ports():
     """Consumer AV: junk LPD + AirTunes RTSP + smart-TV product → media-device, not printer/camera."""
-    tags, dtype, _, _ = classify(facts([
-        (515, "tcpwrapped"),
-        (7000, "rtsp", "AirTunes rtspd"),
-        (3001, "http", "LG smart TV http service"),
-    ]))
+    tags, dtype, _, _ = classify(
+        facts(
+            [
+                (515, "tcpwrapped"),
+                (7000, "rtsp", "AirTunes rtspd"),
+                (3001, "http", "LG smart TV http service"),
+            ]
+        )
+    )
     assert dtype == "media-device"
     assert "media-device" in tags and "printer" not in tags and "camera" not in tags
 
@@ -134,8 +144,7 @@ def test_snmp_sysdescr_is_a_classification_signal():
 
 def test_manual_tag_override_wins_over_computed_type(db):
     net = make_network(db)
-    scan(ScriptedScanner([host("10.0.0.12", [port(9100, "jetdirect")], mac="02:00:00:00:00:12")]),
-         network_id=net.id)
+    scan(ScriptedScanner([host("10.0.0.12", [port(9100, "jetdirect")], mac="02:00:00:00:00:12")]), network_id=net.id)
     d = device_by_ip(db, "10.0.0.12")
     assert d.device_type == "printer"  # computed, before any override
 
@@ -158,8 +167,10 @@ def test_manual_tag_override_wins_over_computed_type(db):
 
 def test_suppressed_tag_skips_type_and_survives_reapply(db):
     net = make_network(db)
-    scan(ScriptedScanner([host("10.0.0.9", [port(80, "http"), port(9100, "jetdirect")],
-                               mac="02:00:00:00:00:09")]), network_id=net.id)
+    scan(
+        ScriptedScanner([host("10.0.0.9", [port(80, "http"), port(9100, "jetdirect")], mac="02:00:00:00:00:09")]),
+        network_id=net.id,
+    )
     d = device_by_ip(db, "10.0.0.9")
     assert d.device_type == "printer" and {t.tag for t in d.tags} >= {"printer", "web-server"}
 
@@ -221,12 +232,10 @@ def test_enrich_local_names_writes_discovery_name_and_source(db, monkeypatch):
     from app.core import intel as intel_mod
 
     net = make_network(db)
-    scan(ScriptedScanner([host("10.0.0.20", [port(445, "microsoft-ds")], mac="02:00:00:00:00:20")]),
-         network_id=net.id)
+    scan(ScriptedScanner([host("10.0.0.20", [port(445, "microsoft-ds")], mac="02:00:00:00:00:20")]), network_id=net.id)
     d = device_by_ip(db, "10.0.0.20")
 
-    monkeypatch.setattr("app.core.discovery.collect_local_names",
-                        lambda ips, **kw: {"10.0.0.20": ("OFFICE-PC", "netbios")})
+    monkeypatch.setattr("app.core.discovery.collect_local_names", lambda ips, **kw: {"10.0.0.20": ("OFFICE-PC", "netbios")})
     intel_mod._enrich_local_names(db, {d.id: d})
     db.commit()
     db.expire_all()
@@ -241,8 +250,7 @@ def test_enrich_local_names_skipped_when_discovery_disabled(db, monkeypatch):
     put_section(db, DiscoverySettings(enabled=False))
     db.commit()
     net = make_network(db)
-    scan(ScriptedScanner([host("10.0.0.21", [port(445, "microsoft-ds")], mac="02:00:00:00:00:21")]),
-         network_id=net.id)
+    scan(ScriptedScanner([host("10.0.0.21", [port(445, "microsoft-ds")], mac="02:00:00:00:00:21")]), network_id=net.id)
     d = device_by_ip(db, "10.0.0.21")
 
     called = []
@@ -259,12 +267,10 @@ def test_enrich_local_names_persists_across_quiet_pass_and_ages_out(db, monkeypa
     from app.db import utcnow
 
     net = make_network(db)
-    scan(ScriptedScanner([host("10.0.0.22", [port(445, "microsoft-ds")], mac="02:00:00:00:00:22")]),
-         network_id=net.id)
+    scan(ScriptedScanner([host("10.0.0.22", [port(445, "microsoft-ds")], mac="02:00:00:00:00:22")]), network_id=net.id)
     d = device_by_ip(db, "10.0.0.22")
 
-    monkeypatch.setattr("app.core.discovery.collect_local_names",
-                        lambda ips, **kw: {"10.0.0.22": ("NAS-BOX", "mdns")})
+    monkeypatch.setattr("app.core.discovery.collect_local_names", lambda ips, **kw: {"10.0.0.22": ("NAS-BOX", "mdns")})
     intel_mod._enrich_local_names(db, {d.id: d})
     db.commit()
     db.expire_all()
@@ -309,7 +315,9 @@ def test_scan_tags_and_scores_silently_then_reports_changes(db):
     s2 = scan(ScriptedScanner(hosts), network_id=net.id)
     evs = [e for e in db.scalars(select(Event).where(Event.scan_id == s2.id)).unique() if e.event_type.startswith("tag_")]
     assert sorted((e.event_type, e.new_value or e.old_value) for e in evs) == [
-        ("tag_added", "database"), ("tag_removed", "remote-access")]
+        ("tag_added", "database"),
+        ("tag_removed", "remote-access"),
+    ]
     assert all(e.notify for e in evs)
     d = device_by_ip(db, "10.0.0.1")
     assert {t.tag for t in d.tags} == {"database", "keep-me", "web-server"} and d.device_type == "database"
@@ -330,7 +338,13 @@ def test_web_capture_fills_port_http_and_retags(db):
     db.expire_all()
     h = db.scalar(select(PortHttp).where(PortHttp.device_id == d.id))
     assert (h.scheme, h.status, h.title, h.server, h.login, h.default_page) == (
-        "https", 200, "VMware ESXi", "VMware ESXi", True, False)
+        "https",
+        200,
+        "VMware ESXi",
+        "VMware ESXi",
+        True,
+        False,
+    )
     d = device_by_ip(db, "10.0.0.91")
     assert d.device_type == "hypervisor"
     prof = db.scalar(select(DeviceProfile).where(DeviceProfile.device_id == d.id))
@@ -340,10 +354,19 @@ def test_web_capture_fills_port_http_and_retags(db):
 def test_mock_lab_web_host_is_not_misclassified_as_hypervisor(db):
     """srv-web01-style last octet (.10) gets nginx mock HTML, not the ESXi scenario."""
     net = make_network(db, cidr="10.99.0.0/24", name="Mock Lab")
-    scan(ScriptedScanner([
-        host("10.99.0.10", [port(22, "ssh", "OpenSSH", "8.9p1"), port(443, "https", "nginx", "1.24.0")],
-             mac="02:4E:01:00:02:10", hostname="srv-web01.net1.lab.local"),
-    ]), network_id=net.id)
+    scan(
+        ScriptedScanner(
+            [
+                host(
+                    "10.99.0.10",
+                    [port(22, "ssh", "OpenSSH", "8.9p1"), port(443, "https", "nginx", "1.24.0")],
+                    mac="02:4E:01:00:02:10",
+                    hostname="srv-web01.net1.lab.local",
+                ),
+            ]
+        ),
+        network_id=net.id,
+    )
     d = device_by_ip(db, "10.99.0.10")
     cap = WebCapture(targets="10.99.0.10")
     db.add(cap)
@@ -367,11 +390,11 @@ def test_mock_lab_hosts_not_hypervisor_after_stale_esxi_capture(db):
 
     # Hosts that were mis-typed as hypervisor in review (stale ESXi captures / broad mock rule).
     targets = {
-        "10.99.0.1": "FortiGate httpsd",   # gw-core
-        "10.99.0.21": "nginx",             # nas01
+        "10.99.0.1": "FortiGate httpsd",  # gw-core
+        "10.99.0.21": "nginx",  # nas01
         "10.99.0.30": "Cisco IOS http config",  # sw-core01
-        "10.99.0.80": "Ollama",            # srv-ollama
-        "10.99.0.81": "LM Studio",         # ws-lmstudio
+        "10.99.0.80": "Ollama",  # srv-ollama
+        "10.99.0.81": "LM Studio",  # ws-lmstudio
     }
     now = utcnow()
     for ip, product in targets.items():
@@ -382,11 +405,20 @@ def test_mock_lab_hosts_not_hypervisor_after_stale_esxi_capture(db):
             next((p for p in d.ports if p.is_open and p.port in (80, 443, 5000, 11434, 1234)), None),
         )
         assert web is not None, ip
-        db.add(PortHttp(
-            device_port_id=web.id, device_id=d.id, scheme="https", status=200,
-            title="VMware ESXi", server="VMware ESXi", login=True, default_page=False,
-            first_seen=now, last_seen=now,
-        ))
+        db.add(
+            PortHttp(
+                device_port_id=web.id,
+                device_id=d.id,
+                scheme="https",
+                status=200,
+                title="VMware ESXi",
+                server="VMware ESXi",
+                login=True,
+                default_page=False,
+                first_seen=now,
+                last_seen=now,
+            )
+        )
         d.device_type = "hypervisor"
         d.type_confidence = 90
     db.commit()
@@ -396,9 +428,15 @@ def test_mock_lab_hosts_not_hypervisor_after_stale_esxi_capture(db):
     for ip in targets:
         d = device_by_ip(db, ip)
         assert d.device_type != "hypervisor", (ip, d.device_type, d.hostname)
-        assert db.scalar(select(PortHttp).where(
-            PortHttp.device_id == d.id, PortHttp.title == "VMware ESXi",
-        )) is None
+        assert (
+            db.scalar(
+                select(PortHttp).where(
+                    PortHttp.device_id == d.id,
+                    PortHttp.title == "VMware ESXi",
+                )
+            )
+            is None
+        )
 
     # Fresh capture for these last octets must not reintroduce ESXi HTML.
     for ip in ("10.99.0.1", "10.99.0.21", "10.99.0.81"):
@@ -414,11 +452,13 @@ def test_mock_lab_hosts_not_hypervisor_after_stale_esxi_capture(db):
 
 # --- watches --------------------------------------------------------------------------------------------
 def test_evaluate_all_loads_saved_searches_once(db):
-    db.add_all([
-        SavedSearch(name="SSH", query="port:22"),
-        SavedSearch(name="HTTPS", query="port:443"),
-        SavedSearch(name="RDP", query="port:3389"),
-    ])
+    db.add_all(
+        [
+            SavedSearch(name="SSH", query="port:22"),
+            SavedSearch(name="HTTPS", query="port:443"),
+            SavedSearch(name="RDP", query="port:3389"),
+        ]
+    )
     db.commit()
     saved_search_selects: list[str] = []
 
@@ -429,7 +469,7 @@ def test_evaluate_all_loads_saved_searches_once(db):
     bind = db.get_bind()
     sa_event.listen(bind, "before_cursor_execute", record_saved_search_select)
     try:
-        assert evaluate_all(db) == 0
+        assert evaluate_all(db) == []
     finally:
         sa_event.remove(bind, "before_cursor_execute", record_saved_search_select)
 
@@ -441,11 +481,15 @@ def test_watch_baselines_then_alerts_and_drops_stale_hits(db):
     a = host("10.0.0.1", [port(3389, "ms-wbt-server")], mac="02:00:00:00:00:01")
     b = host("10.0.0.2", [port(22, "ssh")], mac="02:00:00:00:00:02")
     scan(ScriptedScanner([a, b]), network_id=net.id)
-    db.add_all([SavedSearch(name="RDP", query="port:3389"),
-                SavedSearch(name="No telnet", query="port:23", kind="policy", alert=False),
-                SavedSearch(name="Broken", query="nosuch:1")])
+    db.add_all(
+        [
+            SavedSearch(name="RDP", query="port:3389"),
+            SavedSearch(name="No telnet", query="port:23", kind="policy", alert=False),
+            SavedSearch(name="Broken", query="nosuch:1"),
+        ]
+    )
     db.commit()
-    assert evaluate_all(db) == 0  # baseline
+    assert evaluate_all(db) == []  # baseline
     db.commit()
     rdp, policy, broken = db.scalars(select(SavedSearch).order_by(SavedSearch.id)).all()
     assert rdp.initialized and rdp.last_count == 1 and broken.last_error == "unknown field 'nosuch'"
@@ -456,7 +500,9 @@ def test_watch_baselines_then_alerts_and_drops_stale_hits(db):
     db.expire_all()
     alerts = [e for e in db.scalars(select(Event)).unique() if e.event_type in ("watch_match", "policy_violation")]
     assert sorted((e.event_type, e.ip, e.notify) for e in alerts) == [
-        ("policy_violation", "10.0.0.2", False), ("watch_match", "10.0.0.2", True)]
+        ("policy_violation", "10.0.0.2", False),
+        ("watch_match", "10.0.0.2", True),
+    ]
     assert db.get(SavedSearch, rdp.id).last_count == 2
 
     a.ports = [port(22, "ssh")]
@@ -470,8 +516,11 @@ def test_digest_always_includes_watch_alerts(db):
     net = make_network(db)
     scan(ScriptedScanner([host("10.0.0.1", [port(3389, "ms-wbt-server")])]), network_id=net.id)
     d = device_by_ip(db, "10.0.0.1")
-    db.add(Event(device_id=d.id, event_type="watch_match", severity="high", ip=d.current_ip, new_value="RDP",
-                 message="m", notify=True))
+    db.add(
+        Event(
+            device_id=d.id, event_type="watch_match", severity="high", ip=d.current_ip, new_value="RDP", message="m", notify=True
+        )
+    )
     db.commit()
     cfg = NotificationSettings(event_types=[])
     pending = _pending_all(db, cfg)
@@ -487,7 +536,7 @@ def test_watch_evaluation_walks_matches_in_chunks(db, monkeypatch):
     scan(ScriptedScanner(hosts), network_id=net.id)
     db.add(SavedSearch(name="SSH", query="port:22"))
     db.commit()
-    assert evaluate_all(db) == 0  # baseline: all five recorded silently
+    assert evaluate_all(db) == []  # baseline: all five recorded silently
     db.commit()
     search = db.scalar(select(SavedSearch))
     assert search.last_count == 5
@@ -508,7 +557,7 @@ def test_monitor_baselines_then_alerts_matching_host_changes(db):
     scan(ScriptedScanner([a, b]), network_id=net.id)
     db.add(SavedSearch(name="Host 10.0.0.1", query="ip:10.0.0.1", kind="monitor"))
     db.commit()
-    assert evaluate_all(db) == 0
+    assert evaluate_all(db) == []
     db.commit()
     search = db.scalar(select(SavedSearch))
     assert search.initialized and search.last_count == 1
@@ -519,13 +568,12 @@ def test_monitor_baselines_then_alerts_matching_host_changes(db):
     s = scan(ScriptedScanner([a, b]), network_id=net.id)
     db.expire_all()
     alerts = list(db.scalars(select(Event).where(Event.event_type == "monitor_change")).unique())
-    assert [(e.ip, e.port, e.notify, e.new_value) for e in alerts] == [
-        ("10.0.0.1", 445, True, "Host 10.0.0.1")]
+    assert [(e.ip, e.port, e.notify, e.new_value) for e in alerts] == [("10.0.0.1", 445, True, "Host 10.0.0.1")]
     assert alerts[0].old_value  # source event id, for idempotency
     assert "change watched by 'Host 10.0.0.1'" in alerts[0].message
 
     n = evaluate(db, db.get(SavedSearch, search.id), scan_id=s.id)
-    assert n == 0
+    assert n == []
     assert len(db.scalars(select(Event).where(Event.event_type == "monitor_change")).unique().all()) == 1
 
 
@@ -533,8 +581,18 @@ def test_digest_always_includes_monitor_alerts(db):
     net = make_network(db)
     scan(ScriptedScanner([host("10.0.0.1", [port(22, "ssh")])]), network_id=net.id)
     d = device_by_ip(db, "10.0.0.1")
-    db.add(Event(device_id=d.id, event_type="monitor_change", severity="high", ip=d.current_ip,
-                 new_value="Host 10.0.0.1", old_value="1", message="m", notify=True))
+    db.add(
+        Event(
+            device_id=d.id,
+            event_type="monitor_change",
+            severity="high",
+            ip=d.current_ip,
+            new_value="Host 10.0.0.1",
+            old_value="1",
+            message="m",
+            notify=True,
+        )
+    )
     db.commit()
     cfg = NotificationSettings(event_types=[])
     pending = _pending_all(db, cfg)

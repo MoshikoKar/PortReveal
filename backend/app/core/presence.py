@@ -6,6 +6,7 @@ other scan) saw the device. Any sighting resets the streak (see core/compare.py)
 streak reaches `PresenceSettings.absence_days` a notifying `device_disappeared` event is
 recorded; the matching `device_reappeared` is notified on the next sighting.
 """
+
 from __future__ import annotations
 
 import logging
@@ -46,18 +47,26 @@ def presence_scan_active(db) -> bool:
 
 
 def _day_scans(db, network_id: int, trigger: str, scan_type: str, start: datetime, end: datetime) -> list[Scan]:
-    return list(db.scalars(
-        select(Scan).where(Scan.network_id == network_id, Scan.trigger == trigger, Scan.scan_type == scan_type,
-                           Scan.created_at >= start, Scan.created_at < end)
-        .order_by(Scan.id)
-    ).all())
+    return list(
+        db.scalars(
+            select(Scan)
+            .where(
+                Scan.network_id == network_id,
+                Scan.trigger == trigger,
+                Scan.scan_type == scan_type,
+                Scan.created_at >= start,
+                Scan.created_at < end,
+            )
+            .order_by(Scan.id)
+        ).all()
+    )
 
 
-def evaluate_absence(db, cfg: PresenceSettings, day: date, now_utc: datetime) -> int:
-    """Count one correlated absence day for `day` (idempotent). Returns notifying events created."""
+def evaluate_absence(db, cfg: PresenceSettings, day: date, now_utc: datetime) -> list[int]:
+    """Count one correlated absence day for `day` (idempotent). Returns notifying event ids created."""
     start, end = _local_day_bounds(day)
     excluded = exclusion_set(db)
-    alerts = 0
+    created: list[Event] = []
     for net in db.scalars(select(Network).where(Network.enabled.is_(True)).order_by(Network.id)).all():
         if net.baseline_scan_id is None:
             continue
@@ -80,7 +89,7 @@ def evaluate_absence(db, cfg: PresenceSettings, day: date, now_utc: datetime) ->
             if d.absence_days >= cfg.absence_days and not d.absence_alerted:
                 d.absence_alerted = True
                 d.status = DEVICE_NOT_DETECTED
-                db.add(Event(
+                ev = Event(
                     created_at=now_utc,
                     scan_id=presence[-1].id,
                     device=d,
@@ -88,10 +97,12 @@ def evaluate_absence(db, cfg: PresenceSettings, day: date, now_utc: datetime) ->
                     severity=EVENT_SEVERITY[EV_DEVICE_DISAPPEARED],
                     ip=d.current_ip,
                     message=f"{device_label(d)} ({d.current_ip}) has not been detected for {d.absence_days} "
-                            "days (night and daytime scans)",
+                    "days (night and daytime scans)",
                     notify=True,
-                ))
-                alerts += 1
+                )
+                db.add(ev)
+                created.append(ev)
     db.flush()
-    log.info("correlated absence evaluated for %s: %d disappearance alert(s)", day, alerts)
-    return alerts
+    event_ids = [ev.id for ev in created if ev.id is not None]
+    log.info("correlated absence evaluated for %s: %d disappearance alert(s)", day, len(event_ids))
+    return event_ids

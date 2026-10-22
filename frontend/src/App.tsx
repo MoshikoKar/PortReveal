@@ -47,6 +47,7 @@ const APP_ROUTE_PATTERNS = [
   '/scans',
   '/settings',
   '/settings/:tab',
+  '/settings/:tab/:section',
 ] as const;
 
 function isKnownAppPath(pathname: string): boolean {
@@ -200,6 +201,7 @@ export default function App() {
             <Route path="/scans" element={<Scans />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/:tab" element={<Settings />} />
+            <Route path="/settings/:tab/:section" element={<Settings />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

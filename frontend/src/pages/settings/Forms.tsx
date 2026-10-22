@@ -2,8 +2,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading, useReportDirty } from '../../components/ui';
-import type { CdnAsnEntry, DiscoverySettings, EventType, GeoSettings, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
-import { DAYS, EVENT_LABELS, fmtTime, relTime, useApi } from '../../util';
+import type { CdnAsnEntry, DiscoverySettings, GeoSettings, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
+import { DAYS, fmtTime, relTime, useApi } from '../../util';
 
 function useForm<T>(path: string) {
   const res = useApi<T>(path);
@@ -244,9 +244,10 @@ export function WebCaptureForm({ onDirtyChange }: { onDirtyChange?: (dirty: bool
   );
 }
 
-// ---------------------------------------------------------------- notifications
-export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
-  part?: 'all' | 'smtp' | 'recipients'; onSaved?: () => void; onDirtyChange?: (dirty: boolean) => void;
+// ---------------------------------------------------------------- notifications (Setup wizard only)
+/** SMTP / recipients steps in the Setup wizard. Full notification settings live under Settings > Notifications. */
+export function NotificationsForm({ part = 'smtp', onSaved, onDirtyChange }: {
+  part?: 'smtp' | 'recipients'; onSaved?: () => void; onDirtyChange?: (dirty: boolean) => void;
 }) {
   const f = useForm<NotificationSettings>('/settings/notifications');
   const [password, setPassword] = useState<string | null>(null);
@@ -260,13 +261,15 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
   const set = (patch: Partial<NotificationSettings>) => f.setForm({ ...s, ...patch });
   const recipients = recipientsText ?? s.recipients.join('\n');
 
-  const body = () => ({
-    enabled: s.enabled, smtp_host: s.smtp_host, smtp_port: s.smtp_port, security: s.security, username: s.username,
-    ...(password !== null ? { password } : {}), sender: s.sender,
-    recipients: recipients.split(/[\s,;]+/).filter(Boolean), event_types: s.event_types, digest_time: s.digest_time,
-    watchlist_email_enabled: s.watchlist_email_enabled,
-    watchlist_webhooks_enabled: s.watchlist_webhooks_enabled,
-  });
+  const body = () => (part === 'smtp'
+    ? {
+        smtp_host: s.smtp_host, smtp_port: s.smtp_port, security: s.security, username: s.username,
+        ...(password !== null ? { password } : {}), sender: s.sender,
+      }
+    : {
+        enabled: s.enabled,
+        recipients: recipients.split(/[\s,;]+/).filter(Boolean),
+      });
   const save = async () => {
     if (await f.save(body())) {
       setPassword(null);
@@ -285,16 +288,14 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
     }
   };
 
-  const showSmtp = part !== 'recipients';
-  const showRecipients = part !== 'smtp';
   return (
-    <Card title={part === 'recipients' ? 'Email recipients' : part === 'smtp' ? 'SMTP relay' : 'Email notifications'}>
+    <Card title={part === 'recipients' ? 'Email recipients' : 'SMTP relay'}>
       <div className="stack">
-        {showSmtp && (
+        {part === 'smtp' && (
           <>
             <div className="muted small">Uses an internal SMTP relay (default port 25, no authentication). Sends one categorized HTML summary email per day at the configured local time.</div>
             <div className="form-grid">
-              <label className="field">SMTP host / IP<input type="text" value={s.smtp_host} onChange={(e) => set({ smtp_host: e.target.value })} placeholder="smtp-relay.corp.local" /></label>
+              <label className="field">SMTP host / IP<input type="text" value={s.smtp_host} onChange={(e) => set({ smtp_host: e.target.value })} placeholder="smtp-relay.example.com" /></label>
               <Num label="Port" value={s.smtp_port} min={1} max={65535} onChange={(v) => set({ smtp_port: v })} />
               <label className="field">Security
                 <select value={s.security} onChange={(e) => set({ security: e.target.value as NotificationSettings['security'] })}>
@@ -309,77 +310,20 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
             </div>
           </>
         )}
-        {showRecipients && (
+        {part === 'recipients' && (
           <>
             <label className="check"><input type="checkbox" checked={s.enabled} onChange={(e) => set({ enabled: e.target.checked })} />Send email notifications</label>
             <label className="field">Recipients
-              <textarea rows={3} value={recipients} onChange={(e) => setRecipientsText(e.target.value)} placeholder={'it-team@corp.local\nsoc@corp.local'} />
+              <textarea rows={3} value={recipients} onChange={(e) => setRecipientsText(e.target.value)} placeholder={'it-team@example.com\nsoc@example.com'} />
               <span className="hint">One address per line (or comma separated).</span>
             </label>
-            {part === 'all' && (
-              <div className="field"><span>Notify on</span>
-                <div className="row wrap" style={{ gap: 14 }}>
-                  {s.available_event_types
-                    .filter((t: EventType) => t !== 'cve_watch_match')
-                    .map((t: EventType) => (
-                    <label key={t} className="check small">
-                      <input type="checkbox" checked={s.event_types.includes(t)} onChange={(e) => set({ event_types: e.target.checked ? [...s.event_types, t] : s.event_types.filter((x) => x !== t) })} />
-                      {EVENT_LABELS[t]}
-                    </label>
-                  ))}
-                </div>
-                <span className="hint">CVE watchlist matches always appear in the daily digest when not already emailed immediately (see below).</span>
-              </div>
-            )}
-            {part === 'all' && (
-              <div className="form-grid">
-                <label className="field">Daily summary time (HH:MM)
-                  <input type="time" value={s.digest_time} onChange={(e) => set({ digest_time: e.target.value })} />
-                  <span className="hint">Server-local time. Pending changes since the last send are grouped into one HTML email.</span>
-                </label>
-              </div>
-            )}
-            {part === 'all' && (() => {
-              const emailReady = s.enabled && !!s.smtp_host.trim() && s.recipients.length > 0;
-              return (
-                <div className="field" style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
-                  <span style={{ fontWeight: 600 }}>CVE watchlist alerts</span>
-                  <div className="muted small" style={{ marginBottom: 8 }}>
-                    In-app events are always recorded when a watched CVE appears. Use these toggles for outbound delivery.
-                    Immediate email marks events as notified so they are not repeated in the daily digest; if immediate
-                    email is off or fails, the digest still includes them.
-                  </div>
-                  <div className="stack" style={{ gap: 8 }}>
-                    <label className="check small" title={!emailReady ? 'Turn on email notifications and configure SMTP first' : undefined}>
-                      <input
-                        type="checkbox"
-                        checked={emailReady ? s.watchlist_email_enabled : false}
-                        disabled={!emailReady}
-                        onChange={(e) => set({ watchlist_email_enabled: e.target.checked })}
-                      />
-                      Immediate email (does not wait for the daily digest)
-                    </label>
-                    {!emailReady && (
-                      <span className="hint">
-                        Enable &quot;Send email notifications&quot; and configure SMTP host + recipients above to use immediate watchlist email.
-                      </span>
-                    )}
-                    <label className="check small">
-                      <input type="checkbox" checked={s.watchlist_webhooks_enabled}
-                        onChange={(e) => set({ watchlist_webhooks_enabled: e.target.checked })} />
-                      Webhooks (respects each endpoint&apos;s event-type filter)
-                    </label>
-                  </div>
-                </div>
-              );
-            })()}
           </>
         )}
         <Msg msg={f.msg} />
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <div className="row">
           <button className="btn primary" onClick={save} disabled={f.saving}>Save</button>
-          {showSmtp && (
+          {part === 'smtp' && (
             <>
               <input type="email" placeholder="test recipient (default: all recipients)" value={testTo} onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 260 }} />
               <button className="btn" onClick={test} disabled={!s.smtp_host || f.saving}>Save & send test email</button>

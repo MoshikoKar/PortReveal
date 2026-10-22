@@ -2,6 +2,7 @@
 
 Every section is a pydantic model with defaults, so missing rows/fields are fine.
 """
+
 from __future__ import annotations
 
 import re
@@ -114,7 +115,7 @@ class ScanSettings(BaseModel):
 
 
 class NotificationSettings(BaseModel):
-    enabled: bool = False
+    enabled: bool = False  # master switch for the daily email digest (and SMTP-backed channels)
     smtp_host: str = ""
     smtp_port: int = Field(25, ge=1, le=65535)
     security: Literal["none", "starttls", "ssl"] = "none"
@@ -134,6 +135,8 @@ class NotificationSettings(BaseModel):
         ]
     )
     digest_time: str = "08:00"  # local time HH:MM - one categorized HTML summary per day
+    # Master switch for outbound webhooks (all event sources). In-app events are always on.
+    webhooks_enabled: bool = True
     # CVE watchlist delivery channels (in-app events are always on).
     watchlist_email_enabled: bool = True  # immediate email (not waiting for the daily digest)
     watchlist_webhooks_enabled: bool = True

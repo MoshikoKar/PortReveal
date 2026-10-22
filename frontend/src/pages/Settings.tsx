@@ -5,8 +5,9 @@ import { useApp } from '../context';
 import { AuditSettings, HealthPanel, UsersSettings } from './settings/Admin';
 import { DataTransferPanel } from './settings/DataTransfer';
 import { ExclusionsSettings } from './settings/Exclusions';
-import { DiscoveryForm, GeoForm, LdapForm, NotificationsForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, VulnForm, WebCaptureForm } from './settings/Forms';
+import { DiscoveryForm, GeoForm, LdapForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, VulnForm, WebCaptureForm } from './settings/Forms';
 import { NetworksSettings } from './settings/Networks';
+import { NotificationsSettings } from './settings/Notifications';
 import { TokensSettings } from './settings/Tokens';
 
 const TABS = [
@@ -30,7 +31,7 @@ const TABS = [
 
 export default function Settings() {
   const { isAdmin } = useApp();
-  const { tab } = useParams();
+  const { tab, section } = useParams();
   const [sp, setSp] = useSearchParams();
   const tabs = TABS.filter((t) => isAdmin || t.viewer);
   // Schedule hosts two forms; keep their dirty flags separate so one clear does not wipe the other.
@@ -46,7 +47,7 @@ export default function Settings() {
     setFormDirty(false);
     setPresenceDirty(false);
     setEntityDirty(false);
-  }, [tab]);
+  }, [tab, section]);
 
   // Browser Back/Forward would unmount the dirty form too; restore the URL if the user keeps editing.
   useHistoryGuard(dirty && tabAllowed);
@@ -69,7 +70,7 @@ export default function Settings() {
         return;
       }
       if (url.origin !== window.location.origin) return;
-      if (url.pathname === `/settings/${tab}`) return;
+      if (url.pathname === `/settings/${tab}` || url.pathname.startsWith(`/settings/${tab}/`)) return;
       if (url.pathname === '/settings' && tab === 'networks') return;
       if (!confirmDiscard(true)) {
         e.preventDefault();
@@ -135,7 +136,7 @@ export default function Settings() {
       {tab === 'vulnerabilities' && <VulnForm onDirtyChange={setFormDirty} />}
       {tab === 'discovery' && <DiscoveryForm onDirtyChange={setFormDirty} />}
       {tab === 'geo' && <GeoForm onDirtyChange={setFormDirty} />}
-      {tab === 'notifications' && <NotificationsForm onDirtyChange={setFormDirty} />}
+      {tab === 'notifications' && <NotificationsSettings onDirtyChange={setFormDirty} />}
       {tab === 'authentication' && <LdapForm onDirtyChange={setFormDirty} />}
       {tab === 'users' && <UsersSettings onDirtyChange={setEntityDirty} />}
       {tab === 'retention' && <RetentionForm onDirtyChange={setFormDirty} />}

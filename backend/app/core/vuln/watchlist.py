@@ -10,6 +10,7 @@ email/webhooks in a background thread against a fresh session. Immediate email s
 ``notified_at`` so the daily digest does not re-send those events; if immediate email is off or
 fails, the digest still includes them via ``ALWAYS_NOTIFY_TYPES``.
 """
+
 from __future__ import annotations
 
 import json
@@ -128,16 +129,12 @@ def _prune_stale_alerts(db: Session, *, watch_ids: list[int] | None = None) -> i
     )
     if watch_ids is not None:
         live = live.where(CveWatchlistEntry.id.in_(watch_ids))
-    live_keys = {
-        (w, uuid, port, proto, cve)
-        for w, uuid, port, proto, cve in db.execute(live).all()
-    }
+    live_keys = {(w, uuid, port, proto, cve) for w, uuid, port, proto, cve in db.execute(live).all()}
     alert_q = select(CveWatchlistAlert)
     if watch_ids is not None:
         alert_q = alert_q.where(CveWatchlistAlert.watch_id.in_(watch_ids))
     stale_ids = [
-        a.id for a in db.scalars(alert_q).all()
-        if (a.watch_id, a.device_uuid, a.port, a.protocol, a.cve_id) not in live_keys
+        a.id for a in db.scalars(alert_q).all() if (a.watch_id, a.device_uuid, a.port, a.protocol, a.cve_id) not in live_keys
     ]
     if not stale_ids:
         return 0
@@ -181,17 +178,19 @@ def _detail_payload(
     kev: bool,
 ) -> str:
     """JSON blob stored in Event.old_value for webhook enrichment and UI links."""
-    return json.dumps({
-        "cve_id": cve_id,
-        "device_uuid": device.uuid,
-        "hostname": device.hostname,
-        "ip": device.current_ip,
-        "port": port,
-        "protocol": protocol,
-        "state": state,
-        "cvss": cvss,
-        "kev": kev,
-    })
+    return json.dumps(
+        {
+            "cve_id": cve_id,
+            "device_uuid": device.uuid,
+            "hostname": device.hostname,
+            "ip": device.current_ip,
+            "port": port,
+            "protocol": protocol,
+            "state": state,
+            "cvss": cvss,
+            "kev": kev,
+        }
+    )
 
 
 def check_watchlist(
@@ -219,9 +218,7 @@ def check_watchlist(
 
     existing = {
         (a.watch_id, a.device_uuid, a.port, a.protocol, a.cve_id)
-        for a in db.scalars(
-            select(CveWatchlistAlert).where(CveWatchlistAlert.watch_id.in_(watch_ids))
-        ).all()
+        for a in db.scalars(select(CveWatchlistAlert).where(CveWatchlistAlert.watch_id.in_(watch_ids))).all()
     }
 
     event_ids: list[int] = []
@@ -234,8 +231,12 @@ def check_watchlist(
         cvss = vuln.cvss_base if vuln is not None else None
         kev = bool(vuln.kev) if vuln is not None else False
         message, new_value = _event_message(
-            cve_id=dpv.cve_id, state=dpv.state, port=port_row.port,
-            protocol=port_row.protocol, cvss=cvss, kev=kev,
+            cve_id=dpv.cve_id,
+            state=dpv.state,
+            port=port_row.port,
+            protocol=port_row.protocol,
+            cvss=cvss,
+            kev=kev,
         )
         ev = Event(
             created_at=now,
@@ -246,8 +247,13 @@ def check_watchlist(
             protocol=port_row.protocol,
             port=port_row.port,
             old_value=_detail_payload(
-                cve_id=dpv.cve_id, device=device, port=port_row.port,
-                protocol=port_row.protocol, state=dpv.state, cvss=cvss, kev=kev,
+                cve_id=dpv.cve_id,
+                device=device,
+                port=port_row.port,
+                protocol=port_row.protocol,
+                state=dpv.state,
+                cvss=cvss,
+                kev=kev,
             ),
             new_value=new_value,
             message=message,
@@ -255,15 +261,17 @@ def check_watchlist(
         )
         db.add(ev)
         db.flush()
-        db.add(CveWatchlistAlert(
-            watch_id=watch.id,
-            cve_id=dpv.cve_id,
-            device_uuid=device.uuid,
-            port=port_row.port,
-            protocol=port_row.protocol,
-            alerted_at=now,
-            event_id=ev.id,
-        ))
+        db.add(
+            CveWatchlistAlert(
+                watch_id=watch.id,
+                cve_id=dpv.cve_id,
+                device_uuid=device.uuid,
+                port=port_row.port,
+                protocol=port_row.protocol,
+                alerted_at=now,
+                event_id=ev.id,
+            )
+        )
         existing.add(key)
         event_ids.append(ev.id)
         alerted += 1
@@ -357,30 +365,29 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
     db = SessionLocal()
     try:
         cfg = get_section(db, NotificationSettings)
-        events = list(
-            db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all()
-        )
+        events = list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all())
         if not events:
             return None
         event_snaps = [_event_delivery_snap(ev) for ev in events]
         hooks: list[dict] = []
-        if cfg.watchlist_webhooks_enabled:
+        # Master webhooks switch + per-watchlist toggle (both required).
+        if cfg.webhooks_enabled and cfg.watchlist_webhooks_enabled:
             for hook in db.scalars(select(WebhookEndpoint).where(WebhookEndpoint.enabled.is_(True))).all():
                 types = hook.event_types or []
                 if types and EV_CVE_WATCH_MATCH not in types:
                     continue
-                hooks.append({
-                    "id": hook.id,
-                    "url": hook.url,
-                    "secret": decrypt_secret(hook.secret_enc) if hook.secret_enc else "",
-                })
+                hooks.append(
+                    {
+                        "id": hook.id,
+                        "url": hook.url,
+                        "secret": decrypt_secret(hook.secret_enc) if hook.secret_enc else "",
+                    }
+                )
         return {
             "event_ids": [s["id"] for s in event_snaps],
             "events": event_snaps,
-            "email_enabled": bool(
-                cfg.watchlist_email_enabled and cfg.enabled and cfg.smtp_host and cfg.recipients
-            ),
-            "webhooks_enabled": bool(cfg.watchlist_webhooks_enabled),
+            "email_enabled": bool(cfg.watchlist_email_enabled and cfg.enabled and cfg.smtp_host and cfg.recipients),
+            "webhooks_enabled": bool(cfg.webhooks_enabled and cfg.watchlist_webhooks_enabled),
             "smtp": {
                 "enabled": cfg.enabled,
                 "smtp_host": cfg.smtp_host,
@@ -390,7 +397,9 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
                 "password_enc": cfg.password_enc,
                 "sender": cfg.sender,
                 "recipients": list(cfg.recipients),
-            } if cfg.watchlist_email_enabled else None,
+            }
+            if cfg.watchlist_email_enabled
+            else None,
             "hooks": hooks,
         }
     finally:
@@ -462,16 +471,17 @@ def _deliver_immediate_email(plan: dict) -> None:
             html_items.append(f"<li>{_esc(line)}</li>")
         plain = "\n".join(lines) + "\n"
         html_body = (
-            "<!DOCTYPE html><html><body style=\"font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;\">"
+            '<!DOCTYPE html><html><body style="font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;">'
             f"<h2>CVE watchlist alert</h2><p>{n} new match{'es' if n != 1 else ''}.</p>"
             f"<ul>{''.join(html_items)}</ul>"
-            "<p style=\"color:#64748b;font-size:12px;\">Full detail is in the Changes page.</p>"
+            '<p style="color:#64748b;font-size:12px;">Full detail is in the Changes page.</p>'
             "</body></html>"
         )
         # SMTP with no DB session open.
         send_email(cfg, subject, plain, html_body)
     except Exception as exc:
         from ..notify import smtp_failure_reason as _reason
+
         log.error("Immediate CVE watchlist email failed: %s", _reason(exc))
         return
 
@@ -544,7 +554,10 @@ def _deliver_batched_webhooks(plan: dict) -> None:
                 metrics.observe_webhook_delivery("http_error")
                 log.warning(
                     "webhook %s (%s) answered HTTP %s for watchlist batch (%d matches)",
-                    hook["id"], _host(hook["url"]), r.status_code, len(matches),
+                    hook["id"],
+                    _host(hook["url"]),
+                    r.status_code,
+                    len(matches),
                 )
             else:
                 ok = True
@@ -554,7 +567,9 @@ def _deliver_batched_webhooks(plan: dict) -> None:
             metrics.observe_webhook_delivery("network_error")
             log.warning(
                 "webhook %s (%s) watchlist batch failed: %s",
-                hook["id"], _host(hook["url"]), type(exc).__name__,
+                hook["id"],
+                _host(hook["url"]),
+                type(exc).__name__,
             )
 
         # Short separate transaction per hook result so writers are never blocked by HTTP.
@@ -574,6 +589,7 @@ def _deliver_batched_webhooks(plan: dict) -> None:
 
 def _esc(value: str) -> str:
     import html as html_mod
+
     return html_mod.escape(value or "")
 
 
@@ -602,10 +618,16 @@ def entries_status(db: Session, entries: list[CveWatchlistEntry]) -> dict[int, d
     ).all()
     by_cve: dict[str, dict] = {}
     for cve_id, state, cnt, devices in state_rows:
-        slot = by_cve.setdefault(cve_id, {
-            "confirmed": 0, "potential": 0, "dismissed": 0,
-            "open_devices": 0, "open_findings": 0,
-        })
+        slot = by_cve.setdefault(
+            cve_id,
+            {
+                "confirmed": 0,
+                "potential": 0,
+                "dismissed": 0,
+                "open_devices": 0,
+                "open_findings": 0,
+            },
+        )
         if state == VULN_STATE_CONFIRMED:
             slot["confirmed"] = int(cnt)
             slot["open_devices"] += int(devices or 0)
@@ -632,18 +654,26 @@ def entries_status(db: Session, entries: list[CveWatchlistEntry]) -> dict[int, d
     ).all()
     open_devices = {cve: int(n or 0) for cve, n in open_device_rows}
 
-    last_alerts = dict(db.execute(
-        select(CveWatchlistAlert.watch_id, func.max(CveWatchlistAlert.alerted_at))
-        .where(CveWatchlistAlert.watch_id.in_(watch_ids))
-        .group_by(CveWatchlistAlert.watch_id)
-    ).all())
+    last_alerts = dict(
+        db.execute(
+            select(CveWatchlistAlert.watch_id, func.max(CveWatchlistAlert.alerted_at))
+            .where(CveWatchlistAlert.watch_id.in_(watch_ids))
+            .group_by(CveWatchlistAlert.watch_id)
+        ).all()
+    )
 
     out: dict[int, dict] = {}
     for entry in entries:
-        counts = by_cve.get(entry.cve_id, {
-            "confirmed": 0, "potential": 0, "dismissed": 0,
-            "open_devices": 0, "open_findings": 0,
-        })
+        counts = by_cve.get(
+            entry.cve_id,
+            {
+                "confirmed": 0,
+                "potential": 0,
+                "dismissed": 0,
+                "open_devices": 0,
+                "open_findings": 0,
+            },
+        )
         confirmed = counts["confirmed"]
         potential = counts["potential"]
         dismissed = counts["dismissed"]
@@ -684,6 +714,7 @@ def attach_next_sync(db: Session, statuses: dict[int, dict]) -> None:
         return
     try:
         from .sync import estimate_next_cve_sync_at
+
         nxt = estimate_next_cve_sync_at(db)
     except Exception:
         log.exception("Failed to estimate next CVE sync")
