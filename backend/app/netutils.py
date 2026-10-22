@@ -17,6 +17,20 @@ from collections.abc import Iterable, Iterator
 
 MAX_SCAN_ADDRESSES = 65536
 MIN_NETWORK_PREFIX = 16
+NETWORK_NAME_MAX = 25
+NETWORK_NAME_RAW_MAX = 10_000  # reject before trim so huge padding cannot burn CPU
+NETWORK_NAME_EMPTY_MSG = "Name must not be empty"
+NETWORK_NAME_MAX_MSG = f"At most {NETWORK_NAME_MAX} characters"
+NETWORK_NAME_CHARS_MSG = "Use English letters, numbers, spaces and - _ . ( ) only"
+# New/renamed network names only; legacy rows with other characters remain readable.
+_NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9 ._()-]+$")
+# Exact JS String.prototype.trim set: WhiteSpace + LineTerminator (not Python str.isspace).
+_JS_TRIM_CHARS = frozenset(
+    "\t\n\v\f\r "
+    "\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
 
 _HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
@@ -26,6 +40,33 @@ _SPLIT_RE = re.compile(r"[\s,;]+")
 
 class TargetError(ValueError):
     pass
+
+
+def trim_network_name(name: str) -> str:
+    """Strip the same characters as JavaScript String.prototype.trim (O(n) index scan)."""
+    s = name or ""
+    n = len(s)
+    start = 0
+    while start < n and s[start] in _JS_TRIM_CHARS:
+        start += 1
+    end = n
+    while end > start and s[end - 1] in _JS_TRIM_CHARS:
+        end -= 1
+    return s[start:end]
+
+
+def validate_network_name(name: str) -> str:
+    """Trim and enforce the allowed character set for creating or renaming a network."""
+    if len(name or "") > NETWORK_NAME_RAW_MAX:
+        raise ValueError(NETWORK_NAME_MAX_MSG)
+    name = trim_network_name(name)
+    if not name:
+        raise ValueError(NETWORK_NAME_EMPTY_MSG)
+    if len(name) > NETWORK_NAME_MAX:
+        raise ValueError(NETWORK_NAME_MAX_MSG)
+    if not _NETWORK_NAME_RE.fullmatch(name):
+        raise ValueError(NETWORK_NAME_CHARS_MSG)
+    return name
 
 
 def split_specs(text: str | Iterable[str]) -> list[str]:
