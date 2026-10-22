@@ -1,12 +1,11 @@
 """QA fixes for recipient groups: Postgres migration, digests, locks, CVE, batching, retries."""
+
 from __future__ import annotations
 
 import json
 import logging
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from alembic import command
@@ -16,13 +15,10 @@ from sqlalchemy import create_engine, select, text
 from app.api.auth import limiter
 from app.core import channels, webhooks
 from app.core.channels import (
-    HOLD_DIGEST,
-    HOLD_RATE,
     deliver_channel_event_ids,
     flush_due_holds,
 )
-from app.core.vuln.watchlist import deliver_watchlist_alerts, schedule_watchlist_delivery
-from app.db import utcnow
+from app.core.vuln.watchlist import schedule_watchlist_delivery
 from app.logging_setup import setup_logging
 from app.main import app
 from app.migrate import alembic_config
@@ -33,14 +29,11 @@ from app.models import (
     DEST_SLACK,
     DEST_WEBHOOK,
     EV_CVE_WATCH_MATCH,
-    Event,
     RecipientDestination,
-    RecipientGroup,
     RecipientHold,
     WebhookEndpoint,
 )
 from app.settings_store import NotificationSettings, put_section
-from tests.helpers import make_network
 from tests.test_recipient_groups import _event, _group, csrf
 
 
@@ -66,17 +59,12 @@ def test_migration_boolean_binds_and_enabled_copy(tmp_path: Path):
     }
     with eng.begin() as conn:
         conn.execute(
-            text(
-                "INSERT INTO app_settings (key, value, updated_at) "
-                "VALUES ('notifications', :value, CURRENT_TIMESTAMP)"
-            ),
+            text("INSERT INTO app_settings (key, value, updated_at) VALUES ('notifications', :value, CURRENT_TIMESTAMP)"),
             {"value": json.dumps(payload)},
         )
     command.upgrade(cfg, "0031")
     with eng.connect() as conn:
-        row = conn.execute(
-            text("SELECT enabled, is_default, digest_time FROM recipient_groups WHERE is_default = 1")
-        ).fetchone()
+        row = conn.execute(text("SELECT enabled, is_default, digest_time FROM recipient_groups WHERE is_default = 1")).fetchone()
         assert row is not None
         assert bool(row[0]) is True and bool(row[1]) is True
         assert row[2] == "03:00"
@@ -109,14 +97,18 @@ def test_legacy_digest_retired_single_html_email(db, monkeypatch):
 
 
 def test_per_group_daily_time_independent_of_email(db, monkeypatch):
-    g = _group(db, name="Slack SOC", delivery_mode=DELIVERY_DAILY, digest_time="00:00", enabled=True)
-    db.add(RecipientDestination(group_id=g.id, kind=DEST_SLACK, enabled=True, url_enc=None))
-    # Manually set encrypted-looking empty — use monkeypatch on dest snaps instead
     from app.security import encrypt_secret
-    dest = db.scalar(select(RecipientDestination).where(RecipientDestination.group_id == g.id))
-    dest.url_enc = encrypt_secret("https://hooks.slack.example/services/T/B/x")
+
+    g = _group(db, name="Slack SOC", delivery_mode=DELIVERY_DAILY, digest_time="00:00", enabled=True)
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/services/T/B/x"),
+        )
+    )
     ev = _event(db)
-    db.commit()
     put_section(db, NotificationSettings(enabled=False, smtp_host=""))  # email master OFF
     db.commit()
 
@@ -137,10 +129,14 @@ def test_no_db_lock_during_slow_delivery(db, monkeypatch):
     from app.security import encrypt_secret
 
     g = _group(db, delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=0, max_per_hour=50)
-    db.add(RecipientDestination(
-        group_id=g.id, kind=DEST_SLACK, enabled=True,
-        url_enc=encrypt_secret("https://hooks.slack.example/slow"),
-    ))
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/slow"),
+        )
+    )
     events = [_event(db, message=f"m{i}") for i in range(3)]
     db.commit()
 
@@ -153,6 +149,7 @@ def test_no_db_lock_during_slow_delivery(db, monkeypatch):
     started = time.monotonic()
     # Run delivery on a side thread; main thread does a DB write (settings) mid-flight.
     import threading
+
     done = threading.Event()
 
     def _run():
@@ -182,7 +179,9 @@ def test_cve_routes_to_groups_without_duplicate_webhook(db, monkeypatch):
     from app.security import encrypt_secret
 
     hook = WebhookEndpoint(
-        name="siem", url="https://hooks.example.com/siem", enabled=True,
+        name="siem",
+        url="https://hooks.example.com/siem",
+        enabled=True,
         secret_enc=encrypt_secret("s"),
     )
     db.add(hook)
@@ -190,10 +189,17 @@ def test_cve_routes_to_groups_without_duplicate_webhook(db, monkeypatch):
     g = _group(db, delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=0, event_types=[EV_CVE_WATCH_MATCH])
     db.add(RecipientDestination(group_id=g.id, kind=DEST_WEBHOOK, enabled=True, webhook_id=hook.id))
     ev = _event(db, event_type=EV_CVE_WATCH_MATCH, severity="high", message="CVE-2024-1")
-    put_section(db, NotificationSettings(
-        enabled=True, webhooks_enabled=True, watchlist_webhooks_enabled=True,
-        watchlist_email_enabled=False, smtp_host="x", recipients=[],
-    ))
+    put_section(
+        db,
+        NotificationSettings(
+            enabled=True,
+            webhooks_enabled=True,
+            watchlist_webhooks_enabled=True,
+            watchlist_email_enabled=False,
+            smtp_host="x",
+            recipients=[],
+        ),
+    )
     db.commit()
 
     posts: list[str] = []
@@ -214,10 +220,14 @@ def test_immediate_batches_one_message_per_destination(db, monkeypatch):
     from app.security import encrypt_secret
 
     g = _group(db, delivery_mode=DELIVERY_IMMEDIATE, dedupe_seconds=0, max_per_hour=50)
-    db.add(RecipientDestination(
-        group_id=g.id, kind=DEST_SLACK, enabled=True,
-        url_enc=encrypt_secret("https://hooks.slack.example/b"),
-    ))
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/b"),
+        )
+    )
     events = [_event(db, message=f"e{i}") for i in range(3)]
     db.commit()
     payloads: list[dict] = []
@@ -236,10 +246,14 @@ def test_failed_flush_keeps_holds_for_retry(db, monkeypatch):
     from app.security import encrypt_secret
 
     g = _group(db, delivery_mode=DELIVERY_DAILY, digest_time="00:00")
-    db.add(RecipientDestination(
-        group_id=g.id, kind=DEST_SLACK, enabled=True,
-        url_enc=encrypt_secret("https://hooks.slack.example/fail"),
-    ))
+    db.add(
+        RecipientDestination(
+            group_id=g.id,
+            kind=DEST_SLACK,
+            enabled=True,
+            url_enc=encrypt_secret("https://hooks.slack.example/fail"),
+        )
+    )
     ev = _event(db)
     db.commit()
     deliver_channel_event_ids([ev.id])
@@ -257,7 +271,6 @@ def test_failed_flush_keeps_holds_for_retry(db, monkeypatch):
 
 
 def test_group_managed_webhook_skipped_by_global(db, monkeypatch):
-    from app.security import encrypt_secret
 
     hook = WebhookEndpoint(name="g", url="https://hooks.example.com/g", enabled=True)
     db.add(hook)

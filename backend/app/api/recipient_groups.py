@@ -1,4 +1,5 @@
 """CRUD for notification recipient groups (channels)."""
+
 from __future__ import annotations
 
 import re
@@ -295,9 +296,11 @@ def _apply_destinations(db: Session, group: RecipientGroup, destinations: list[D
 
 @router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_groups(db: Session = Depends(get_db), user=Depends(require_admin)):
-    rows = db.scalars(
-        select(RecipientGroup).options(selectinload(RecipientGroup.destinations)).order_by(RecipientGroup.id)
-    ).unique().all()
+    rows = (
+        db.scalars(select(RecipientGroup).options(selectinload(RecipientGroup.destinations)).order_by(RecipientGroup.id))
+        .unique()
+        .all()
+    )
     all_net_ids = {i for g in rows for i in (g.network_ids or [])}
     names = _network_names(db, list(all_net_ids)) if all_net_ids else {}
     return [_out(g, names) for g in rows]
@@ -306,39 +309,51 @@ def list_groups(db: Session = Depends(get_db), user=Depends(require_admin)):
 @router.post("", status_code=201)
 def create_group(body: GroupIn, request: Request, db: Session = Depends(get_db), user=Depends(require_admin)):
     name, min_sev, mode, types, digest, qs, qe = _validate_group_fields(
-        name=body.name, min_severity=body.min_severity, delivery_mode=body.delivery_mode,
-        event_types=body.event_types, digest_time=body.digest_time,
-        quiet_start=body.quiet_start, quiet_end=body.quiet_end,
+        name=body.name,
+        min_severity=body.min_severity,
+        delivery_mode=body.delivery_mode,
+        event_types=body.event_types,
+        digest_time=body.digest_time,
+        quiet_start=body.quiet_start,
+        quiet_end=body.quiet_end,
     )
     _require_destinations(body.destinations)
     net_ids = _validate_network_ids(db, body.network_ids)
     g = RecipientGroup(
-        name=name, enabled=body.enabled, is_default=False,
-        event_types=types, min_severity=min_sev, network_ids=net_ids,
-        delivery_mode=mode, digest_time=digest,
-        max_per_hour=body.max_per_hour, dedupe_seconds=body.dedupe_seconds,
-        quiet_start=qs, quiet_end=qe, quiet_bypass_critical=body.quiet_bypass_critical,
-        created_at=utcnow(), updated_at=utcnow(),
+        name=name,
+        enabled=body.enabled,
+        is_default=False,
+        event_types=types,
+        min_severity=min_sev,
+        network_ids=net_ids,
+        delivery_mode=mode,
+        digest_time=digest,
+        max_per_hour=body.max_per_hour,
+        dedupe_seconds=body.dedupe_seconds,
+        quiet_start=qs,
+        quiet_end=qe,
+        quiet_bypass_critical=body.quiet_bypass_critical,
+        created_at=utcnow(),
+        updated_at=utcnow(),
     )
     db.add(g)
     db.flush()
     _apply_destinations(db, g, body.destinations)
     audit(db, user.username, "recipient_group.create", g.name, {"id": g.id, "mode": mode}, client_ip(request))
     db.commit()
-    g = db.scalar(
-        select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations))
-    )
+    g = db.scalar(select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations)))
     return _out(g, _network_names(db, g.network_ids))
 
 
 @router.patch("/{group_id}")
 def patch_group(
-    group_id: int, body: GroupPatch, request: Request,
-    db: Session = Depends(get_db), user=Depends(require_admin),
+    group_id: int,
+    body: GroupPatch,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(require_admin),
 ):
-    g = db.scalar(
-        select(RecipientGroup).where(RecipientGroup.id == group_id).options(selectinload(RecipientGroup.destinations))
-    )
+    g = db.scalar(select(RecipientGroup).where(RecipientGroup.id == group_id).options(selectinload(RecipientGroup.destinations)))
     if g is None:
         raise HTTPException(404, "group not found")
     data = body.model_dump(exclude_unset=True)
@@ -350,8 +365,13 @@ def patch_group(
     qs = data["quiet_start"] if "quiet_start" in data else g.quiet_start
     qe = data["quiet_end"] if "quiet_end" in data else g.quiet_end
     name, min_sev, mode, types, digest, qs, qe = _validate_group_fields(
-        name=name, min_severity=min_sev, delivery_mode=mode, event_types=types,
-        digest_time=digest, quiet_start=qs, quiet_end=qe,
+        name=name,
+        min_severity=min_sev,
+        delivery_mode=mode,
+        event_types=types,
+        digest_time=digest,
+        quiet_start=qs,
+        quiet_end=qe,
     )
     if "destinations" in data and body.destinations is not None:
         _require_destinations(body.destinations, allow_empty_disabled=not data.get("enabled", g.enabled))
@@ -377,9 +397,7 @@ def patch_group(
     g.updated_at = utcnow()
     audit(db, user.username, "recipient_group.update", g.name, {"id": g.id, "mode": mode}, client_ip(request))
     db.commit()
-    g = db.scalar(
-        select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations))
-    )
+    g = db.scalar(select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations)))
     return _out(g, _network_names(db, g.network_ids))
 
 
@@ -408,8 +426,12 @@ def test_group(group_id: int, request: Request, db: Session = Depends(get_db), u
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     audit(
-        db, user.username, "recipient_group.test", name,
-        {"ok": result.get("ok"), "id": group_id}, client_ip(request),
+        db,
+        user.username,
+        "recipient_group.test",
+        name,
+        {"ok": result.get("ok"), "id": group_id},
+        client_ip(request),
     )
     db.commit()
     return result

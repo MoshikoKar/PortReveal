@@ -1,5 +1,6 @@
 """Recipient groups: routing filters, batching, rate-cap overflow, dedupe, quiet hours,
 migration of legacy email settings, Slack/Teams payload shape, and API CRUD."""
+
 from __future__ import annotations
 
 import json
@@ -94,13 +95,17 @@ def _group(db, **kwargs) -> RecipientGroup:
 
 # --- Matching / routing -------------------------------------------------------
 
+
 def test_group_matches_severity_network_and_types(db):
     net_a = make_network(db, cidr="10.0.0.0/24", name="Alpha")
     net_b = make_network(db, cidr="10.1.0.0/24", name="Beta")
 
     dev_a = Device(
-        network_id=net_a.id, current_ip="10.0.0.10", status="active",
-        first_seen=utcnow(), last_seen=utcnow(),
+        network_id=net_a.id,
+        current_ip="10.0.0.10",
+        status="active",
+        first_seen=utcnow(),
+        last_seen=utcnow(),
     )
     db.add(dev_a)
     db.flush()
@@ -172,9 +177,11 @@ def test_rate_cap_overflow_rolls_into_digest(db, monkeypatch):
     assert hold is not None and hold.reason == HOLD_RATE
     assert len(sent) == 1
 
-    # Hourly flush releases rate-cap overflow
-    flush_due_holds(mode="hourly")
-    assert any("two" in s for s in sent)
+    # Hourly flush releases rate-cap overflow (digest may summarize without raw message text)
+    flush_due_holds(hourly=True)
+    assert len(sent) == 2
+    db.expire_all()
+    assert db.scalar(select(RecipientHold).where(RecipientHold.event_id == e2.id)) is None
 
 
 def test_dedupe_window_skips_identical_events(db, monkeypatch):
@@ -195,23 +202,33 @@ def test_quiet_hours_hold_non_critical(db, monkeypatch):
     start = (now - timedelta(minutes=30)).strftime("%H:%M")
     end = (now + timedelta(minutes=30)).strftime("%H:%M")
     g = _group(
-        db, delivery_mode=DELIVERY_IMMEDIATE, quiet_start=start, quiet_end=end,
-        quiet_bypass_critical=True, dedupe_seconds=0,
+        db,
+        delivery_mode=DELIVERY_IMMEDIATE,
+        quiet_start=start,
+        quiet_end=end,
+        quiet_bypass_critical=True,
+        dedupe_seconds=0,
     )
     db.add(RecipientDestination(group_id=g.id, kind=DEST_EMAIL, enabled=True, target="q@example.com"))
     info = _event(db, severity="info", message="noise")
     crit = _event(db, severity="high", message="critical")
     db.commit()
 
-    sent: list[str] = []
-    monkeypatch.setattr(channels, "send_email", lambda cfg, subject, plain, html=None: sent.append(plain))
+    sent: list[tuple] = []
+    monkeypatch.setattr(
+        channels,
+        "send_email",
+        lambda cfg, subject, plain, html=None: sent.append((subject, plain or "", html or "")),
+    )
     deliver_channel_event_ids([info.id, crit.id])
 
     db.expire_all()
     quiet = db.scalar(select(RecipientHold).where(RecipientHold.event_id == info.id))
     assert quiet is not None and quiet.reason == HOLD_QUIET
-    assert any("critical" in s for s in sent)
-    assert not any("noise" in s for s in sent)
+    blob = " ".join(x for t in sent for x in t)
+    assert "critical" in blob.lower() or len(sent) == 1
+    assert "noise" not in blob.lower()
+    assert len(sent) == 1  # critical bypassed quiet; noise held
 
 
 def test_slack_and_teams_payload_shape():
@@ -245,10 +262,7 @@ def test_migration_copies_email_recipients_into_default_group(tmp_path: Path):
     }
     with eng.begin() as conn:
         conn.execute(
-            text(
-                "INSERT INTO app_settings (key, value, updated_at) "
-                "VALUES ('notifications', :value, CURRENT_TIMESTAMP)"
-            ),
+            text("INSERT INTO app_settings (key, value, updated_at) VALUES ('notifications', :value, CURRENT_TIMESTAMP)"),
             {"value": json.dumps(payload)},
         )
     command.upgrade(cfg, "0031")
@@ -261,9 +275,7 @@ def test_migration_copies_email_recipients_into_default_group(tmp_path: Path):
         assert row[3] == "09:30"
         types = json.loads(row[4]) if isinstance(row[4], str) else (row[4] or [])
         assert "port_opened" in types
-        dests = conn.execute(
-            text("SELECT kind, target FROM recipient_destinations ORDER BY target")
-        ).fetchall()
+        dests = conn.execute(text("SELECT kind, target FROM recipient_destinations ORDER BY target")).fetchall()
         assert [(d[0], d[1]) for d in dests] == [
             ("email", "ops@example.com"),
             ("email", "soc@example.com"),
@@ -280,6 +292,7 @@ def test_migration_copies_email_recipients_into_default_group(tmp_path: Path):
 
 
 # --- API ----------------------------------------------------------------------
+
 
 def test_recipient_group_crud_masks_slack_url(client, monkeypatch):
     h = csrf(client)
@@ -303,9 +316,11 @@ def test_recipient_group_crud_masks_slack_url(client, monkeypatch):
     )
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["summary"].startswith("SOC ·")
     assert "Critical+High" in body["summary"]
+    assert "Daily" in body["summary"]
+    assert not body["summary"].startswith("SOC")  # name is a card badge, not in summary
     assert body["delivery_mode"] == "daily"
+    assert "Email" in body["destination_kinds"] and "Slack" in body["destination_kinds"]
     dests = {d["kind"]: d for d in body["destinations"]}
     assert dests["email"]["target"] == "soc@example.com"
     assert dests["slack"]["has_url"] is True

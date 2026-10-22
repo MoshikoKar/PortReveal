@@ -4,6 +4,7 @@ Load → close session → HTTP/SMTP (concurrent, 8s deadline) → short status 
 Reuses the shared webhook delivery queue (no new thread per call). Slack/Teams get
 native cards; email digests reuse the HTML daily-summary formatter.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -104,10 +105,10 @@ def emails_covered_by_groups_for_cve(db: Session) -> set[str]:
     """Email addresses on enabled groups that accept CVE watchlist matches (avoid double-send)."""
     groups = list(
         db.scalars(
-            select(RecipientGroup)
-            .where(RecipientGroup.enabled.is_(True))
-            .options(selectinload(RecipientGroup.destinations))
-        ).unique().all()
+            select(RecipientGroup).where(RecipientGroup.enabled.is_(True)).options(selectinload(RecipientGroup.destinations))
+        )
+        .unique()
+        .all()
     )
     covered: set[str] = set()
     for g in groups:
@@ -171,13 +172,13 @@ def _route_event_ids(event_ids: list[int]) -> None:
                 .where(RecipientGroup.enabled.is_(True))
                 .options(selectinload(RecipientGroup.destinations))
                 .order_by(RecipientGroup.id)
-            ).unique().all()
+            )
+            .unique()
+            .all()
         )
         if not groups:
             return
-        events = list(
-            db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all()
-        )
+        events = list(db.scalars(select(Event).where(Event.id.in_(event_ids)).order_by(Event.id)).unique().all())
         if not events:
             return
         cfg = get_section(db, NotificationSettings)
@@ -196,11 +197,13 @@ def _route_event_ids(event_ids: list[int]) -> None:
                 if group.dedupe_seconds and group.dedupe_seconds > 0:
                     cutoff = utcnow() - timedelta(seconds=group.dedupe_seconds)
                     recent = db.scalar(
-                        select(RecipientHold.id).where(
+                        select(RecipientHold.id)
+                        .where(
                             RecipientHold.group_id == group.id,
                             RecipientHold.dedupe_key == key,
                             RecipientHold.created_at >= cutoff,
-                        ).limit(1)
+                        )
+                        .limit(1)
                     )
                     if recent:
                         continue
@@ -231,14 +234,16 @@ def _route_event_ids(event_ids: list[int]) -> None:
                 n = len(matched)
                 # Count one message toward the hourly cap (batched).
                 group.rate_sent = (group.rate_sent or 0) + 1
-                immediate_jobs.append({
-                    "group_id": group.id,
-                    "group_name": group.name,
-                    "event_ids": [e.id for e in matched],
-                    "destinations": _dest_snaps(db, destinations),
-                    "cfg": cfg_snap,
-                    "rate_count": n,
-                })
+                immediate_jobs.append(
+                    {
+                        "group_id": group.id,
+                        "group_name": group.name,
+                        "event_ids": [e.id for e in matched],
+                        "destinations": _dest_snaps(db, destinations),
+                        "cfg": cfg_snap,
+                        "rate_count": n,
+                    }
+                )
         db.commit()
     finally:
         db.close()
@@ -285,15 +290,22 @@ def _dest_snaps(db: Session, destinations: list[RecipientDestination]) -> list[d
 def _hold(db: Session, group_id: int, event_id: int, reason: str, key: str | None) -> None:
     existing = db.scalar(
         select(RecipientHold.id).where(
-            RecipientHold.group_id == group_id, RecipientHold.event_id == event_id,
+            RecipientHold.group_id == group_id,
+            RecipientHold.event_id == event_id,
         )
     )
     if existing:
         return
-    db.add(RecipientHold(
-        group_id=group_id, event_id=event_id, reason=reason, dedupe_key=key,
-        attempts=0, created_at=utcnow(),
-    ))
+    db.add(
+        RecipientHold(
+            group_id=group_id,
+            event_id=event_id,
+            reason=reason,
+            dedupe_key=key,
+            attempts=0,
+            created_at=utcnow(),
+        )
+    )
     db.flush()
 
 
@@ -314,10 +326,10 @@ def flush_due_holds(*, hourly: bool = False) -> None:
         today = now.date().isoformat()
         groups = list(
             db.scalars(
-                select(RecipientGroup)
-                .where(RecipientGroup.enabled.is_(True))
-                .options(selectinload(RecipientGroup.destinations))
-            ).unique().all()
+                select(RecipientGroup).where(RecipientGroup.enabled.is_(True)).options(selectinload(RecipientGroup.destinations))
+            )
+            .unique()
+            .all()
         )
         for group in groups:
             destinations = [d for d in (group.destinations or []) if d.enabled]
@@ -365,16 +377,18 @@ def flush_due_holds(*, hourly: bool = False) -> None:
                     db.delete(h)
                 continue
             hold_ids = [h.id for h in ready]
-            jobs.append({
-                "group_id": group.id,
-                "group_name": group.name,
-                "event_ids": [e.id for e in events],
-                "hold_ids": hold_ids,
-                "destinations": _dest_snaps(db, destinations),
-                "cfg": cfg_snap,
-                "claim_daily": claim_daily,
-                "digest_day": today if claim_daily else None,
-            })
+            jobs.append(
+                {
+                    "group_id": group.id,
+                    "group_name": group.name,
+                    "event_ids": [e.id for e in events],
+                    "hold_ids": hold_ids,
+                    "destinations": _dest_snaps(db, destinations),
+                    "cfg": cfg_snap,
+                    "claim_daily": claim_daily,
+                    "digest_day": today if claim_daily else None,
+                }
+            )
         db.commit()
     except Exception:
         log.exception("flush_due_holds plan failed")
@@ -421,7 +435,11 @@ def _deliver_job(job: dict) -> None:
         return
 
     results = _send_destinations_concurrent(
-        job["destinations"], cards, job["cfg"], job["group_name"], html_pack=html_pack,
+        job["destinations"],
+        cards,
+        job["cfg"],
+        job["group_name"],
+        html_pack=html_pack,
     )
     all_ok = all(r["ok"] for r in results) if results else False
     last_err = next((r["error"] for r in results if not r["ok"]), None)
@@ -508,7 +526,9 @@ def _send_destinations_concurrent(
         except Exception as exc:
             log.warning(
                 "recipient group dest %s failed for host %s: %s",
-                kind, _host(snap.get("url") or "") if snap.get("url") else "(email)", type(exc).__name__,
+                kind,
+                _host(snap.get("url") or "") if snap.get("url") else "(email)",
+                type(exc).__name__,
             )
             return {"ok": False, "kind": kind, "error": str(exc)[:500]}
 
@@ -554,15 +574,18 @@ def _slack_payload(payloads: list[dict], group_name: str) -> dict:
     if len(payloads) > 20:
         lines.append(f"_…and {len(payloads) - 20} more_")
     color = {"high": "#dc2626", "medium": "#d97706", "low": "#2563eb", "info": "#64748b"}.get(
-        (payloads[0].get("severity") if payloads else None) or "info", "#64748b",
+        (payloads[0].get("severity") if payloads else None) or "info",
+        "#64748b",
     )
     return {
-        "attachments": [{
-            "color": color,
-            "mrkdwn_in": ["text"],
-            "text": "\n".join(lines),
-            "footer": "PortReveal",
-        }],
+        "attachments": [
+            {
+                "color": color,
+                "mrkdwn_in": ["text"],
+                "text": "\n".join(lines),
+                "footer": "PortReveal",
+            }
+        ],
     }
 
 
@@ -572,20 +595,24 @@ def _teams_payload(payloads: list[dict], group_name: str) -> dict:
         where = p.get("ip") or ""
         if p.get("port"):
             where = f"{where} {p.get('protocol') or 'tcp'}/{p['port']}".strip()
-        facts.append({
-            "name": f"{(p.get('severity') or 'info').upper()} · {p.get('type')}",
-            "value": p.get("message") or where or "—",
-        })
+        facts.append(
+            {
+                "name": f"{(p.get('severity') or 'info').upper()} · {p.get('type')}",
+                "value": p.get("message") or where or "—",
+            }
+        )
     return {
         "@type": "MessageCard",
         "@context": "https://schema.org/extensions",
         "summary": f"PortReveal · {group_name}",
         "themeColor": "0F172A",
         "title": f"PortReveal · {group_name}",
-        "sections": [{
-            "activityTitle": f"{len(payloads)} event{'s' if len(payloads) != 1 else ''}",
-            "facts": facts,
-        }],
+        "sections": [
+            {
+                "activityTitle": f"{len(payloads)} event{'s' if len(payloads) != 1 else ''}",
+                "facts": facts,
+            }
+        ],
     }
 
 
@@ -634,9 +661,7 @@ def send_group_test(group_id: int) -> dict:
     get_engine()
     with session_scope() as db:
         group = db.scalar(
-            select(RecipientGroup)
-            .where(RecipientGroup.id == group_id)
-            .options(selectinload(RecipientGroup.destinations))
+            select(RecipientGroup).where(RecipientGroup.id == group_id).options(selectinload(RecipientGroup.destinations))
         )
         if group is None:
             raise ValueError("group not found")
@@ -654,14 +679,25 @@ def send_group_test(group_id: int) -> dict:
         }
         name = group.name
     # Synthetic card — no Event row.
-    cards = [{
-        "id": 0, "type": "webhook_test", "severity": "info",
-        "ip": None, "port": None, "protocol": None,
-        "message": f"PortReveal test for “{name}”",
-        "created_at": utcnow().isoformat(), "notify": True,
-    }]
+    cards = [
+        {
+            "id": 0,
+            "type": "webhook_test",
+            "severity": "info",
+            "ip": None,
+            "port": None,
+            "protocol": None,
+            "message": f"PortReveal test for “{name}”",
+            "created_at": utcnow().isoformat(),
+            "notify": True,
+        }
+    ]
     results = _send_destinations_concurrent(
-        job["destinations"], cards, job["cfg"], name, html_pack=None,
+        job["destinations"],
+        cards,
+        job["cfg"],
+        name,
+        html_pack=None,
     )
     all_ok = all(r["ok"] for r in results) if results else False
     last_err = next((r["error"] for r in results if not r["ok"]), None)
