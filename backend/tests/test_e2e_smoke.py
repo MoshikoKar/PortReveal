@@ -294,8 +294,9 @@ def test_vulnerabilities_search_debounce_respects_clear_all_and_facet(live_app, 
 
     Uses direct JS input/click (no Playwright auto-scroll delay) so the race is real.
     """
-    from playwright.sync_api import expect
     from urllib.parse import parse_qs, urlparse
+
+    from playwright.sync_api import expect
 
     base = live_app["base"]
     page = browser.new_page()
