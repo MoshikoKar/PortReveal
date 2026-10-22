@@ -288,7 +288,7 @@ export default function Vulnerabilities() {
     try {
       await downloadBlob(
         `/vulns/export${exportQuery()}`,
-        vulnExportFilename(filters, labelCtx, 'csv'),
+        vulnExportFilename(filters, labelCtx, 'csv', { searchQ: q || undefined }),
       );
     } catch (e: unknown) {
       setExportError(e instanceof Error ? e.message : 'Export failed.');
@@ -303,7 +303,7 @@ export default function Vulnerabilities() {
     try {
       await downloadBlob(
         `/vulns/export/html${exportQuery()}`,
-        vulnExportFilename(filters, labelCtx, 'html'),
+        vulnExportFilename(filters, labelCtx, 'html', { searchQ: q || undefined }),
       );
     } catch (e: unknown) {
       setExportError(e instanceof Error ? e.message : 'HTML report failed.');

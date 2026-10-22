@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 
 from app.core.vuln.filters import FindingFilters
 from app.core.vuln.html_report import (
@@ -11,6 +14,33 @@ from app.core.vuln.html_report import (
     finding_dict,
     format_filter_line,
 )
+
+
+def _finding(**kwargs):
+    base = dict(
+        cve_id="CVE-2024-1",
+        device_uuid="u1",
+        device_ip="10.99.0.1",
+        device_hostname="host-a.lab.example",
+        network="Mock Lab",
+        network_id=1,
+        port=22,
+        protocol="tcp",
+        service="ssh",
+        product="OpenSSH",
+        version="7.4",
+        state="confirmed",
+        cvss_base=9.8,
+        cvss_vector="CVSS:3.1/AV:N",
+        kev=True,
+        epss=0.9,
+        summary="Sample title",
+        first_seen_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        matched_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        hidden_reasons=None,
+    )
+    base.update(kwargs)
+    return finding_dict(**base)
 
 
 def test_format_filter_line_matches_print_wording():
@@ -31,26 +61,9 @@ def test_format_filter_line_matches_print_wording():
 
 def test_build_html_report_escapes_and_embeds_json():
     findings = [
-        finding_dict(
-            cve_id="CVE-2024-1",
-            device_uuid="u1",
-            device_ip="10.99.0.1",
+        _finding(
             device_hostname='</script><script>alert(1)</script>',
-            network="Mock Lab",
-            network_id=1,
-            port=22,
-            protocol="tcp",
-            service="ssh",
-            product="OpenSSH",
-            version="7.4",
-            state="confirmed",
-            cvss_base=9.8,
-            cvss_vector="CVSS:3.1/AV:N",
-            kev=True,
-            epss=0.9,
             summary='Title with <b>html</b> & "quotes"',
-            first_seen_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            matched_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
             hidden_reasons=["Below CVSS floor"],
         )
     ]
@@ -63,8 +76,198 @@ def test_build_html_report_escapes_and_embeds_json():
     assert "\\u003c" in html or "&lt;" in html
     assert html.count("<script>") == 2
     assert "CVE-2024-1" in html
+    assert "Top devices by risk" in html
+    assert "Top CVEs by affected devices" in html
+    assert "First seen (weekly)" not in html
+    assert "KEV share" not in html
+    assert "beforeprint" in html
+    assert "@page" in html and "A4 landscape" in html
+    assert "data-theme-set" in html
     stats = compute_stats(findings)
     assert stats.findings_total == 1
     assert stats.kev_count == 1
     assert stats.device_count == 1
     assert stats.severity_counts["critical"] == 1
+    assert stats.top_devices
+    assert stats.top_cves
+
+
+def test_compute_stats_top_lists():
+    findings = [
+        _finding(cve_id="CVE-2024-100", device_uuid="d1", device_ip="10.0.0.1", cvss_base=9.8, kev=True),
+        _finding(cve_id="CVE-2024-100", device_uuid="d2", device_ip="10.0.0.2", cvss_base=9.8, kev=True),
+        _finding(cve_id="CVE-2024-200", device_uuid="d1", device_ip="10.0.0.1", cvss_base=5.0, kev=False),
+    ]
+    stats = compute_stats(findings)
+    assert stats.top_cves[0][0] == "CVE-2024-100"
+    assert stats.top_cves[0][1] == 2
+    assert stats.top_devices[0][1] >= stats.top_devices[-1][1]
+
+
+@pytest.mark.parametrize(
+    "key,dir_,field,expected_first",
+    [
+        # CVE numeric asc / desc
+        ("cve", 1, "cve_id", "CVE-2024-999"),
+        ("cve", -1, "cve_id", "CVE-2026-900002"),
+        ("severity", -1, "severity", "critical"),
+        ("epss", -1, "epss", 0.9),
+        ("title", 1, "summary", "Alpha title"),
+        ("title", -1, "summary", "Zulu title"),
+        ("port", 1, "port", 22),
+        ("port", -1, "port", 8080),
+        ("state", 1, "state", "confirmed"),
+        ("state", -1, "state", "potential"),
+        ("cvss", -1, "cvss_base", 9.8),
+    ],
+)
+def test_report_js_sort_helpers(key, dir_, field, expected_first, tmp_path: Path):
+    """Each sortable column uses __REPORT_API__.compareFindings / compareCveIds correctly."""
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    findings = [
+        _finding(
+            cve_id="CVE-2024-10000",
+            device_uuid="d1",
+            device_ip="10.0.0.2",
+            port=443,
+            state="potential",
+            cvss_base=5.0,
+            epss=0.1,
+            summary="Zulu title",
+        ),
+        _finding(
+            cve_id="CVE-2024-999",
+            device_uuid="d2",
+            device_ip="10.0.0.1",
+            port=22,
+            state="confirmed",
+            cvss_base=9.8,
+            epss=0.9,
+            summary="Alpha title",
+        ),
+        _finding(
+            cve_id="CVE-2026-900002",
+            device_uuid="d3",
+            device_ip="10.0.0.3",
+            port=80,
+            state="dismissed",
+            cvss_base=3.0,
+            epss=0.05,
+            summary="Middle title",
+        ),
+        _finding(
+            cve_id="CVE-2026-73180",
+            device_uuid="d4",
+            device_ip="10.0.0.4",
+            port=8080,
+            state="confirmed",
+            cvss_base=7.5,
+            epss=0.4,
+            summary="Beta title",
+        ),
+    ]
+    html = build_html_report(findings=findings, filter_line="All networks (no filters)")
+    path = tmp_path / "sort.html"
+    path.write_text(html, encoding="utf-8")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(path.as_uri())
+        page.wait_for_function("() => window.__REPORT_API__")
+
+        if key == "cve" and dir_ == 1:
+            order = page.evaluate(
+                """() => {
+                  const ids = ['CVE-2024-10000','CVE-2024-999','CVE-2026-900002','CVE-2026-73180'];
+                  return ids.slice().sort(window.__REPORT_API__.compareCveIds);
+                }"""
+            )
+            assert order == [
+                "CVE-2024-999",
+                "CVE-2024-10000",
+                "CVE-2026-73180",
+                "CVE-2026-900002",
+            ]
+
+        first = page.evaluate(
+            """([k, dir, field]) => {
+              const data = window.__REPORT_DATA__.slice()
+                .sort((a,b)=>window.__REPORT_API__.compareFindings(a,b,k,dir));
+              return data[0][field];
+            }""",
+            [key, dir_, field],
+        )
+        assert first == expected_first
+
+        if key == "severity":
+            mild = page.evaluate(
+                """() => {
+                  const data = window.__REPORT_DATA__.slice()
+                    .sort((a,b)=>window.__REPORT_API__.compareFindings(a,b,'severity',1));
+                  return data[0].severity;
+                }"""
+            )
+            assert mild in ("low", "medium", "unknown")
+        browser.close()
+
+
+def test_report_print_css_forces_light_and_expands_groups(tmp_path: Path):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    findings = [_finding(cve_id=f"CVE-2024-{i}", device_uuid=f"d{i}", device_ip=f"10.0.0.{i}") for i in range(1, 6)]
+    html = build_html_report(findings=findings, filter_line="All networks (no filters)")
+    path = tmp_path / "print.html"
+    path.write_text(html, encoding="utf-8")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(color_scheme="dark")
+        page.goto(path.as_uri())
+        page.wait_for_selector("#groups .group")
+        # Before print: groups collapsed → no table rows
+        assert page.locator("table.findings tbody tr.row").count() == 0
+        page.evaluate("() => window.dispatchEvent(new Event('beforeprint'))")
+        page.wait_for_selector("table.findings tbody tr.row")
+        assert page.locator("table.findings tbody tr.row").count() >= 5
+        # Detail rows stay hidden unless previously expanded
+        assert page.locator("tr.detail-row.print-show").count() == 0
+        # Print media: light background forced
+        page.emulate_media(media="print")
+        bg = page.evaluate("() => getComputedStyle(document.body).backgroundColor")
+        # rgb(255, 255, 255) or similar
+        assert "255" in bg
+        browser.close()
+
+
+def test_expanded_row_survives_resort(tmp_path: Path):
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    findings = [
+        _finding(cve_id="CVE-2024-1", device_uuid="d1", device_ip="10.0.0.1", cvss_base=9.8),
+        _finding(cve_id="CVE-2024-2", device_uuid="d1", device_ip="10.0.0.1", cvss_base=5.0),
+    ]
+    html = build_html_report(findings=findings, filter_line="All networks (no filters)")
+    path = tmp_path / "expand.html"
+    path.write_text(html, encoding="utf-8")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(path.as_uri())
+        page.locator(".group-head").first.click()
+        page.wait_for_selector("table.findings tbody tr.row")
+        page.locator("table.findings tbody tr.row").first.click()
+        page.wait_for_selector("tr.detail-row")
+        before = page.evaluate("() => window.__REPORT_API__.getExpandedRows()")
+        assert len(before) == 1
+        page.evaluate("() => window.__REPORT_API__.setSort('cvss', 1)")
+        page.wait_for_timeout(50)
+        after = page.evaluate("() => window.__REPORT_API__.getExpandedRows()")
+        assert after == before
+        assert page.locator("tr.detail-row").count() == 1
+        browser.close()

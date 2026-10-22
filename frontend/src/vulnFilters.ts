@@ -330,6 +330,7 @@ export function vulnExportFilename(
   filters: VulnFilters,
   ctx: VulnFilterLabelContext = {},
   ext: 'csv' | 'html' = 'csv',
+  opts: { searchQ?: string } = {},
 ): string {
   const day = localFilenameDay();
   const parts: string[] = [];
@@ -345,6 +346,8 @@ export function vulnExportFilename(
   else if (filters.kev === 'false') parts.push('not-kev');
   if (filters.severity) parts.push(sanitizeFilenamePart(filters.severity));
   if (filters.state) parts.push(sanitizeFilenamePart(filters.state));
+  // Match server ``_export_filename``: free-text search appends a ``search`` slug segment.
+  if (opts.searchQ?.trim()) parts.push('search');
   const slug = parts.length ? parts.join('_') : 'all';
   return `vulns_${slug}_${day}.${ext}`;
 }
