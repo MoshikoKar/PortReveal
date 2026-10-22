@@ -77,8 +77,11 @@ def test_build_html_report_escapes_and_embeds_json():
     assert "Top CVEs by affected devices" in html
     assert "chart-hbar" in html
     assert "rank-list" in html
-    assert "sum of (CVSS + 1000 if KEV)" in html
+    assert "Ranked by KEV count" in html
+    assert "chart-summary" in html
     assert "function compareIps" in html
+    assert "visibleColCount" in html
+    assert "Below floor" in html  # shortened badge label in JS
     assert "First seen (weekly)" not in html
     assert "KEV share" not in html
     assert "beforeprint" in html
@@ -91,6 +94,8 @@ def test_build_html_report_escapes_and_embeds_json():
     assert stats.device_count == 1
     assert stats.severity_counts["critical"] == 1
     assert stats.top_devices
+    assert len(stats.top_devices[0]) == 3
+    assert "KEV" in stats.top_devices[0][2]
     assert stats.top_cves
 
 
@@ -103,7 +108,10 @@ def test_compute_stats_top_lists():
     stats = compute_stats(findings)
     assert stats.top_cves[0][0] == "CVE-2024-100"
     assert stats.top_cves[0][1] == 2
+    # d1 has 1 KEV + medium; d2 has 1 KEV only — d1 ranks first (same KEV, higher CVSS sum)
+    assert stats.top_devices[0][0].startswith("10.0.0.1")
     assert stats.top_devices[0][1] >= stats.top_devices[-1][1]
+    assert "KEV 1" in stats.top_devices[0][2]
 
 
 def test_report_js_embeds_all_sortable_columns():
@@ -126,6 +134,9 @@ def test_report_js_embeds_all_sortable_columns():
         "A4 landscape",
         "compareIps",
         "chart-hbar",
+        "visibleColCount",
+        "Ranked by KEV count",
+        "chart-summary",
     ):
         assert needle in html, needle
 
@@ -332,4 +343,71 @@ def test_expanded_row_survives_resort(tmp_path: Path):
         after = page.evaluate("() => window.__REPORT_API__.getExpandedRows()")
         assert after == before
         assert page.locator("tr.detail-row").count() == 1
+        browser.close()
+
+
+def _table_title_metrics(page):
+    return page.evaluate(
+        """() => {
+          const table = document.querySelector('table.findings');
+          const title = document.querySelector('th.col-title');
+          if (!table || !title) return null;
+          const tw = table.getBoundingClientRect().width;
+          const titleW = title.getBoundingClientRect().width;
+          const detail = document.querySelector('tr.detail-row > td');
+          return {
+            tableW: tw,
+            titleW,
+            colspan: detail ? detail.colSpan : null,
+            visibleCols: window.__REPORT_API__.visibleColCount(),
+          };
+        }"""
+    )
+
+
+@pytest.mark.e2e
+def test_detail_open_does_not_shrink_table_or_title(tmp_path: Path):
+    """Opening a detail row must keep table/Title width (colspan = visible cols)."""
+    pytest.importorskip("playwright")
+    from playwright.sync_api import sync_playwright
+
+    findings = [
+        _finding(
+            cve_id="CVE-2024-1",
+            device_uuid="d1",
+            device_ip="10.0.0.1",
+            cvss_base=9.8,
+            summary="A reasonably long title so the Title column has something to measure against.",
+            hidden_reasons=["Below CVSS floor"],
+        ),
+        _finding(cve_id="CVE-2024-2", device_uuid="d1", device_ip="10.0.0.1", cvss_base=5.0),
+    ]
+    html = build_html_report(findings=findings, filter_line="All networks (no filters)")
+    path = tmp_path / "width.html"
+    path.write_text(html, encoding="utf-8")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        page.goto(path.as_uri())
+        page.locator(".group-head").first.click()
+        page.wait_for_selector("table.findings tbody tr.row")
+        before = _table_title_metrics(page)
+        assert before and before["tableW"] > 1000
+        assert before["titleW"] > 300
+        # device grouping hides device+network → 9 visible of 11
+        assert before["visibleCols"] == 9
+
+        page.locator("table.findings tbody tr.row").first.click()
+        page.wait_for_selector("tr.detail-row")
+        after = _table_title_metrics(page)
+        assert after["colspan"] == 9
+        assert abs(after["tableW"] - before["tableW"]) < 2
+        assert abs(after["titleW"] - before["titleW"]) < 2
+
+        # Short badge text with full reason in tooltip
+        tip = page.locator(".col-state .hidden-reason").first.get_attribute("title")
+        text = page.locator(".col-state .hidden-reason").first.inner_text()
+        assert tip == "Below CVSS floor"
+        assert text == "Below floor"
         browser.close()

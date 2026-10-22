@@ -164,7 +164,7 @@ def format_filter_line(
 
 
 def risk_score(f: dict[str, Any]) -> float:
-    """Per-finding contribution to device risk: CVSS + 1000 if KEV (summed per device)."""
+    """Legacy per-finding weight (CVSS + 1000 if KEV); still used for row sort."""
     return (1000.0 if f.get("kev") else 0.0) + float(f.get("cvss_base") or 0.0)
 
 
@@ -175,7 +175,8 @@ class ReportStats:
     device_count: int
     severity_counts: dict[str, int]
     by_network: list[tuple[str, int]]
-    top_devices: list[tuple[str, int]]
+    # (device label, relative bar 0–100, value text e.g. "KEV 2 · Crit 1 · High 3")
+    top_devices: list[tuple[str, int, str]]
     top_cves: list[tuple[str, int]]
 
 
@@ -184,8 +185,11 @@ def compute_stats(findings: list[dict[str, Any]]) -> ReportStats:
     kev = 0
     devices: set[str] = set()
     nets: Counter[str] = Counter()
-    device_risk: dict[str, float] = defaultdict(float)
     device_label: dict[str, str] = {}
+    device_kev: dict[str, int] = defaultdict(int)
+    device_crit: dict[str, int] = defaultdict(int)
+    device_high: dict[str, int] = defaultdict(int)
+    device_cvss: dict[str, float] = defaultdict(float)
     cve_devices: dict[str, set[str]] = defaultdict(set)
     for f in findings:
         s = f.get("severity") or "unknown"
@@ -197,7 +201,13 @@ def compute_stats(findings: list[dict[str, Any]]) -> ReportStats:
         uuid = str(f.get("device_uuid") or "")
         if uuid:
             devices.add(uuid)
-            device_risk[uuid] += risk_score(f)
+            if f.get("kev"):
+                device_kev[uuid] += 1
+            if s == "critical":
+                device_crit[uuid] += 1
+            elif s == "high":
+                device_high[uuid] += 1
+            device_cvss[uuid] += float(f.get("cvss_base") or 0.0)
             ip = f.get("device_ip") or uuid
             host = f.get("device_hostname") or ""
             device_label[uuid] = f"{ip} · {host}" if host else str(ip)
@@ -206,10 +216,24 @@ def compute_stats(findings: list[dict[str, Any]]) -> ReportStats:
         if cve_id and uuid:
             cve_devices[cve_id].add(uuid)
     by_net = sorted(nets.items(), key=lambda x: (-x[1], x[0]))[:12]
-    top_dev = sorted(
-        ((device_label[u], int(round(score))) for u, score in device_risk.items()),
-        key=lambda x: (-x[1], x[0]),
+    ranked = sorted(
+        devices,
+        key=lambda u: (
+            -device_kev[u],
+            -device_crit[u],
+            -device_high[u],
+            -device_cvss[u],
+            device_label[u],
+        ),
     )[:8]
+    # Relative bar length within this top list (0–100).
+    raw_scores = [device_kev[u] * 10000 + device_crit[u] * 100 + device_high[u] * 10 + device_cvss[u] for u in ranked]
+    max_raw = max(raw_scores) if raw_scores else 1.0
+    top_dev: list[tuple[str, int, str]] = []
+    for u, raw in zip(ranked, raw_scores, strict=True):
+        bar = int(round((raw / max_raw) * 100)) if max_raw else 0
+        bits = f"KEV {device_kev[u]} · Crit {device_crit[u]} · High {device_high[u]}"
+        top_dev.append((device_label[u], bar, bits))
     top_cve = sorted(
         ((cve, len(devs)) for cve, devs in cve_devices.items()),
         key=lambda x: (-x[1], x[0]),
@@ -277,33 +301,44 @@ def _svg_bar_chart(
 
 def _rank_hbar_chart(
     title: str,
-    items: list[tuple[str, int]],
+    items: list[tuple[str, int]] | list[tuple[str, int, str]],
     *,
     color: str = "#0ed0d9",
     caption: str | None = None,
     value_unit: str = "",
+    extra_class: str = "",
 ) -> str:
-    """HTML horizontal bars: full label + title tooltip, value with optional unit."""
+    """HTML horizontal bars: full label + title tooltip; bar value may differ from display text."""
+    cls = f"chart chart-hbar {extra_class}".strip()
     if not items:
-        return f'<figure class="chart chart-hbar"><figcaption>{_esc(title)}</figcaption><p class="empty">No data</p></figure>'
-    max_v = max(v for _, v in items) or 1
+        return f'<figure class="{cls}"><figcaption>{_esc(title)}</figcaption><p class="empty">No data</p></figure>'
+    parsed: list[tuple[str, int, str]] = []
+    for item in items:
+        if len(item) == 3:
+            label, val, display = item  # type: ignore[misc]
+        else:
+            label, val = item  # type: ignore[misc]
+            display = str(val)
+        parsed.append((label, int(val), display))
+    max_v = max(v for _, v, _ in parsed) or 1
     unit = f" {_esc(value_unit)}" if value_unit else ""
     rows: list[str] = []
-    for label, val in items:
+    for label, val, display in parsed:
         pct = int(round((val / max_v) * 100)) if val else 0
-        tip = f"{label}: {val}{(' ' + value_unit) if value_unit else ''}"
+        tip = f"{label}: {display}{(' (' + value_unit + ')') if value_unit else ''}"
         rows.append(
             f'<li title="{_esc(tip)}">'
             f'<span class="rank-label">{_esc(label)}</span>'
             f'<span class="rank-track" aria-hidden="true">'
             f'<span class="rank-bar" style="width:{pct}%;background:{_esc(color)}"></span>'
             f"</span>"
-            f'<span class="rank-val">{val}<span class="rank-unit">{unit}</span></span>'
+            f'<span class="rank-val">{_esc(display)}'
+            f'<span class="rank-unit">{unit}</span></span>'
             f"</li>"
         )
     cap = f'<p class="chart-caption" title="{_esc(caption)}">{_esc(caption)}</p>' if caption else ""
     return (
-        f'<figure class="chart chart-hbar"><figcaption>{_esc(title)}</figcaption>{cap}'
+        f'<figure class="{cls}"><figcaption>{_esc(title)}</figcaption>{cap}'
         f'<ol class="rank-list" aria-label="{_esc(title)}">{"".join(rows)}</ol></figure>'
     )
 
@@ -311,18 +346,21 @@ def _rank_hbar_chart(
 def _charts_html(stats: ReportStats) -> str:
     sev_items = [(k, stats.severity_counts.get(k, 0)) for k in SEV_ORDER if stats.severity_counts.get(k, 0)]
     sev_chart = _svg_bar_chart("Severity distribution", sev_items, colors=SEV_COLORS)
+    # Wrap summary charts so print can drop them (cards already show the totals).
+    sev_wrap = f'<div class="chart-summary">{sev_chart}</div>'
     net_chart = _svg_bar_chart(
         "Findings by network",
         stats.by_network[:8],
         colors=defaultdict(lambda: "#1965d9"),
     )
-    risk_caption = "Risk = sum of (CVSS + 1000 if KEV) across findings on the device. Higher = more urgent."
+    net_wrap = f'<div class="chart-summary">{net_chart}</div>'
+    risk_caption = "Ranked by KEV count, then Critical, then High, then CVSS sum. Bar length is relative within this list."
     top_dev = _rank_hbar_chart(
         "Top devices by risk",
         stats.top_devices,
         color="#0ed0d9",
         caption=risk_caption,
-        value_unit="risk",
+        extra_class="chart-top",
     )
     top_cve = _rank_hbar_chart(
         "Top CVEs by affected devices",
@@ -330,8 +368,9 @@ def _charts_html(stats: ReportStats) -> str:
         color="#f87171",
         caption="Count of distinct devices matching each CVE.",
         value_unit="devices",
+        extra_class="chart-top",
     )
-    return f'<section class="charts" aria-label="Charts">{sev_chart}{net_chart}{top_dev}{top_cve}</section>'
+    return f'<section class="charts" aria-label="Charts">{sev_wrap}{net_wrap}{top_dev}{top_cve}</section>'
 
 
 def _payload_json(findings: list[dict[str, Any]]) -> str:
@@ -401,6 +440,8 @@ header.report-header h1 { margin:0 0 6px; font-size:22px; letter-spacing:.01em; 
 .card.crit .value, .card.kev .value { color:var(--high); }
 .charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:8px 0 20px; }
 @media (max-width:900px){ .charts { grid-template-columns:1fr; } }
+.chart-summary { min-width:0; }
+.chart-summary .chart { height:100%; }
 .chart {
   margin:0; background:var(--panel); border:1px solid var(--border);
   border-radius:8px; padding:10px 12px; overflow:visible;
@@ -412,7 +453,7 @@ header.report-header h1 { margin:0 0 6px; font-size:22px; letter-spacing:.01em; 
 .chart svg .val { fill:var(--text-2); font-size:10px; }
 .rank-list { list-style:none; margin:0; padding:0; }
 .rank-list li {
-  display:grid; grid-template-columns:minmax(9.5rem,1.6fr) minmax(4rem,1fr) max-content;
+  display:grid; grid-template-columns:minmax(10rem,1.4fr) minmax(3.5rem,1fr) minmax(7.5rem,max-content);
   gap:8px; align-items:center; margin:0 0 7px; font-size:12px;
 }
 .rank-label {
@@ -424,8 +465,11 @@ header.report-header h1 { margin:0 0 6px; font-size:22px; letter-spacing:.01em; 
   display:block; height:12px; background:var(--panel-3); border-radius:3px; overflow:hidden;
 }
 .rank-bar { display:block; height:100%; border-radius:3px; min-width:2px; }
-.rank-val { color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap; font-weight:600; }
-.rank-unit { color:var(--muted); font-weight:500; font-size:11px; }
+.rank-val {
+  color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap;
+  font-weight:600; font-size:11px; justify-self:end;
+}
+.rank-unit { color:var(--muted); font-weight:500; font-size:10px; }
 .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:12px 0;
   padding:10px 12px; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; }
 .toolbar input[type=search] { flex:1; min-width:160px; padding:6px 10px; border-radius:6px;
@@ -482,8 +526,10 @@ table.findings th.col-title, table.findings td.col-title { width: auto; }
 table.findings th.col-device, table.findings td.col-device { width: 14%; }
 table.findings th.col-network, table.findings td.col-network { width: 10%; }
 table.findings th.col-port, table.findings td.col-port { width: 6%; }
-table.findings th.col-state, table.findings td.col-state { width: 8%; }
+table.findings th.col-state, table.findings td.col-state { width: 11%; white-space: nowrap; }
 table.findings th.col-first, table.findings td.col-first { width: 9%; }
+table.findings tr.detail-row > td { overflow: hidden; }
+.col-state .hidden-reason { white-space: nowrap; margin-left: 4px; }
 .mono { font-family:var(--mono); font-size:12px; }
 .nowrap { white-space:nowrap; }
 .badge {
@@ -571,28 +617,30 @@ footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border
   .card .label { color: #555 !important; font-size: 7pt; }
   .card .value { color: #111 !important; font-size: 11pt; }
   .card.crit .value, .card.kev .value { color: #a00 !important; }
-  /* Readable 2×2 chart grid (omit tiny 4-up). */
+  /* Print: Top charts only (severity/network already on cards); keep them short. */
+  .chart-summary { display: none !important; }
   .charts {
     display: grid !important;
     grid-template-columns: 1fr 1fr !important;
-    gap: 6px 10px !important;
-    margin: 4px 2mm 8px !important;
+    gap: 4px 8px !important;
+    margin: 2px 2mm 4px !important;
   }
   .chart {
-    border: 1px solid #bbb !important; border-radius: 0; padding: 4px 6px !important;
+    border: 1px solid #bbb !important; border-radius: 0; padding: 2px 4px !important;
     min-width: 0; break-inside: avoid; page-break-inside: avoid;
   }
-  .chart figcaption { color: #111 !important; font-size: 9pt; margin-bottom: 2px; font-weight: 700; }
-  .chart-caption { color: #333 !important; font-size: 7.5pt; margin-bottom: 4px; }
-  .chart svg { height: 120px !important; max-width: 100%; }
-  .chart svg .tick, .chart svg .val { fill: #222 !important; font-size: 9px; }
+  .chart figcaption { color: #111 !important; font-size: 8pt; margin-bottom: 1px; font-weight: 700; }
+  .chart-caption { color: #333 !important; font-size: 6.5pt; margin-bottom: 2px; }
+  .chart svg { height: 72px !important; max-width: 100%; }
+  .chart svg .tick, .chart svg .val { fill: #222 !important; font-size: 8px; }
   .rank-list li {
-    font-size: 9pt; gap: 6px; margin-bottom: 4px;
-    grid-template-columns: minmax(10rem,1.8fr) minmax(3.5rem,1fr) max-content;
+    font-size: 7.5pt; gap: 4px; margin-bottom: 2px;
+    grid-template-columns: minmax(8rem,1.6fr) minmax(3rem,1fr) max-content;
   }
-  .rank-label { color: #111 !important; -webkit-line-clamp: 2; }
-  .rank-track { background: #e8e8e8 !important; height: 10px; }
-  .rank-val { color: #111 !important; }
+  .rank-list li:nth-child(n+6) { display: none; } /* Top 5 in print */
+  .rank-label { color: #111 !important; -webkit-line-clamp: 1; }
+  .rank-track { background: #e8e8e8 !important; height: 7px; }
+  .rank-val { color: #111 !important; font-size: 7pt; }
   .rank-unit { color: #444 !important; }
   header.report-header { border-bottom: 1px solid #ccc; margin-bottom: 4px; padding-bottom: 2px; }
   header.report-header h1 { font-size: 11pt; color: #111 !important; }
@@ -670,7 +718,7 @@ footer.report-foot { margin-top:24px; color:var(--muted); font-size:12px; border
   }
   table.findings th.col-network, table.findings td.col-network { width: 8%; }
   table.findings th.col-port, table.findings td.col-port { width: 7%; white-space: nowrap; }
-  table.findings th.col-state, table.findings td.col-state { width: 9%; }
+  table.findings th.col-state, table.findings td.col-state { width: 10%; white-space: nowrap; }
   table.findings th.col-first, table.findings td.col-first { width: 10%; white-space: nowrap; }
 }
 """
@@ -771,6 +819,21 @@ def _js() -> str:
   function rowId(f){
     return f.device_uuid+'|'+f.protocol+'|'+f.port+'|'+f.cve_id;
   }
+  function groupHiddenCols(){
+    return groupBy==='cve' ? ['cve','title'] : ['device','network'];
+  }
+  function visibleColCount(){
+    const gh = new Set(groupHiddenCols());
+    return COLS.filter(c => !hiddenCols.has(c) && !gh.has(c)).length;
+  }
+  function syncDetailColspans(){
+    const n = visibleColCount();
+    root.querySelectorAll('tr.detail-row > td').forEach(td => { td.colSpan = n; });
+  }
+  function reasonShort(r){
+    if(r==='Below CVSS floor') return 'Below floor';
+    return r;
+  }
   function groupStats(items){
     let maxSev = 'unknown', maxCvss = null, anyKev = false;
     for(const {f} of items){
@@ -813,7 +876,8 @@ def _js() -> str:
     const refs = (f.references||[]).map(u=>
       '<a href="'+esc(u)+'" rel="noopener noreferrer">'+esc(u)+'</a>').join('<br>');
     const hidden = (f.hidden_reasons||[]).map(r=>
-      '<span class="badge outline hidden-reason">'+esc(r)+'</span>').join(' ');
+      '<span class="badge outline hidden-reason" title="'+esc(r)+'">'+esc(reasonShort(r))+'</span>'
+    ).join(' ');
     return '<div class="detail-grid">'
       +'<div><dt>Description</dt><dd>'+esc(f.summary||'—')+'</dd></div>'
       +'<div><dt>CVSS</dt><dd class="mono">'+(f.cvss_base==null?'—':Number(f.cvss_base).toFixed(1))
@@ -830,7 +894,8 @@ def _js() -> str:
     const id = rowId(f);
     const open = expandedRows.has(id);
     const reasons = (f.hidden_reasons||[]).map(r=>
-      '<div class="badge outline hidden-reason">'+esc(r)+'</div>').join('');
+      '<span class="badge outline hidden-reason" title="'+esc(r)+'">'+esc(reasonShort(r))+'</span>'
+    ).join(' ');
     const hostTip = [f.device_ip, f.device_hostname].filter(Boolean).join(' · ');
     const host = '<span class="mono" title="'+esc(hostTip)+'">'+esc(f.device_ip)
       +(f.device_hostname?' · '+esc(f.device_hostname):'')+'</span>';
@@ -849,8 +914,9 @@ def _js() -> str:
       +'<td class="col-first nowrap">'+esc(f.first_seen||'—')+'</td>'
       +'</tr>';
     if(open){
+      // colspan must match visible columns (hidden group cols use display:none).
       tr += '<tr class="detail-row'+(printing?' print-show':'')+'" data-detail="'+esc(id)
-        +'"><td colspan="11">'+detailHtml(f)+'</td></tr>';
+        +'"><td colspan="'+visibleColCount()+'">'+detailHtml(f)+'</td></tr>';
     }
     return tr;
   }
@@ -1053,6 +1119,7 @@ def _js() -> str:
       root.querySelectorAll('table.findings').forEach(t=>{
         COLS.forEach(c=> t.classList.toggle('hide-'+c, hiddenCols.has(c)));
       });
+      syncDetailColspans();
     });
   });
 
@@ -1090,11 +1157,13 @@ def _js() -> str:
   // Expose sort helpers for unit/e2e tests.
   window.__REPORT_API__ = {
     compareCveIds, compareIps, compareFindings, riskScore, rowId, groupKey,
+    visibleColCount, syncDetailColspans, reasonShort,
     getSort: ()=>({key:sortKey, dir:sortDir}),
     setSort: (key, dir)=>{ sortKey=key; sortDir=dir; render({forceFull:true}); },
     getGroupBy: ()=>groupBy,
     getOpenGroups: ()=>[...openGroups],
     getExpandedRows: ()=>[...expandedRows],
+    setExpandedRows: (ids)=>{ expandedRows = new Set(ids||[]); render({forceFull:true}); },
     render,
   };
 
