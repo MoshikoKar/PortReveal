@@ -11,17 +11,18 @@ import {
 } from './notificationsLogic';
 
 describe('notification sections', () => {
-  it('lists the four inner tabs in order', () => {
+  it('lists the five inner tabs in order', () => {
     expect(NOTIFICATION_SECTIONS.map((s) => s.id)).toEqual([
-      'general', 'email', 'webhooks', 'cve-watchlist',
+      'general', 'email', 'recipients', 'webhooks', 'cve-watchlist',
     ]);
     expect(DEFAULT_NOTIFICATION_SECTION).toBe('general');
   });
 
   it('validates section ids and parses paths', () => {
     expect(isNotificationSection('email')).toBe(true);
-    expect(isNotificationSection('recipients')).toBe(false);
+    expect(isNotificationSection('recipients')).toBe(true);
     expect(notificationSectionFromPath('/settings/notifications/webhooks')).toBe('webhooks');
+    expect(notificationSectionFromPath('/settings/notifications/recipients')).toBe('recipients');
     expect(notificationSectionFromPath('/settings/notifications')).toBe(null);
     expect(notificationSectionFromPath('/settings/networks')).toBe(null);
   });

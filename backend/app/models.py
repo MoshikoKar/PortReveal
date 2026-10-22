@@ -124,6 +124,19 @@ EVENT_SEVERITY = {
 }
 
 SEVERITIES = ("high", "medium", "low", "info")
+# Severity rank for recipient-group min_severity filters (higher = more severe).
+SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3}
+
+DELIVERY_IMMEDIATE = "immediate"
+DELIVERY_HOURLY = "hourly"
+DELIVERY_DAILY = "daily"
+DELIVERY_MODES = (DELIVERY_IMMEDIATE, DELIVERY_HOURLY, DELIVERY_DAILY)
+
+DEST_EMAIL = "email"
+DEST_WEBHOOK = "webhook"
+DEST_SLACK = "slack"
+DEST_TEAMS = "teams"
+DEST_KINDS = (DEST_EMAIL, DEST_WEBHOOK, DEST_SLACK, DEST_TEAMS)
 
 NETWORK_ZONES = ("servers", "users", "iot", "dmz", "management", "guest", "lab")
 CRITICALITY_LEVELS = ("low", "medium", "high", "critical")
@@ -216,6 +229,9 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("scans", "status"): SCAN_STATUSES,
     ("events", "event_type"): EVENT_TYPES,
     ("events", "severity"): SEVERITIES,
+    ("recipient_groups", "delivery_mode"): DELIVERY_MODES,
+    ("recipient_groups", "min_severity"): SEVERITIES,
+    ("recipient_destinations", "kind"): DEST_KINDS,
     ("device_port_vulns", "state"): VULN_STATES,
     ("device_port_vulns", "source"): VULN_SOURCES,
     ("vuln_jobs", "status"): VULN_JOB_STATUSES,
@@ -769,6 +785,94 @@ class WebhookEndpoint(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+# --- Recipient groups (notification channels) ---------------------------------
+class RecipientGroup(Base):
+    """Audience channel: what / how / when / how much for outbound notifications."""
+
+    __tablename__ = "recipient_groups"
+    __table_args__ = (
+        one_of("recipient_groups", "delivery_mode"),
+        one_of("recipient_groups", "min_severity"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Migrated global email digest; UI may treat it specially but it is editable.
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    # WHAT
+    event_types: Mapped[list | None] = mapped_column(JSON)  # empty/None = all types
+    min_severity: Mapped[str] = mapped_column(String(10), default="info")
+    network_ids: Mapped[list | None] = mapped_column(JSON)  # empty/None = all networks
+    # WHEN
+    delivery_mode: Mapped[str] = mapped_column(String(20), default=DELIVERY_DAILY)
+    digest_time: Mapped[str | None] = mapped_column(String(5))  # HH:MM local, daily mode
+    # HOW MUCH
+    max_per_hour: Mapped[int] = mapped_column(Integer, default=20)
+    dedupe_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    quiet_start: Mapped[str | None] = mapped_column(String(5))  # HH:MM
+    quiet_end: Mapped[str | None] = mapped_column(String(5))
+    quiet_bypass_critical: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Rate-cap bookkeeping (local hour bucket YYYYMMDDHH)
+    rate_hour_bucket: Mapped[str | None] = mapped_column(String(10))
+    rate_sent: Mapped[int] = mapped_column(Integer, default=0)
+    # Local YYYY-MM-DD of last successful daily digest flush for this group.
+    last_digest_on: Mapped[str | None] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    destinations: Mapped[list[RecipientDestination]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+        order_by="RecipientDestination.id",
+    )
+
+
+class RecipientDestination(Base):
+    """One delivery target on a recipient group (email, PortReveal webhook, Slack, or Teams)."""
+
+    __tablename__ = "recipient_destinations"
+    __table_args__ = (one_of("recipient_destinations", "kind"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("recipient_groups.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # email: address; slack/teams: never store plaintext — use url_enc; webhook: leave null
+    target: Mapped[str | None] = mapped_column(String(255))
+    webhook_id: Mapped[int | None] = mapped_column(
+        ForeignKey("webhook_endpoints.id", ondelete="SET NULL"),
+        index=True,
+    )
+    url_enc: Mapped[str | None] = mapped_column(String(500))  # Slack / Teams incoming webhook URL
+    group: Mapped[RecipientGroup] = relationship(back_populates="destinations")
+
+
+class RecipientHold(Base):
+    """Event held for a group (hourly/daily digest, rate-cap overflow, quiet hours)."""
+
+    __tablename__ = "recipient_holds"
+    __table_args__ = (
+        Index("ix_recipient_holds_group_created", "group_id", "created_at"),
+        # Named to match 0031 — do not also set index=True on the column (that creates a second name).
+        Index("ix_recipient_holds_next_attempt", "next_attempt_at"),
+        UniqueConstraint("group_id", "event_id", name="uq_recipient_hold_event"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("recipient_groups.id", ondelete="CASCADE"), index=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
+    reason: Mapped[str] = mapped_column(String(40))  # digest | hourly | rate_cap | quiet | dedupe
+    dedupe_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # After a partial failure: destination ids still owed a send (None = all enabled dests).
+    pending_dest_ids: Mapped[list | None] = mapped_column(JSON)
+    # Destinations that already received this event/key (per-dest dedupe across retries).
+    delivered_dest_ids: Mapped[list | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class DeviceTag(Base):

@@ -71,7 +71,13 @@ def _validate_types(types: list[str] | None) -> list[str] | None:
     return types
 
 
-def _out(h: WebhookEndpoint, *, secret: str | None = None) -> dict:
+def _group_managed_ids(db: Session) -> set[int]:
+    from ..core.channels import group_managed_webhook_ids
+
+    return group_managed_webhook_ids(db)
+
+
+def _out(h: WebhookEndpoint, *, secret: str | None = None, group_managed: bool = False) -> dict:
     data = {
         "id": h.id,
         "name": h.name,
@@ -80,9 +86,12 @@ def _out(h: WebhookEndpoint, *, secret: str | None = None) -> dict:
         "has_secret": bool(h.secret_enc),
         "event_types": h.event_types or [],
         "include_record_events": bool(h.include_record_events),
+        # Attached to a recipient group — receives only that group's routed events (not global fan-out).
+        "group_managed": bool(group_managed),
         "created_at": h.created_at,
         "last_success_at": h.last_success_at,
         "last_error": h.last_error,
+        "last_error_at": h.last_error_at,
     }
     if secret is not None:
         data["secret"] = secret
@@ -104,7 +113,8 @@ def _audit_details(h: WebhookEndpoint, **extra) -> dict:
 
 @router.get("", response_model=list[Row], description=UNPAGED_LIST)
 def list_webhooks(db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    return [_out(h) for h in db.scalars(select(WebhookEndpoint).order_by(WebhookEndpoint.id))]
+    managed = _group_managed_ids(db)
+    return [_out(h, group_managed=h.id in managed) for h in db.scalars(select(WebhookEndpoint).order_by(WebhookEndpoint.id))]
 
 
 @router.post("", status_code=201)
@@ -136,7 +146,7 @@ def create_webhook(
     audit(db, user.username, "webhook.create", h.name, _audit_details(h, secret_set=bool(plain)), client_ip(request))
     db.commit()
     db.refresh(h)
-    return _out(h, secret=plain)
+    return _out(h, secret=plain, group_managed=h.id in _group_managed_ids(db))
 
 
 @router.patch("/{webhook_id}")
@@ -181,7 +191,7 @@ def patch_webhook(
     )
     db.commit()
     db.refresh(h)
-    return _out(h, secret=plain)
+    return _out(h, secret=plain, group_managed=h.id in _group_managed_ids(db))
 
 
 @router.post("/{webhook_id}/test")

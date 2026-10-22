@@ -399,7 +399,14 @@ def test_queue_full_surfaces_on_hook_status(db, monkeypatch):
     tiny = __import__("queue").Queue(maxsize=1)
     tiny.put_nowait([ev.id])
     monkeypatch.setattr(webhooks, "_delivery_queue", tiny)
-    webhooks.schedule_event_delivery([ev.id])  # should hit Full and record last_error
+    webhooks.schedule_event_delivery([ev.id])  # should hit Full and record last_error off-thread
     row = db.scalars(select(WebhookEndpoint)).first()
-    db.refresh(row)
+    # Status is written on a daemon thread so the scan path never blocks on DB.
+    deadline = __import__("time").monotonic() + 3
+    while __import__("time").monotonic() < deadline:
+        db.refresh(row)
+        if row.last_error and "queue full" in row.last_error:
+            break
+        __import__("time").sleep(0.05)
     assert row.last_error and "dropped" in row.last_error and "queue full" in row.last_error
+    assert "1 event" in row.last_error  # singular

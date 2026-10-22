@@ -302,14 +302,22 @@ def check_watchlist_safe(
 def schedule_watchlist_delivery(event_ids: list[int], *, wait: bool = False) -> None:
     """Deliver after the creating transaction has committed.
 
-    ``wait=True`` runs delivery on this thread (CLI / sync child must finish before exit).
-    ``wait=False`` (default) uses a daemon background thread for API/job request paths.
+    Routes events into recipient groups (Slack/Teams/email channels, quiet-hour bypass)
+    and keeps the dedicated watchlist email/webhook path for destinations not already
+    covered by a group. ``wait=True`` runs on this thread; ``wait=False`` uses background work.
     """
     ids = [i for i in event_ids if i]
     if not ids:
         return
 
     def _run() -> None:
+        try:
+            # Groups first so quiet-hours / batching apply; watchlist path skips covered dests.
+            from ..channels import deliver_channel_event_ids
+
+            deliver_channel_event_ids(ids)
+        except Exception:
+            log.exception("CVE watchlist recipient-group delivery failed")
         try:
             deliver_watchlist_alerts(ids)
         except Exception:
@@ -318,7 +326,21 @@ def schedule_watchlist_delivery(event_ids: list[int], *, wait: bool = False) -> 
     if wait:
         _run()
         return
-    threading.Thread(target=_run, name="cve-watchlist-delivery", daemon=True).start()
+    # Prefer the shared delivery queue for group routing; watchlist email/hooks still need _run.
+    try:
+        from .. import webhooks as wh
+
+        wh.enqueue_channel_delivery(ids)
+    except Exception:
+        log.exception("CVE watchlist channel enqueue failed")
+    threading.Thread(target=lambda: _watchlist_only(ids), name="cve-watchlist-delivery", daemon=True).start()
+
+
+def _watchlist_only(ids: list[int]) -> None:
+    try:
+        deliver_watchlist_alerts(ids)
+    except Exception:
+        log.exception("CVE watchlist background delivery failed")
 
 
 def clear_alerts_for_device_cve(db: Session, *, device_uuid: str, cve_id: str) -> int:
@@ -369,10 +391,17 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
         if not events:
             return None
         event_snaps = [_event_delivery_snap(ev) for ev in events]
+        from ..channels import emails_covered_by_groups_for_cve, group_managed_webhook_ids
+
+        managed_hooks = group_managed_webhook_ids(db)
+        covered_emails = emails_covered_by_groups_for_cve(db, events)
         hooks: list[dict] = []
         # Master webhooks switch + per-watchlist toggle (both required).
+        # Skip group-managed hooks — those receive CVE events via recipient groups only.
         if cfg.webhooks_enabled and cfg.watchlist_webhooks_enabled:
             for hook in db.scalars(select(WebhookEndpoint).where(WebhookEndpoint.enabled.is_(True))).all():
+                if hook.id in managed_hooks:
+                    continue
                 types = hook.event_types or []
                 if types and EV_CVE_WATCH_MATCH not in types:
                     continue
@@ -383,10 +412,11 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
                         "secret": decrypt_secret(hook.secret_enc) if hook.secret_enc else "",
                     }
                 )
+        remaining_recipients = [r for r in cfg.recipients if r.strip().lower() not in covered_emails]
         return {
             "event_ids": [s["id"] for s in event_snaps],
             "events": event_snaps,
-            "email_enabled": bool(cfg.watchlist_email_enabled and cfg.enabled and cfg.smtp_host and cfg.recipients),
+            "email_enabled": bool(cfg.watchlist_email_enabled and cfg.enabled and cfg.smtp_host and remaining_recipients),
             "webhooks_enabled": bool(cfg.webhooks_enabled and cfg.watchlist_webhooks_enabled),
             "smtp": {
                 "enabled": cfg.enabled,
@@ -396,7 +426,7 @@ def _load_delivery_plan(event_ids: list[int]) -> dict | None:
                 "username": cfg.username,
                 "password_enc": cfg.password_enc,
                 "sender": cfg.sender,
-                "recipients": list(cfg.recipients),
+                "recipients": remaining_recipients,
             }
             if cfg.watchlist_email_enabled
             else None,

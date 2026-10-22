@@ -3,7 +3,18 @@ import { useEffect, useState, type MouseEvent } from 'react';
 import { NavLink, Navigate, useParams } from 'react-router-dom';
 import { del, patch, post, put } from '../../api';
 import { Card, Empty, ErrorBox, Loading, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
-import type { EventType, NotificationSettings, WebhookEndpoint, WebhookTestResult } from '../../types';
+import type {
+  EventType,
+  Network,
+  NotificationSettings,
+  RecipientDeliveryMode,
+  RecipientDestKind,
+  RecipientGroup,
+  RecipientGroupTestResult,
+  RecipientMinSeverity,
+  WebhookEndpoint,
+  WebhookTestResult,
+} from '../../types';
 import { EVENT_LABELS, relTime, useApi } from '../../util';
 import {
   DEFAULT_NOTIFICATION_SECTION,
@@ -74,6 +85,7 @@ export function NotificationsSettings({ onDirtyChange }: { onDirtyChange?: (dirt
       </nav>
       {section === 'general' && <GeneralTab onDirtyChange={setDirty} />}
       {section === 'email' && <EmailTab onDirtyChange={setDirty} />}
+      {section === 'recipients' && <RecipientsTab onDirtyChange={setDirty} />}
       {section === 'webhooks' && <WebhooksTab onDirtyChange={setDirty} />}
       {section === 'cve-watchlist' && <CveWatchlistTab onDirtyChange={setDirty} />}
     </div>
@@ -159,12 +171,11 @@ function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) 
   );
 }
 
-// --- Email -------------------------------------------------------------------
+// --- Email (SMTP only; recipients live on the Recipients tab) ----------------
 function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const res = useApi<NotificationSettings>('/settings/notifications');
   const [form, setForm] = useState<NotificationSettings | null>(null);
   const [password, setPassword] = useState<string | null>(null);
-  const [recipientsText, setRecipientsText] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testTo, setTestTo] = useState('');
@@ -173,46 +184,37 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
 
   useEffect(() => { if (res.data) setForm(res.data); }, [res.data]);
 
-  const recipientsDirty = recipientsText !== null && recipientsText !== (form?.recipients ?? []).join('\n');
   const formDirty = !!form && !!res.data && JSON.stringify({
-    ...form, available_event_types: undefined, always_notify_types: undefined, password_set: undefined,
-    watchlist_email_enabled: undefined, watchlist_webhooks_enabled: undefined, webhooks_enabled: undefined,
+    smtp_host: form.smtp_host, smtp_port: form.smtp_port, security: form.security,
+    username: form.username, sender: form.sender, enabled: form.enabled,
   }) !== JSON.stringify({
-    ...res.data, available_event_types: undefined, always_notify_types: undefined, password_set: undefined,
-    watchlist_email_enabled: undefined, watchlist_webhooks_enabled: undefined, webhooks_enabled: undefined,
+    smtp_host: res.data.smtp_host, smtp_port: res.data.smtp_port, security: res.data.security,
+    username: res.data.username, sender: res.data.sender, enabled: res.data.enabled,
   });
-  const dirty = formDirty || password !== null || recipientsDirty;
+  const dirty = formDirty || password !== null;
   useReportDirty(dirty, onDirtyChange);
 
   if (!form) return <Card title="Email"><ErrorBox error={res.error} /><Loading /></Card>;
 
-  const always = new Set(form.always_notify_types || []);
-  const recipients = recipientsText ?? form.recipients.join('\n');
   const set = (patch: Partial<NotificationSettings>) => setForm({ ...form, ...patch });
-
-  const body = () => ({
-    enabled: form.enabled,
-    smtp_host: form.smtp_host,
-    smtp_port: form.smtp_port,
-    security: form.security,
-    username: form.username,
-    ...(password !== null ? { password } : {}),
-    sender: form.sender,
-    recipients: recipients.split(/[\s,;]+/).filter(Boolean),
-    event_types: form.event_types,
-    digest_time: form.digest_time,
-  });
 
   const save = async () => {
     if (saving) return;
     setSaving(true);
     setMsg(null);
     try {
-      const out = await put<NotificationSettings>('/settings/notifications', body());
+      const out = await put<NotificationSettings>('/settings/notifications', {
+        enabled: form.enabled,
+        smtp_host: form.smtp_host,
+        smtp_port: form.smtp_port,
+        security: form.security,
+        username: form.username,
+        sender: form.sender,
+        ...(password !== null ? { password } : {}),
+      });
       res.setData(out);
       setForm(out);
       setPassword(null);
-      setRecipientsText(null);
       setMsg({ ok: true, text: 'Saved.' });
     } catch (e: any) {
       setMsg({ ok: false, text: e.message });
@@ -222,19 +224,20 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   };
 
   const testConnection = async () => {
+    if (!testTo.trim()) {
+      setTestMsg({ ok: false, text: 'Enter a test recipient address.' });
+      return;
+    }
     setTestMsg(null);
     setTesting(true);
     try {
-      // Send on-screen SMTP values without persisting; omit password to use the stored one.
       const r = await post<{ ok: boolean; message: string }>('/settings/notifications/test', {
         smtp_host: form.smtp_host,
         smtp_port: form.smtp_port,
         security: form.security,
         username: form.username,
         sender: form.sender,
-        ...(testTo
-          ? { recipient: testTo }
-          : { recipients: recipients.split(/[\s,;]+/).filter(Boolean) }),
+        recipient: testTo.trim(),
         ...(password !== null ? { password } : {}),
       });
       setTestMsg({ ok: r.ok, text: r.message });
@@ -245,20 +248,12 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
     }
   };
 
-  const toggleType = (t: EventType, on: boolean) => {
-    if (always.has(t)) return;
-    set({
-      event_types: on
-        ? [...new Set([...form.event_types, t])]
-        : form.event_types.filter((x) => x !== t),
-    });
-  };
-
   return (
-    <Card title="Email digest">
+    <Card title="Email">
       <div className="stack">
         <div className="muted small">
-          One categorized HTML summary per day via an internal SMTP relay (default port 25, no authentication).
+          SMTP relay used by recipient groups and CVE watchlist email. Audience addresses and digest
+          schedules live on the <strong>Recipients</strong> tab.
         </div>
         <div className="form-grid">
           <label className="field">SMTP host / IP
@@ -289,63 +284,667 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
         </div>
         <label className="check">
           <input type="checkbox" checked={form.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
-          Send email notifications
+          Enable SMTP (also toggles the default Email digest group)
         </label>
-        <label className="field">Recipients
-          <textarea rows={3} value={recipients} onChange={(e) => setRecipientsText(e.target.value)}
-            placeholder={'it-team@example.com\nsoc@example.com'} />
-          <span className="hint">One address per line (or comma separated).</span>
-        </label>
-        <label className="field">Daily summary time (HH:MM)
-          <input type="time" value={form.digest_time} onChange={(e) => set({ digest_time: e.target.value })} />
-          <span className="hint">Server-local time. Pending alert events since the last send are grouped into one HTML email.</span>
-        </label>
-
-        <div className="field">
-          <span>Digest event types</span>
-          <div className="stack" style={{ gap: 10, marginTop: 6 }}>
-            {EVENT_CATEGORIES.map((cat) => {
-              const types = cat.types.filter((t) => form.available_event_types.includes(t) || always.has(t));
-              if (!types.length) return null;
-              const selected = types.filter((t) => always.has(t) || form.event_types.includes(t)).length;
-              return (
-                <details key={cat.title} className="notif-explain">
-                  <summary>{cat.title}{selected ? ` (${selected} selected)` : ''}</summary>
-                  <div className="row wrap" style={{ gap: 14, marginTop: 8 }}>
-                    {types.map((t) => {
-                      const locked = always.has(t);
-                      const checked = locked || form.event_types.includes(t);
-                      return (
-                        <label key={t} className="check small" title={locked ? 'Always included in the digest' : undefined}>
-                          <input type="checkbox" checked={checked} disabled={locked}
-                            onChange={(e) => toggleType(t, e.target.checked)} />
-                          {EVENT_LABELS[t]}
-                          {locked && <span className="hint"> (always included)</span>}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </details>
-              );
-            })}
-          </div>
-          <span className="hint" style={{ marginTop: 8, display: 'block' }}>
-            Watch matches, policy violations, monitor changes, and CVE watchlist matches are always included in the
-            digest when they have not already been emailed immediately. Other types are optional.
-          </span>
-        </div>
-
         <Msg msg={msg} />
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <div className="row wrap">
-          <button className="btn primary" onClick={save} disabled={saving || testing}>{saving ? 'Saving…' : 'Save'}</button>
-          <input type="email" placeholder="test recipient (default: all recipients)" value={testTo}
-            onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 260 }} />
+          <button className="btn primary" onClick={save} disabled={saving || testing || !dirty}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <input type="email" placeholder="test recipient" value={testTo}
+            onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 220 }} />
           <button className="btn" onClick={testConnection} disabled={!form.smtp_host || saving || testing}>
             {testing ? 'Testing…' : 'Test connection'}
           </button>
         </div>
       </div>
+    </Card>
+  );
+}
+
+// --- Recipients (channels) ---------------------------------------------------
+type DestDraft = {
+  key: string;
+  id?: number;
+  kind: RecipientDestKind;
+  enabled: boolean;
+  target: string;
+  webhook_id: number | '';
+  url: string;
+  url_hint: string | null;
+  has_url: boolean;
+};
+
+type GroupDraft = {
+  id?: number;
+  name: string;
+  enabled: boolean;
+  is_default: boolean;
+  event_types: EventType[];
+  min_severity: RecipientMinSeverity;
+  network_ids: number[];
+  delivery_mode: RecipientDeliveryMode;
+  digest_time: string;
+  max_per_hour: number;
+  dedupe_seconds: number;
+  quiet_start: string;
+  quiet_end: string;
+  quiet_bypass_critical: boolean;
+  destinations: DestDraft[];
+};
+
+let destKeySeq = 0;
+function nextDestKey() {
+  destKeySeq += 1;
+  return `d${destKeySeq}`;
+}
+
+function emptyGroupDraft(): GroupDraft {
+  return {
+    name: '',
+    enabled: true,
+    is_default: false,
+    event_types: [],
+    min_severity: 'info',
+    network_ids: [],
+    delivery_mode: 'daily',
+    digest_time: '08:00',
+    max_per_hour: 20,
+    dedupe_seconds: 300,
+    quiet_start: '',
+    quiet_end: '',
+    quiet_bypass_critical: true,
+    destinations: [],
+  };
+}
+
+function groupFromApi(g: RecipientGroup): GroupDraft {
+  return {
+    id: g.id,
+    name: g.name,
+    enabled: g.enabled,
+    is_default: g.is_default,
+    event_types: [...g.event_types],
+    min_severity: g.min_severity,
+    network_ids: [...(g.network_ids || [])],
+    delivery_mode: g.delivery_mode,
+    digest_time: g.digest_time || '08:00',
+    max_per_hour: g.max_per_hour,
+    dedupe_seconds: g.dedupe_seconds,
+    quiet_start: g.quiet_start || '',
+    quiet_end: g.quiet_end || '',
+    quiet_bypass_critical: g.quiet_bypass_critical,
+    destinations: g.destinations.map((d) => ({
+      key: nextDestKey(),
+      id: d.id,
+      kind: d.kind,
+      enabled: d.enabled,
+      target: d.target || '',
+      webhook_id: d.webhook_id ?? '',
+      url: '',
+      url_hint: d.url_hint,
+      has_url: d.has_url,
+    })),
+  };
+}
+
+function groupSnapshot(d: GroupDraft) {
+  return {
+    id: d.id ?? null,
+    name: d.name,
+    enabled: d.enabled,
+    event_types: d.event_types,
+    min_severity: d.min_severity,
+    network_ids: d.network_ids,
+    delivery_mode: d.delivery_mode,
+    digest_time: d.digest_time,
+    max_per_hour: d.max_per_hour,
+    dedupe_seconds: d.dedupe_seconds,
+    quiet_start: d.quiet_start,
+    quiet_end: d.quiet_end,
+    quiet_bypass_critical: d.quiet_bypass_critical,
+    destinations: d.destinations.map((x) => ({
+      id: x.id ?? null,
+      kind: x.kind,
+      enabled: x.enabled,
+      target: x.target,
+      webhook_id: x.webhook_id,
+      url: x.url,
+      has_url: x.has_url,
+    })),
+  };
+}
+
+function deliveryStatusLine(g: RecipientGroup): { text: string; tone: 'ok' | 'warn' | 'muted'; title?: string } {
+  if (g.last_error) {
+    const when = g.last_error_at ? ` · ${relTime(g.last_error_at)}` : '';
+    return {
+      text: `${g.last_error_friendly || 'Delivery failed'}${when}`,
+      tone: 'warn',
+      title: g.last_error,
+    };
+  }
+  if (g.last_success_at) return { text: `Last delivery ${relTime(g.last_success_at)}`, tone: 'ok' };
+  return { text: 'No deliveries yet', tone: 'muted' };
+}
+
+function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
+  const { data, error, loading, reload } = useApi<RecipientGroup[]>('/recipient-groups');
+  const networks = useApi<Network[]>('/networks');
+  const hooks = useApi<WebhookEndpoint[]>('/webhooks');
+  const [draft, setDraft] = useState<GroupDraft | null>(null);
+  const [draftBase, setDraftBase] = useState<GroupDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ id: number; result: RecipientGroupTestResult } | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+
+  const draftDirty = !!draft && !!draftBase
+    && JSON.stringify(groupSnapshot(draft)) !== JSON.stringify(groupSnapshot(draftBase));
+  useReportDirty(draftDirty, onDirtyChange);
+
+  const closeDraft = () => { setDraft(null); setDraftBase(null); };
+
+  const openCreate = () => {
+    const d = emptyGroupDraft();
+    setSaveError(null);
+    setDraft(d);
+    setDraftBase(JSON.parse(JSON.stringify(d)));
+  };
+
+  const openEdit = (g: RecipientGroup) => {
+    const d = groupFromApi(g);
+    setSaveError(null);
+    setDraft(d);
+    setDraftBase(JSON.parse(JSON.stringify(d)));
+  };
+
+  const saveDraft = async () => {
+    if (!draft || saving) return;
+    if (!draft.destinations.length) {
+      setSaveError('at least one destination is required');
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const destinations = draft.destinations.map((d) => {
+        const row: Record<string, unknown> = {
+          kind: d.kind,
+          enabled: d.enabled,
+        };
+        if (d.id != null) row.id = d.id;
+        if (d.kind === 'email') row.target = d.target.trim();
+        if (d.kind === 'webhook') row.webhook_id = d.webhook_id === '' ? null : Number(d.webhook_id);
+        if (d.kind === 'slack' || d.kind === 'teams') {
+          if (d.url.trim()) row.url = d.url.trim();
+        }
+        return row;
+      });
+      const payload = {
+        name: draft.name.trim(),
+        enabled: draft.enabled,
+        event_types: draft.event_types.length ? draft.event_types : null,
+        min_severity: draft.min_severity,
+        network_ids: draft.network_ids.length ? draft.network_ids : null,
+        delivery_mode: draft.delivery_mode,
+        digest_time: draft.delivery_mode === 'daily' ? draft.digest_time || '08:00' : null,
+        max_per_hour: draft.max_per_hour,
+        dedupe_seconds: draft.dedupe_seconds,
+        quiet_start: draft.quiet_start || null,
+        quiet_end: draft.quiet_end || null,
+        quiet_bypass_critical: draft.quiet_bypass_critical,
+        destinations,
+      };
+      if (draft.id != null) {
+        await patch(`/recipient-groups/${draft.id}`, payload);
+      } else {
+        await post('/recipient-groups', payload);
+      }
+      closeDraft();
+      reload();
+    } catch (e: any) {
+      setSaveError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleEnabled = async (g: RecipientGroup) => {
+    const key = `en-${g.id}`;
+    if (pending === key) return;
+    setPending(key);
+    setActionError(null);
+    try {
+      await patch(`/recipient-groups/${g.id}`, { enabled: !g.enabled });
+      reload();
+    } catch (e: any) {
+      setActionError(e.message);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const remove = async (g: RecipientGroup) => {
+    if (g.is_default) return;
+    if (!confirm(`Delete recipient group “${g.name}”? This cannot be undone.`)) return;
+    const key = `del-${g.id}`;
+    if (pending === key) return;
+    setPending(key);
+    setActionError(null);
+    try {
+      await del(`/recipient-groups/${g.id}`);
+      reload();
+    } catch (e: any) {
+      setActionError(e.message);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const sendTest = async (g: RecipientGroup) => {
+    const key = `test-${g.id}`;
+    if (pending === key) return;
+    setPending(key);
+    setActionError(null);
+    setTestResult(null);
+    try {
+      const result = await post<RecipientGroupTestResult>(`/recipient-groups/${g.id}/test`);
+      setTestResult({ id: g.id, result });
+      reload();
+    } catch (e: any) {
+      setActionError(e.message);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const toggleDraftType = (t: EventType, on: boolean) => {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      event_types: on ? [...draft.event_types, t] : draft.event_types.filter((x) => x !== t),
+    });
+  };
+
+  const toggleNetwork = (id: number, on: boolean) => {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      network_ids: on ? [...draft.network_ids, id] : draft.network_ids.filter((x) => x !== id),
+    });
+  };
+
+  const addDestination = (kind: RecipientDestKind) => {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      destinations: [
+        ...draft.destinations,
+        {
+          key: nextDestKey(),
+          kind,
+          enabled: true,
+          target: '',
+          webhook_id: '',
+          url: '',
+          url_hint: null,
+          has_url: false,
+        },
+      ],
+    });
+  };
+
+  const updateDest = (key: string, patch: Partial<DestDraft>) => {
+    if (!draft) return;
+    setDraft({
+      ...draft,
+      destinations: draft.destinations.map((d) => (d.key === key ? { ...d, ...patch } : d)),
+    });
+  };
+
+  const removeDest = (key: string) => {
+    if (!draft) return;
+    setDraft({ ...draft, destinations: draft.destinations.filter((d) => d.key !== key) });
+  };
+
+  return (
+    <Card
+      title="Recipients"
+      flush
+      actions={
+        <button className="btn primary sm" onClick={openCreate}>Add group</button>
+      }
+    >
+      <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
+        Audience channels control <strong>what</strong> each group receives, <strong>how</strong> it is delivered,
+        {' '}<strong>when</strong>, and <strong>how much</strong>. New groups default to a daily digest — use immediate
+        only for critical events and the CVE watchlist. Overflow past the hourly cap rolls into the next digest
+        (never dropped). Slack and Teams webhook URLs are stored as secrets and never shown in full.
+      </div>
+      <ErrorBox error={error || actionError} />
+      {loading && !data ? <SkeletonRows cols={4} /> : !data?.length ? (
+        <Empty>No recipient groups yet.</Empty>
+      ) : (
+        <div className="stack" style={{ gap: 0 }}>
+          {data.map((g) => (
+            <div
+              key={g.id}
+              className={`recipient-group-card${!g.enabled ? ' dim' : ''}`}
+              data-testid={`recipient-group-${g.id}`}
+            >
+              <div className="row wrap" style={{ justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                <div className="stack" style={{ gap: 4, flex: 1, minWidth: 0 }}>
+                  <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+                    <strong>{g.name}</strong>
+                    {g.is_default && <span className="badge">Default</span>}
+                    <span className="badge muted">
+                      {g.delivery_mode === 'daily'
+                        ? `daily · ${g.digest_time || '08:00'}`
+                        : g.delivery_mode}
+                    </span>
+                    {(g.destination_kinds || []).map((k) => (
+                      <span key={k} className="badge muted" title={k}>{k}</span>
+                    ))}
+                  </div>
+                  <div className="muted small" data-testid="group-summary">{g.summary}</div>
+                  <div className="small">
+                    {testResult?.id === g.id ? (
+                      <span className={testResult.result.ok ? 'ok' : 'error'}>
+                        Test: {testResult.result.ok ? 'OK' : (testResult.result.error || 'failed')}
+                      </span>
+                    ) : (() => {
+                      const st = deliveryStatusLine(g);
+                      return (
+                        <span
+                          className={st.tone === 'warn' ? 'recipient-status-error' : undefined}
+                          style={{ color: st.tone === 'warn' ? 'var(--danger)' : 'var(--text-2)' }}
+                          title={st.title}
+                        >
+                          {st.text}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
+                  <label className="check small">
+                    <input
+                      type="checkbox"
+                      checked={g.enabled}
+                      disabled={pending === `en-${g.id}`}
+                      onChange={() => toggleEnabled(g)}
+                      aria-label={`Enable ${g.name}`}
+                    />
+                    Enabled
+                  </label>
+                  <button className="btn sm" disabled={!!pending} onClick={() => sendTest(g)}>
+                    {pending === `test-${g.id}` ? 'Sending…' : 'Send test'}
+                  </button>
+                  <button className="btn sm" onClick={() => openEdit(g)}>Edit</button>
+                  {!g.is_default && (
+                    <button className="btn danger sm" disabled={pending === `del-${g.id}`} onClick={() => remove(g)}>
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {draft && (
+        <Modal
+          title={draft.id != null ? 'Edit recipient group' : 'Add recipient group'}
+          onClose={closeDraft}
+          dirty={draftDirty}
+          footer={
+            <>
+              <button className="btn ghost" onClick={() => confirmDiscard(draftDirty) && closeDraft()}>Cancel</button>
+              <button
+                className="btn primary"
+                onClick={saveDraft}
+                disabled={saving || !draft.name.trim()}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          }
+        >
+          <div className="stack">
+            <label className="field">Name
+              <input
+                type="text"
+                value={draft.name}
+                maxLength={120}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                placeholder="SOC"
+              />
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={draft.enabled}
+                onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+              />
+              Enabled
+            </label>
+
+            <h3 className="recipient-section-title">WHAT</h3>
+            <div className="field">
+              <span>Event types</span>
+              <span className="hint" style={{ display: 'block', marginBottom: 6 }}>
+                Leave all unchecked to include every type (still alert-only).
+              </span>
+              {EVENT_CATEGORIES.map((cat) => {
+                const selected = cat.types.filter((t) => draft.event_types.includes(t)).length;
+                return (
+                  <details key={cat.title} className="notif-explain">
+                    <summary>{cat.title}{selected ? ` (${selected} selected)` : ''}</summary>
+                    <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
+                      {cat.types.map((t) => (
+                        <label key={t} className="check small">
+                          <input
+                            type="checkbox"
+                            checked={draft.event_types.includes(t)}
+                            onChange={(e) => toggleDraftType(t, e.target.checked)}
+                          />
+                          {EVENT_LABELS[t]}
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+
+            <label className="field">Minimum severity
+              <select
+                value={draft.min_severity}
+                onChange={(e) => setDraft({ ...draft, min_severity: e.target.value as RecipientMinSeverity })}
+              >
+                <option value="info">All severities</option>
+                <option value="low">Low and above</option>
+                <option value="medium">Medium and above</option>
+                <option value="high">Critical / High only</option>
+              </select>
+            </label>
+
+            <div className="field">
+              <span>Network scope</span>
+              <span className="hint" style={{ display: 'block', marginBottom: 6 }}>
+                Leave all unchecked for every network.
+              </span>
+              <div className="row wrap" style={{ gap: 12 }}>
+                {(networks.data || []).map((n) => (
+                  <label key={n.id} className="check small">
+                    <input
+                      type="checkbox"
+                      checked={draft.network_ids.includes(n.id)}
+                      onChange={(e) => toggleNetwork(n.id, e.target.checked)}
+                    />
+                    {n.name}
+                  </label>
+                ))}
+                {!networks.data?.length && <span className="muted small">No networks yet.</span>}
+              </div>
+            </div>
+
+            <h3 className="recipient-section-title">HOW</h3>
+            <div className="field">
+              <span>Destinations</span>
+              <div className="row wrap" style={{ gap: 6, marginBottom: 8 }}>
+                <button type="button" className="btn sm" onClick={() => addDestination('email')}>+ Email</button>
+                <button type="button" className="btn sm" onClick={() => addDestination('webhook')}>+ Webhook</button>
+                <button type="button" className="btn sm" onClick={() => addDestination('slack')}>+ Slack</button>
+                <button type="button" className="btn sm" onClick={() => addDestination('teams')}>+ Teams</button>
+              </div>
+              {draft.destinations.map((d) => (
+                <div key={d.key} className="notif-explain" style={{ marginBottom: 8 }}>
+                  <div className="row wrap" style={{ justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                    <strong style={{ textTransform: 'capitalize' }}>{d.kind}</strong>
+                    <div className="row" style={{ gap: 8 }}>
+                      <label className="check small">
+                        <input
+                          type="checkbox"
+                          checked={d.enabled}
+                          onChange={(e) => updateDest(d.key, { enabled: e.target.checked })}
+                        />
+                        On
+                      </label>
+                      <button type="button" className="btn ghost sm" onClick={() => removeDest(d.key)}>Remove</button>
+                    </div>
+                  </div>
+                  {d.kind === 'email' && (
+                    <label className="field">Address
+                      <input
+                        type="email"
+                        value={d.target}
+                        onChange={(e) => updateDest(d.key, { target: e.target.value })}
+                        placeholder="soc@example.com"
+                      />
+                    </label>
+                  )}
+                  {d.kind === 'webhook' && (
+                    <label className="field">Existing webhook
+                      <select
+                        value={d.webhook_id === '' ? '' : String(d.webhook_id)}
+                        onChange={(e) => updateDest(d.key, {
+                          webhook_id: e.target.value === '' ? '' : Number(e.target.value),
+                        })}
+                      >
+                        <option value="">Select…</option>
+                        {(hooks.data || []).map((h) => (
+                          <option key={h.id} value={h.id}>{h.name} ({urlHost(h.url)})</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {(d.kind === 'slack' || d.kind === 'teams') && (
+                    <label className="field">Incoming webhook URL
+                      <input
+                        type="password"
+                        value={d.url}
+                        autoComplete="new-password"
+                        onChange={(e) => updateDest(d.key, { url: e.target.value })}
+                        placeholder={d.has_url ? (d.url_hint || '•••• (unchanged)') : 'https://hooks.example.com/…'}
+                      />
+                      <span className="hint">
+                        {d.has_url
+                          ? `Stored secret${d.url_hint ? ` (${d.url_hint})` : ''}. Leave blank to keep.`
+                          : 'Stored encrypted; never returned in full.'}
+                      </span>
+                    </label>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <h3 className="recipient-section-title">WHEN</h3>
+            <label className="field">Delivery
+              <select
+                value={draft.delivery_mode}
+                onChange={(e) => setDraft({ ...draft, delivery_mode: e.target.value as RecipientDeliveryMode })}
+              >
+                <option value="daily">Daily digest (recommended)</option>
+                <option value="hourly">Hourly batch</option>
+                <option value="immediate">Immediate</option>
+              </select>
+              {draft.delivery_mode === 'immediate' && (
+                <span className="hint">Recommended for Critical / CVE watchlist only. Events in one delivery round are batched into a single message per destination.</span>
+              )}
+            </label>
+            {draft.delivery_mode === 'daily' && (
+              <label className="field">Digest time (HH:MM, server local)
+                <input
+                  type="time"
+                  value={draft.digest_time}
+                  onChange={(e) => setDraft({ ...draft, digest_time: e.target.value })}
+                />
+              </label>
+            )}
+
+            <h3 className="recipient-section-title">HOW MUCH</h3>
+            <details className="notif-explain">
+              <summary>Advanced (rate cap, dedupe{(draft.delivery_mode === 'daily') ? '' : ', quiet hours'})</summary>
+              <div className="form-grid" style={{ marginTop: 10 }}>
+                <label className="field">Max messages / hour
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={draft.max_per_hour}
+                    onChange={(e) => setDraft({ ...draft, max_per_hour: Number(e.target.value) || 1 })}
+                  />
+                  <span className="hint">Overflow rolls into the next digest.</span>
+                </label>
+                <label className="field">Dedupe window (seconds)
+                  <input
+                    type="number"
+                    min={0}
+                    max={86400}
+                    value={draft.dedupe_seconds}
+                    onChange={(e) => setDraft({ ...draft, dedupe_seconds: Number(e.target.value) || 0 })}
+                  />
+                </label>
+                {(draft.delivery_mode === 'immediate' || draft.delivery_mode === 'hourly') && (
+                  <>
+                    <label className="field">Quiet hours start
+                      <input
+                        type="time"
+                        value={draft.quiet_start}
+                        onChange={(e) => setDraft({ ...draft, quiet_start: e.target.value })}
+                      />
+                    </label>
+                    <label className="field">Quiet hours end
+                      <input
+                        type="time"
+                        value={draft.quiet_end}
+                        onChange={(e) => setDraft({ ...draft, quiet_end: e.target.value })}
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+              {(draft.delivery_mode === 'immediate' || draft.delivery_mode === 'hourly') && (
+                <label className="check" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={draft.quiet_bypass_critical}
+                    onChange={(e) => setDraft({ ...draft, quiet_bypass_critical: e.target.checked })}
+                  />
+                  Critical / CVE watchlist may bypass quiet hours
+                </label>
+              )}
+            </details>
+
+            <ErrorBox error={saveError} />
+          </div>
+        </Modal>
+      )}
     </Card>
   );
 }
@@ -558,7 +1157,14 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
             <tbody>
               {data.map((h) => (
                 <tr key={h.id} className={!h.enabled ? 'dim' : undefined}>
-                  <td><strong>{h.name}</strong></td>
+                  <td>
+                    <strong>{h.name}</strong>
+                    {h.group_managed && (
+                      <span className="badge muted" style={{ marginLeft: 6 }} title="Receives only events routed by a recipient group">
+                        Group
+                      </span>
+                    )}
+                  </td>
                   <td className="mono small">{urlHost(h.url)}</td>
                   <td>
                     <label className="check small">
@@ -574,7 +1180,10 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
                         Test: {testResult.result.ok ? `OK (${testResult.result.latency_ms} ms)` : testResult.result.error}
                       </div>
                     ) : h.last_error ? (
-                      <span className="badge high" title={h.last_error}>{h.last_error.slice(0, 48)}</span>
+                      <span className="badge high" title={[h.last_error, h.last_error_at ? relTime(h.last_error_at) : ''].filter(Boolean).join(' · ')}>
+                        {h.last_error.slice(0, 48)}
+                        {h.last_error_at ? ` · ${relTime(h.last_error_at)}` : ''}
+                      </span>
                     ) : '—'}
                   </td>
                   <td className="right">
