@@ -9,8 +9,9 @@ email digest. Hooks with ``include_record_events=True`` also receive ``notify=Fa
 events that match their type filter. Silent modes never create rows.
 
 Callers use ``schedule_event_delivery`` so scan/scheduler/intel threads return immediately.
-A long-lived daemon worker drains a bounded queue. Each HTTP POST has a hard wall-clock
-deadline (connect/read timeouts alone cannot stop a trickling server).
+A dispatcher drains a bounded queue and hands each hook to a small pool (at most one in-flight
+POST chain per hook), so a stuck endpoint cannot delay other hooks. Each HTTP POST is capped by
+a hard whole-request wall-clock deadline (a watchdog closes the client).
 """
 
 from __future__ import annotations
@@ -36,11 +37,10 @@ from ..settings_store import NotificationSettings, get_section
 log = logging.getLogger(__name__)
 
 USER_AGENT = "PortReveal-Webhook/1.0"
-# Hard wall-clock deadline for one HTTP POST (trickling responses cannot exceed this).
+# Hard wall-clock deadline for one whole HTTP POST (headers + body).
 HTTP_DEADLINE = 8.0
-# Short per-operation timeouts so stalls between bytes fail fast; total still capped by HTTP_DEADLINE.
-HTTP_CONNECT_TIMEOUT = 2.0
-HTTP_IO_TIMEOUT = 2.0
+# Connect may take a few seconds; response is allowed the remaining budget up to HTTP_DEADLINE.
+HTTP_CONNECT_TIMEOUT = 3.0
 MAX_HOOK_WORKERS = 8
 # Split large deliveries into multiple POSTs (same envelope shape as CVE watchlist batches).
 MAX_BATCH_EVENTS = 50
@@ -48,7 +48,16 @@ QUEUE_MAXSIZE = 256
 
 _delivery_queue: queue.Queue[list[int] | None] | None = None
 _worker_thread: threading.Thread | None = None
+_hook_pool: ThreadPoolExecutor | None = None
 _worker_lock = threading.Lock()
+_stopping = False
+
+# Per-hook serialization: at most one in-flight delivery chain per hook_id.
+_hook_state_lock = threading.Lock()
+_hook_busy: set[int] = set()
+_hook_pending: dict[int, list[dict]] = {}
+_hook_inflight = 0  # jobs running in the hook pool (for idle waits)
+_hook_idle = threading.Condition(_hook_state_lock)
 
 
 def _host(url: str) -> str:
@@ -60,6 +69,10 @@ def _host(url: str) -> str:
 
 def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _timeout_message(elapsed: float) -> str:
+    return f"timeout after {elapsed:.1f}s"
 
 
 def _event_payload(event: Event) -> dict:
@@ -110,12 +123,19 @@ def _hook_accepts(hook: WebhookEndpoint, event: Event) -> bool:
 
 
 def start_delivery_worker() -> None:
-    """Start the daemon webhook delivery worker once (idempotent)."""
-    global _delivery_queue, _worker_thread
+    """Start the dispatcher + hook pool once (idempotent).
+
+    If a previous stop() is still waiting on a live thread, refuse to spawn a second
+    dispatcher. After a clean exit, a new start is allowed (tests / rare restart).
+    """
+    global _delivery_queue, _worker_thread, _hook_pool, _stopping
     with _worker_lock:
         if _worker_thread is not None and _worker_thread.is_alive():
             return
+        _stopping = False
         _delivery_queue = queue.Queue(maxsize=QUEUE_MAXSIZE)
+        if _hook_pool is None:
+            _hook_pool = ThreadPoolExecutor(max_workers=MAX_HOOK_WORKERS, thread_name_prefix="webhook-hook")
         _worker_thread = threading.Thread(
             target=_worker_loop,
             name="webhook-delivery",
@@ -126,9 +146,10 @@ def start_delivery_worker() -> None:
 
 
 def stop_delivery_worker() -> None:
-    """Signal the worker to exit (used on app shutdown)."""
-    global _worker_thread
+    """Signal the dispatcher to exit. Does not clear the thread handle if it outlives the grace."""
+    global _worker_thread, _stopping
     with _worker_lock:
+        _stopping = True
         q = _delivery_queue
         thr = _worker_thread
     if q is None or thr is None:
@@ -136,10 +157,11 @@ def stop_delivery_worker() -> None:
     try:
         q.put_nowait(None)
     except queue.Full:
-        # Drop one job to make room for the sentinel so shutdown can proceed.
         try:
-            q.get_nowait()
+            dropped = q.get_nowait()
             q.task_done()
+            if isinstance(dropped, list) and dropped:
+                _record_dropped_events(dropped, "shutdown")
         except queue.Empty:
             pass
         try:
@@ -148,7 +170,10 @@ def stop_delivery_worker() -> None:
             return
     thr.join(timeout=HTTP_DEADLINE + 2)
     with _worker_lock:
-        if _worker_thread is thr:
+        if thr.is_alive():
+            # Keep the handle so start_delivery_worker will not spawn a second dispatcher.
+            log.warning("webhook delivery worker did not stop within grace; not starting another")
+        else:
             _worker_thread = None
 
 
@@ -165,12 +190,20 @@ def schedule_event_delivery(event_ids: list[int], *, wait: bool = False) -> None
     if wait:
         deliver_event_ids(ids)
         return
+    if _stopping:
+        log.warning("webhook delivery refused during shutdown; dropping %d event(s)", len(ids))
+        _record_dropped_events(ids, "shutdown")
+        return
     start_delivery_worker()
-    assert _delivery_queue is not None
+    if _stopping or _delivery_queue is None:
+        log.warning("webhook delivery worker unavailable; dropping %d event(s)", len(ids))
+        _record_dropped_events(ids, "shutdown")
+        return
     try:
         _delivery_queue.put_nowait(ids)
     except queue.Full:
         log.warning("webhook delivery queue full; dropping %d event(s)", len(ids))
+        _record_dropped_events(ids, "queue full")
 
 
 def _worker_loop() -> None:
@@ -180,7 +213,7 @@ def _worker_loop() -> None:
         try:
             if item is None:
                 return
-            deliver_event_ids(item)
+            _dispatch_event_ids(item)
         except Exception:
             log.exception("webhook delivery worker failed")
         finally:
@@ -188,25 +221,33 @@ def _worker_loop() -> None:
 
 
 def wait_delivery_idle(timeout: float = 30.0) -> bool:
-    """Block until the delivery queue is drained (tests). Returns False on timeout."""
+    """Block until the event queue and per-hook pool are idle (tests)."""
     q = _delivery_queue
-    if q is None:
-        return True
-    done = threading.Event()
+    if q is not None:
+        done = threading.Event()
 
-    def _join() -> None:
-        q.join()
-        done.set()
+        def _join_q() -> None:
+            q.join()
+            done.set()
 
-    threading.Thread(target=_join, name="webhook-queue-join", daemon=True).start()
-    return done.wait(timeout)
+        threading.Thread(target=_join_q, name="webhook-queue-join", daemon=True).start()
+        if not done.wait(timeout):
+            return False
+    deadline = time.monotonic() + timeout
+    with _hook_idle:
+        while _hook_inflight > 0 or _hook_pending or _hook_busy:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            _hook_idle.wait(timeout=remaining)
+    return True
 
 
 def deliver_event_ids(event_ids: list[int]) -> None:
-    """Deliver events synchronously (no DB lock during HTTP). Used by the worker and wait=True.
+    """Deliver events synchronously (no DB lock during HTTP). Used by wait=True callers/tests.
 
-    One signed POST per enabled hook per batch chunk (at most ``MAX_BATCH_EVENTS`` events).
-    Hooks in a round run concurrently; each POST is capped by ``HTTP_DEADLINE``.
+    Posts each matching hook (chunked at ``MAX_BATCH_EVENTS``); hooks run concurrently in a
+    local pool and this call waits for all of them.
     """
     ids = [i for i in event_ids if i]
     if not ids:
@@ -218,22 +259,100 @@ def deliver_event_ids(event_ids: list[int]) -> None:
         return
     if not plan:
         return
-
     workers = min(MAX_HOOK_WORKERS, len(plan))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="webhook") as pool:
-        futures = [pool.submit(_post_hook_batches, item) for item in plan]
-        for fut, item in zip(futures, plan, strict=True):
-            try:
-                ok, err = fut.result()
-            except Exception as exc:
-                ok, err = False, str(exc)[:500]
-                log.warning(
-                    "webhook %s (%s) delivery raised: %s",
-                    item["hook_id"],
-                    item["host"],
-                    type(exc).__name__,
-                )
-            _record_hook_result(item["hook_id"], ok=ok, err=err)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="webhook-sync") as pool:
+        futures = [pool.submit(_post_and_record, item) for item in plan]
+        for fut in futures:
+            fut.result()
+
+
+def _dispatch_event_ids(event_ids: list[int]) -> None:
+    """Load plan and hand each hook to the pool without waiting (async path)."""
+    try:
+        plan = _load_delivery_plan(event_ids)
+    except Exception:
+        log.exception("webhook delivery plan load failed")
+        return
+    for item in plan:
+        _submit_hook_job(item)
+
+
+def _submit_hook_job(item: dict) -> None:
+    """Ensure at most one in-flight delivery chain per hook; coalesce extras onto pending."""
+    global _hook_inflight
+    hid = item["hook_id"]
+    with _hook_state_lock:
+        if hid in _hook_busy:
+            bucket = _hook_pending.setdefault(hid, [])
+            bucket.extend(item["events"])
+            return
+        _hook_busy.add(hid)
+        _hook_inflight += 1
+        pool = _hook_pool
+    if pool is None:
+        with _hook_state_lock:
+            _hook_busy.discard(hid)
+            _hook_inflight = max(0, _hook_inflight - 1)
+            _hook_idle.notify_all()
+        _post_and_record(item)
+        return
+    pool.submit(_hook_pool_run, item)
+
+
+def _hook_pool_run(item: dict) -> None:
+    """Drain this hook's work (including coalesced pending events), then mark idle."""
+    global _hook_inflight
+    hid = item["hook_id"]
+    try:
+        while True:
+            _post_and_record(item)
+            with _hook_state_lock:
+                pending = _hook_pending.pop(hid, None)
+                if not pending:
+                    _hook_busy.discard(hid)
+                    break
+                item = {
+                    "hook_id": hid,
+                    "url": item["url"],
+                    "host": item["host"],
+                    "secret": item["secret"],
+                    "events": pending,
+                }
+    except Exception:
+        log.exception("webhook hook-pool job failed for %s", hid)
+        with _hook_state_lock:
+            _hook_busy.discard(hid)
+            _hook_pending.pop(hid, None)
+    finally:
+        with _hook_state_lock:
+            _hook_inflight = max(0, _hook_inflight - 1)
+            _hook_idle.notify_all()
+
+
+def _post_and_record(item: dict) -> None:
+    try:
+        ok, err = _post_hook_batches(item)
+    except Exception as exc:
+        ok, err = False, str(exc)[:500]
+        log.warning(
+            "webhook %s (%s) delivery raised: %s",
+            item["hook_id"],
+            item["host"],
+            type(exc).__name__,
+        )
+    _record_hook_result(item["hook_id"], ok=ok, err=err)
+
+
+def _record_dropped_events(event_ids: list[int], reason: str) -> None:
+    """Surface dropped deliveries on matching hooks' last_error (not only logs)."""
+    try:
+        plan = _load_delivery_plan(event_ids)
+    except Exception:
+        log.exception("failed to load plan for dropped webhook events")
+        return
+    for item in plan:
+        n = len(item["events"])
+        _record_hook_result(item["hook_id"], ok=False, err=f"{n} events dropped: {reason}")
 
 
 def _load_delivery_plan(event_ids: list[int]) -> list[dict]:
@@ -291,30 +410,60 @@ def _build_body(events: list[dict]) -> bytes:
 
 
 def _http_post(url: str, body: bytes, headers: dict[str, str], *, deadline: float = HTTP_DEADLINE) -> int:
-    """POST with short connect/read timeouts and a hard wall-clock deadline. Returns status code."""
+    """POST with a hard whole-request wall-clock deadline. Returns status code.
+
+    Connect timeout is capped near ``HTTP_CONNECT_TIMEOUT``; read/write may use the full
+    deadline. A watchdog closes the client when the wall clock expires so header trickling
+    cannot outlive the budget. Error text includes the real elapsed time.
+    """
     started = time.monotonic()
     timeout = httpx.Timeout(
         connect=min(HTTP_CONNECT_TIMEOUT, deadline),
-        read=min(HTTP_IO_TIMEOUT, deadline),
-        write=min(HTTP_IO_TIMEOUT, deadline),
+        read=deadline,
+        write=deadline,
         pool=min(HTTP_CONNECT_TIMEOUT, deadline),
     )
-    with httpx.Client(timeout=timeout) as client:
+    client = httpx.Client(timeout=timeout)
+    done = threading.Event()
+
+    def _watchdog() -> None:
+        if not done.wait(timeout=deadline):
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    threading.Thread(target=_watchdog, name="webhook-deadline", daemon=True).start()
+    try:
         with client.stream("POST", url, content=body, headers=headers) as response:
             status = response.status_code
             for _chunk in response.iter_bytes():
                 if time.monotonic() - started >= deadline:
-                    raise TimeoutError(f"timeout after {int(deadline)}s")
-            if time.monotonic() - started >= deadline:
-                raise TimeoutError(f"timeout after {int(deadline)}s")
+                    raise TimeoutError(_timeout_message(time.monotonic() - started))
+            elapsed = time.monotonic() - started
+            if elapsed >= deadline:
+                raise TimeoutError(_timeout_message(elapsed))
             return status
+    except TimeoutError:
+        raise
+    except Exception as exc:
+        elapsed = time.monotonic() - started
+        # Watchdog close / deadline expiry surfaces as transport errors; report real elapsed.
+        if elapsed >= deadline * 0.9:
+            raise TimeoutError(_timeout_message(elapsed)) from exc
+        raise
+    finally:
+        done.set()
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def _post_hook_batches(item: dict) -> tuple[bool, str | None]:
     """HTTP only — no DB session. Posts each chunk; returns (ok, error_message)."""
     chunks = _chunks(item["events"], MAX_BATCH_EVENTS)
     last_err: str | None = None
-    any_ok = False
     for chunk in chunks:
         body = _build_body(chunk)
         headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
@@ -335,7 +484,6 @@ def _post_hook_batches(item: dict) -> tuple[bool, str | None]:
                 last_err = f"HTTP {status}"
             else:
                 metrics.observe_webhook_delivery("ok")
-                any_ok = True
         except TimeoutError as exc:
             metrics.observe_webhook_delivery("network_error")
             err = str(exc)[:500]
@@ -357,8 +505,6 @@ def _post_hook_batches(item: dict) -> tuple[bool, str | None]:
                 type(exc).__name__,
             )
             last_err = str(exc)[:500]
-    if last_err is None and any_ok:
-        return True, None
     if last_err is None:
         return True, None
     # Partial success still surfaces the last error so the UI is truthful.

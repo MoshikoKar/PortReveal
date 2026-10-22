@@ -617,7 +617,10 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
             </label>
             <label className="field">URL
               <input type="url" value={draft.url} maxLength={2000}
-                onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+                onChange={(e) => {
+                  setDraft({ ...draft, url: e.target.value });
+                  if (saveError) setSaveError(null);
+                }}
                 placeholder="https://hooks.example.com/portreveal" />
             </label>
             <label className="check">

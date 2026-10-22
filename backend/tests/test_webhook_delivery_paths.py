@@ -43,6 +43,8 @@ def _webhooks_on(db, monkeypatch, request):
     if request.node.name not in {
         "test_schedule_returns_fast_with_trickling_endpoint",
         "test_queued_scan_work_not_delayed_by_slow_webhook",
+        "test_healthy_hook_not_blocked_by_stuck_hook",
+        "test_queue_full_surfaces_on_hook_status",
     }:
         monkeypatch.setattr(webhooks, "schedule_event_delivery", lambda *a, **k: None)
 
@@ -266,8 +268,14 @@ def test_queued_scan_work_not_delayed_by_slow_webhook(db, monkeypatch):
     assert order.index("next_scan_start") < order.index("http_done")
 
 
-def test_hard_deadline_records_timeout_truthfully(db, monkeypatch):
-    """Sync delivery records a deadline-based timeout (not an abandoned round-budget message)."""
+def _serve(handler_cls):
+    httpd = HTTPServer(("127.0.0.1", 0), handler_cls)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, httpd.server_address[1]
+
+
+def test_header_trickle_cut_at_deadline_with_truthful_elapsed(db, monkeypatch):
+    """A server that trickles response headers must be cut by the wall-clock deadline (~8s)."""
     put_section(db, NotificationSettings(webhooks_enabled=True))
     db.add(WebhookEndpoint(name="trickle", url="http://127.0.0.1:9/unused", enabled=True))
     ev = Event(event_type="port_opened", severity="high", ip="192.0.2.23", message="x", notify=True)
@@ -276,33 +284,122 @@ def test_hard_deadline_records_timeout_truthfully(db, monkeypatch):
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            # Trickle one byte every 0.4s — would stall a per-read 8s timeout for a long time.
-            self.send_response(200)
-            self.send_header("Content-Length", "20")
-            self.end_headers()
-            for _ in range(20):
-                self.wfile.write(b"x")
+            # Trickle status/header bytes so body-loop deadlines never run.
+            self.wfile.write(b"HTTP/1.1 ")
+            self.wfile.flush()
+            for ch in b"200 OK\r\nContent-Length: 0\r\n\r\n":
+                time_mod.sleep(1.0)
+                self.wfile.write(bytes([ch]))
                 self.wfile.flush()
-                time_mod.sleep(0.4)
 
         def log_message(self, *_args):
             return
 
-    httpd = HTTPServer(("127.0.0.1", 0), Handler)
-    port_n = httpd.server_address[1]
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
+    httpd, port_n = _serve(Handler)
     try:
         row = db.scalars(select(WebhookEndpoint)).first()
         row.url = f"http://127.0.0.1:{port_n}/hook"
         db.commit()
-        monkeypatch.setattr(webhooks, "HTTP_DEADLINE", 0.8)
-        monkeypatch.setattr(webhooks, "HTTP_IO_TIMEOUT", 0.5)
+        monkeypatch.setattr(webhooks, "HTTP_DEADLINE", 1.5)
+        monkeypatch.setattr(webhooks, "HTTP_CONNECT_TIMEOUT", 1.0)
         t0 = time_mod.monotonic()
         webhooks.deliver_event_ids([ev.id])
-        assert time_mod.monotonic() - t0 < 3.0
+        elapsed = time_mod.monotonic() - t0
+        assert 1.2 <= elapsed < 3.5, f"elapsed={elapsed:.2f}s"
         db.refresh(row)
         assert row.last_error and row.last_error.startswith("timeout after")
+        # Real elapsed in the message (not a fixed nominal "8s" / "round budget").
         assert "round budget" not in row.last_error
+        assert any(row.last_error.startswith(f"timeout after {n}") for n in ("1.", "2.", "3."))
     finally:
         httpd.shutdown()
+
+
+def test_delayed_receiver_within_deadline_succeeds(db, monkeypatch):
+    """A receiver that answers after ~3s must succeed within the 8s whole-request budget."""
+    put_section(db, NotificationSettings(webhooks_enabled=True))
+    db.add(WebhookEndpoint(name="slow-ok", url="http://127.0.0.1:9/unused", enabled=True))
+    ev = Event(event_type="port_opened", severity="high", ip="192.0.2.24", message="x", notify=True)
+    db.add(ev)
+    db.commit()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            time_mod.sleep(3.0)
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    httpd, port_n = _serve(Handler)
+    try:
+        row = db.scalars(select(WebhookEndpoint)).first()
+        row.url = f"http://127.0.0.1:{port_n}/hook"
+        db.commit()
+        t0 = time_mod.monotonic()
+        webhooks.deliver_event_ids([ev.id])
+        elapsed = time_mod.monotonic() - t0
+        assert 2.5 <= elapsed < 7.0, f"elapsed={elapsed:.2f}s"
+        db.refresh(row)
+        assert row.last_success_at is not None
+        assert row.last_error is None
+    finally:
+        httpd.shutdown()
+
+
+def test_healthy_hook_not_blocked_by_stuck_hook(db, monkeypatch):
+    """While one hook is stuck, another hook's delivery completes promptly (~1s)."""
+    put_section(db, NotificationSettings(webhooks_enabled=True))
+    db.add(WebhookEndpoint(name="stuck", url="https://hooks.example.com/stuck", enabled=True))
+    db.add(WebhookEndpoint(name="ok", url="https://hooks.example.com/ok", enabled=True))
+    ev = Event(event_type="port_opened", severity="high", ip="192.0.2.25", message="x", notify=True)
+    db.add(ev)
+    db.commit()
+
+    hold = threading.Event()
+    ok_at: list[float] = []
+    t0 = time_mod.monotonic()
+
+    def post(url, body, headers, *, deadline=8.0):
+        if "stuck" in url:
+            hold.wait(timeout=30)
+            return 204
+        ok_at.append(time_mod.monotonic() - t0)
+        return 204
+
+    _patch_http(monkeypatch, post)
+    webhooks.start_delivery_worker()
+    webhooks.schedule_event_delivery([ev.id])
+    # Wait until the healthy hook finishes (without releasing the stuck one).
+    deadline = time_mod.monotonic() + 5
+    while not ok_at and time_mod.monotonic() < deadline:
+        time_mod.sleep(0.05)
+    assert ok_at, "healthy hook never delivered"
+    assert ok_at[0] < 1.0, f"healthy hook took {ok_at[0]:.2f}s while peer stuck"
+    hold.set()
+    assert webhooks.wait_delivery_idle(timeout=10)
+    rows = {h.name: h for h in db.scalars(select(WebhookEndpoint)).all()}
+    db.refresh(rows["ok"])
+    assert rows["ok"].last_success_at is not None
+
+
+def test_queue_full_surfaces_on_hook_status(db, monkeypatch):
+    put_section(db, NotificationSettings(webhooks_enabled=True))
+    db.add(WebhookEndpoint(name="siem", url="https://hooks.example.com/q", enabled=True))
+    ev = Event(event_type="port_opened", severity="high", ip="192.0.2.26", message="x", notify=True)
+    db.add(ev)
+    db.commit()
+    webhooks.start_delivery_worker()
+    # Fill the queue without letting the dispatcher drain it.
+    monkeypatch.setattr(webhooks, "QUEUE_MAXSIZE", 1)
+    # Replace the live queue with a tiny full one.
+    tiny = __import__("queue").Queue(maxsize=1)
+    tiny.put_nowait([ev.id])
+    monkeypatch.setattr(webhooks, "_delivery_queue", tiny)
+    webhooks.schedule_event_delivery([ev.id])  # should hit Full and record last_error
+    row = db.scalars(select(WebhookEndpoint)).first()
+    db.refresh(row)
+    assert row.last_error and "dropped" in row.last_error and "queue full" in row.last_error

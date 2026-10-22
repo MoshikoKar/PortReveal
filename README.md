@@ -528,9 +528,10 @@ for production).
 ### Outbound webhooks
 
 Configure endpoints under **Settings → Notifications → Webhooks**. Delivery runs on a
-background worker (scan / scheduler threads are never blocked by slow receivers). Each
-POST is signed with `X-NF-Signature` (HMAC-SHA256 hex of the raw body) when a secret is set,
-and is subject to an 8s wall-clock deadline.
+background dispatcher with a small per-hook pool (scan / scheduler threads are never blocked;
+one stuck endpoint does not delay others). Each POST is signed with `X-NF-Signature`
+(HMAC-SHA256 hex of the raw body) when a secret is set, and is subject to an **8s whole-request
+wall-clock deadline** (connect up to ~3s; the remainder may be spent on the response).
 
 **Payload shapes**
 
