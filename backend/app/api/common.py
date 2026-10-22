@@ -252,6 +252,7 @@ def vuln_finding_out(dpv: DevicePortVuln, port: DevicePort, device: Device, vuln
         "device_ip": device.current_ip,
         "device_hostname": device.hostname,
         "network": network_name,
+        "network_id": device.network_id,
         "os_name": device.os_name,
         "device_type": device.device_type,
         "port": port.port,

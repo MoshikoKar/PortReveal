@@ -19,7 +19,8 @@ export const FINDING_DESC_FIRST: readonly FindingSort[] = ['cvss', 'first_seen']
 /** Paginated CVE-centric findings table. Dismiss/undismiss reuse the existing per-device endpoints;
  * after a mutation the parent reloads the summary so cards stay in sync. */
 export function VulnFindingsTable({
-  filters, q, onlyHidden, onToggleOnlyHidden, page, onPage, sort, onSort, onToggleDismissed, onChanged,
+  filters, q, onlyHidden, onToggleOnlyHidden, page, onPage, sort, onSort,
+  onToggleDismissed, onToggleNetwork, onChanged,
 }: {
   filters: VulnFilters;
   /** Debounced search term from the URL (`q`); lifts the display floor when non-empty. */
@@ -31,6 +32,7 @@ export function VulnFindingsTable({
   sort: { key: FindingSort; desc: boolean };
   onSort: (key: FindingSort) => void;
   onToggleDismissed: (show: boolean) => void;
+  onToggleNetwork: (networkId: number | null) => void;
   onChanged: () => void;
 }) {
   const { isAdmin } = useApp();
@@ -149,6 +151,9 @@ export function VulnFindingsTable({
                   const key = findingRowKey(v);
                   const busyKey = dismissBusyKey(v.device_uuid, v.cve_id);
                   const reasons = displayHiddenReasons(v.state, v.hidden_reasons);
+                  const netKey = v.network_id != null ? String(v.network_id) : 'unassigned';
+                  const netActive = filters.network_id === netKey;
+                  const netLabel = v.network ?? 'Unassigned';
                   return (
                     <tr key={key} className={v.state === 'dismissed' ? 'dim' : ''}>
                       <td className="mono nowrap">
@@ -166,7 +171,17 @@ export function VulnFindingsTable({
                         <Link className="mono" to={`/devices/${v.device_uuid}`}>{v.device_ip}</Link>
                         {v.device_hostname && <div className="muted small">{v.device_hostname}</div>}
                       </td>
-                      <td>{v.network ?? '-'}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className={`heatmap-network-btn ${netActive ? 'active' : ''}`}
+                          aria-pressed={netActive}
+                          title={netActive ? 'Clear network filter' : `Filter by network: ${netLabel}`}
+                          onClick={() => onToggleNetwork(v.network_id)}
+                        >
+                          {netLabel}
+                        </button>
+                      </td>
                       <td className="small">
                         {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
                       </td>

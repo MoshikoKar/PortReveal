@@ -5,9 +5,11 @@ scanner, throwaway SQLite database). Marked `e2e` and excluded from the default 
 with `npm run test:e2e`, which builds the frontend first. Skips when frontend/dist or Playwright's
 Chromium is missing.
 """
+
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -72,7 +74,10 @@ def live_app(tmp_path_factory) -> Iterator[dict]:
     log = (work / "app.log").open("wb")
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=BACKEND, env=env, stdout=log, stderr=subprocess.STDOUT,
+        cwd=BACKEND,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     try:
@@ -94,8 +99,7 @@ def browser():
         try:
             b = p.chromium.launch(headless=True)
         except Exception as exc:  # browser binary not installed for this user
-            pytest.skip(f"Playwright Chromium unavailable ({exc.__class__.__name__}); "
-                        "run: python -m playwright install chromium")
+            pytest.skip(f"Playwright Chromium unavailable ({exc.__class__.__name__}); run: python -m playwright install chromium")
         yield b
         b.close()
 
@@ -122,10 +126,14 @@ def _seed_below_floor_finding(database_url: str, cve_id: str = "CVE-2024-99901")
         if port_row is None:
             raise RuntimeError("e2e seed expected at least one device port from the mock scan")
         if db.get(Vulnerability, cve_id) is None:
-            db.add(Vulnerability(
-                cve_id=cve_id, cvss_base=5.0, kev=False,
-                summary="e2e below-floor finding for vulnerabilities search",
-            ))
+            db.add(
+                Vulnerability(
+                    cve_id=cve_id,
+                    cvss_base=5.0,
+                    kev=False,
+                    summary="e2e below-floor finding for vulnerabilities search",
+                )
+            )
             db.flush()
         existing = db.scalars(
             select(DevicePortVuln).where(
@@ -134,10 +142,14 @@ def _seed_below_floor_finding(database_url: str, cve_id: str = "CVE-2024-99901")
             )
         ).first()
         if existing is None:
-            db.add(DevicePortVuln(
-                device_port_id=port_row.id, cve_id=cve_id,
-                state=VULN_STATE_CONFIRMED, matched_at=utcnow(),
-            ))
+            db.add(
+                DevicePortVuln(
+                    device_port_id=port_row.id,
+                    cve_id=cve_id,
+                    state=VULN_STATE_CONFIRMED,
+                    matched_at=utcnow(),
+                )
+            )
         db.commit()
     engine.dispose()
 
@@ -161,6 +173,103 @@ def _set_min_cvss_display_via_api(page, floor: float = 6.0) -> None:
         floor,
     )
     assert status == 200, status
+
+
+def _seed_vuln_networks(database_url: str) -> tuple[str, str]:
+    """Insert two placeholder networks with one finding each into the live e2e DB.
+
+    Returns the display names (Lab Alpha / Lab Beta) for UI assertions.
+    """
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from app.core.vuln.lifecycle import sync_finding_lifecycle
+    from app.db import utcnow
+    from app.models import (
+        VULN_STATE_CONFIRMED,
+        Device,
+        DevicePort,
+        DevicePortVuln,
+        Network,
+        Vulnerability,
+    )
+
+    name_a, name_b = "Lab Alpha", "Lab Beta"
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    with Session(engine) as db:
+        # Reuse Mock Lab devices from DEV_SEED when present; otherwise create lean stubs.
+        net_a = db.scalar(select(Network).where(Network.name == name_a))
+        if net_a is None:
+            net_a = Network(name=name_a, cidr="10.10.0.0/24", description="E2E placeholder")
+            db.add(net_a)
+            db.flush()
+        net_b = db.scalar(select(Network).where(Network.name == name_b))
+        if net_b is None:
+            net_b = Network(name=name_b, cidr="10.20.0.0/24", description="E2E placeholder")
+            db.add(net_b)
+            db.flush()
+
+        def ensure_device(ip: str, network_id: int, mac: str, port_n: int, service: str) -> DevicePort:
+            d = db.scalar(select(Device).where(Device.current_ip == ip))
+            if d is None:
+                import uuid as _uuid
+
+                from app.models import DEVICE_ACTIVE
+
+                d = Device(
+                    uuid=str(_uuid.uuid4()),
+                    current_ip=ip,
+                    mac=mac,
+                    network_id=network_id,
+                    status=DEVICE_ACTIVE,
+                    first_seen=utcnow(),
+                    last_seen=utcnow(),
+                )
+                db.add(d)
+                db.flush()
+            else:
+                d.network_id = network_id
+            p = next((pp for pp in d.ports if pp.port == port_n), None)
+            if p is None:
+                p = DevicePort(
+                    device_id=d.id,
+                    port=port_n,
+                    protocol="tcp",
+                    service=service,
+                    is_open=True,
+                    first_seen=utcnow(),
+                    last_seen=utcnow(),
+                )
+                db.add(p)
+                db.flush()
+            return p
+
+        pa = ensure_device("10.10.0.1", net_a.id, "00:11:22:33:10:01", 22, "ssh")
+        pb = ensure_device("10.20.0.1", net_b.id, "00:11:22:33:20:01", 80, "http")
+        if db.get(Vulnerability, "CVE-2024-ALPHA") is None:
+            db.add(Vulnerability(cve_id="CVE-2024-ALPHA", cvss_base=9.8, kev=True, epss=0.9, summary="E2E critical placeholder"))
+        if db.get(Vulnerability, "CVE-2024-BETA") is None:
+            db.add(Vulnerability(cve_id="CVE-2024-BETA", cvss_base=5.0, kev=False, epss=0.01, summary="E2E medium placeholder"))
+        db.flush()
+        if not db.scalar(
+            select(DevicePortVuln).where(
+                DevicePortVuln.device_port_id == pa.id,
+                DevicePortVuln.cve_id == "CVE-2024-ALPHA",
+            )
+        ):
+            db.add(DevicePortVuln(device_port_id=pa.id, cve_id="CVE-2024-ALPHA", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+        if not db.scalar(
+            select(DevicePortVuln).where(
+                DevicePortVuln.device_port_id == pb.id,
+                DevicePortVuln.cve_id == "CVE-2024-BETA",
+            )
+        ):
+            db.add(DevicePortVuln(device_port_id=pb.id, cve_id="CVE-2024-BETA", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+        db.commit()
+        sync_finding_lifecycle(db, now=utcnow())
+        db.commit()
+    engine.dispose()
+    return name_a, name_b
 
 
 def test_sign_in_dashboard_and_devices_list(live_app, browser):
@@ -389,6 +498,203 @@ def test_vulnerabilities_search_debounce_respects_clear_all_and_facet(live_app, 
         qs = parse_qs(urlparse(page.url).query)
         assert qs.get("severity") == ["critical"], page.url
         assert qs.get("q") == ["openssh"], page.url
+    finally:
+        page.close()
+    assert errors == []
+
+
+def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
+    """Click a network facet row → filter; CSV only that network; print view shows filter summary."""
+    from playwright.sync_api import expect
+
+    from app.core.vuln.summary import invalidate_vuln_summary_cache
+
+    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    # Test-process cache clear is a no-op for the uvicorn worker; dismiss/undo below busts it.
+    invalidate_vuln_summary_cache()
+    base = live_app["base"]
+
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        # Invalidate the app-process summary cache so seeded findings appear in facets.
+        page.evaluate(
+            """async () => {
+              const list = await fetch('/api/vulns?cve_id=CVE-2024-ALPHA', { credentials: 'same-origin' })
+                .then((r) => r.json());
+              if (!list.items || !list.items.length) return;
+              const d = list.items[0];
+              const m = document.cookie.match(/(?:^|;\\s*)nf_csrf=([^;]+)/);
+              const csrf = m ? decodeURIComponent(m[1]) : '';
+              const hdr = { 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'POST', credentials: 'same-origin', headers: hdr, body: '{}' });
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'DELETE', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf } });
+            }"""
+        )
+
+        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
+
+        facet_btn = page.locator(".bar-row", has_text=name_a).first
+        expect(facet_btn).to_be_visible(timeout=30_000)
+        facet_btn.click()
+        expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
+        expect(page.get_by_role("button", name=re.compile(rf"network:\s*{re.escape(name_a)}"))).to_be_visible(timeout=10_000)
+
+        # Export CSV for the active network filter; verify only Lab Alpha rows.
+        with page.expect_download() as dl_info:
+            page.get_by_role("button", name="Export CSV").click()
+        download = dl_info.value
+        path = download.path()
+        assert path is not None
+        raw = Path(path).read_bytes()
+        assert raw.startswith(b"\xef\xbb\xbf")
+        text = raw.decode("utf-8-sig")
+        assert "CVE-2024-ALPHA" in text
+        assert "CVE-2024-BETA" not in text
+        assert name_a in text or "10.10.0.1" in text
+        assert name_b not in text
+
+        # Print report: must wait for filtered summary + findings before window.print().
+        def install_print_mock() -> None:
+            page.evaluate(
+                """() => {
+                  window.__pr_print_calls = 0;
+                  window.__pr_print_had_summary = false;
+                  window.__pr_print_had_findings = false;
+                  window.print = () => {
+                    const report = document.querySelector('.vuln-print-report');
+                    const kpis = report && report.querySelector('.vuln-print-kpis');
+                    const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+                    window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+                    window.__pr_print_had_findings = !!(rows && rows.length > 0);
+                    window.__pr_print_calls++;
+                  };
+                }"""
+            )
+
+        install_print_mock()
+        page.get_by_role("button", name="Print / PDF report").click()
+        page.wait_for_function("() => window.__pr_print_calls > 0", timeout=15_000)
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
+        assert page.evaluate("() => window.__pr_print_had_findings") is True
+        report = page.locator(".vuln-print-report")
+        # Force print stylesheet visibility for assertion without an actual print dialog.
+        page.add_style_tag(content=".vuln-print-report { display: block !important; }")
+        expect(report.locator(".vuln-print-filters")).to_contain_text(f"network: {name_a}", timeout=10_000)
+        expect(report.get_by_role("heading", name="PortReveal vulnerability report")).to_be_visible()
+
+        # Deep-link ?print=1 also waits for summary + findings (Report for this … entry points).
+        # add_init_script must be a bare script body (not an unused () => {} expression).
+        net_id = re.search(r"network_id=(\d+)", page.url)
+        assert net_id is not None
+        page.add_init_script(
+            """
+            window.__pr_print_calls = 0;
+            window.__pr_print_had_summary = false;
+            window.__pr_print_had_findings = false;
+            window.print = () => {
+              const report = document.querySelector('.vuln-print-report');
+              const kpis = report && report.querySelector('.vuln-print-kpis');
+              const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+              window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+              window.__pr_print_had_findings = !!(rows && rows.length > 0);
+              window.__pr_print_calls++;
+            };
+            """
+        )
+        page.goto(f"{base}/vulnerabilities?network_id={net_id.group(1)}&print=1")
+        page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
+        assert page.evaluate("() => window.__pr_print_had_findings") is True
+    finally:
+        page.close()
+    assert errors == []
+
+
+def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, browser):
+    """Print stays disabled until the summary for the selected network arrives; report matches it."""
+    from playwright.sync_api import expect
+
+    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        page.evaluate(
+            """async () => {
+              const list = await fetch('/api/vulns?cve_id=CVE-2024-ALPHA', { credentials: 'same-origin' })
+                .then((r) => r.json());
+              if (!list.items || !list.items.length) return;
+              const d = list.items[0];
+              const m = document.cookie.match(/(?:^|;\\s*)nf_csrf=([^;]+)/);
+              const csrf = m ? decodeURIComponent(m[1]) : '';
+              const hdr = { 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'POST', credentials: 'same-origin', headers: hdr, body: '{}' });
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'DELETE', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf } });
+            }"""
+        )
+
+        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_label("Network filter: All networks")).to_be_visible(timeout=15_000)
+
+        # Delay filtered summary responses so the Print button observes the loading gate.
+        def handle_summary(route):
+            if "network_id=" in route.request.url and route.request.method == "GET":
+                time.sleep(1.2)
+            route.continue_()
+
+        page.route("**/api/vulns/summary*", handle_summary)
+
+        page.evaluate(
+            """() => {
+              window.__pr_print_calls = 0;
+              window.__pr_print_filter = '';
+              window.__pr_print_findings = 0;
+              window.print = () => {
+                const report = document.querySelector('.vuln-print-report');
+                const filters = report && report.querySelector('.vuln-print-filters');
+                const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+                window.__pr_print_filter = filters ? (filters.textContent || '') : '';
+                window.__pr_print_findings = rows ? rows.length : 0;
+                window.__pr_print_calls++;
+              };
+            }"""
+        )
+
+        # Lab Alpha hosts the critical finding (visible under the default CVSS floor);
+        # Lab Beta's medium finding may be hidden — use Alpha so the report has rows.
+        net_select = page.get_by_label(re.compile(r"^Network filter:"))
+        net_select.select_option(label=name_a)
+        expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
+        expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=5_000)
+
+        preparing = page.get_by_role("button", name="Preparing…")
+        expect(preparing).to_be_visible(timeout=5_000)
+        expect(preparing).to_be_disabled()
+
+        print_btn = page.get_by_role("button", name="Print / PDF report")
+        expect(print_btn).to_be_enabled(timeout=15_000)
+        print_btn.click()
+        page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
+        filt = page.evaluate("() => window.__pr_print_filter")
+        assert name_a in filt, filt
+        assert name_b not in filt, filt
+        assert page.evaluate("() => window.__pr_print_findings") >= 1
+        page.unroute("**/api/vulns/summary*")
     finally:
         page.close()
     assert errors == []

@@ -88,8 +88,11 @@ function TopCves({ items, filters, onToggleCve }: {
   );
 }
 
-function TopDevices({ items, filters, onToggleDevice }: {
-  items: VulnSummary['top_devices']; filters: VulnFilters; onToggleDevice: (uuid: string) => void;
+function TopDevices({ items, filters, onToggleDevice, onToggleNetwork }: {
+  items: VulnSummary['top_devices'];
+  filters: VulnFilters;
+  onToggleDevice: (uuid: string) => void;
+  onToggleNetwork: (networkId: number | null) => void;
 }) {
   const { rows, th } = useClientSort(items, {
     host: (d) => d.ip, network: (d) => d.network_name, risk: (d) => d.risk_score,
@@ -112,6 +115,9 @@ function TopDevices({ items, filters, onToggleDevice }: {
             <tbody>
               {rows.map((d) => {
                 const active = filters.device_uuid === d.uuid;
+                const netKey = d.network_id != null ? String(d.network_id) : 'unassigned';
+                const netActive = filters.network_id === netKey;
+                const netLabel = d.network_name ?? 'Unassigned';
                 return (
                   <tr key={d.uuid} className={active ? 'row-active' : undefined}
                     style={{ cursor: 'pointer' }}
@@ -122,7 +128,17 @@ function TopDevices({ items, filters, onToggleDevice }: {
                         onClick={(e) => e.stopPropagation()}>{d.ip}</Link>
                       {d.hostname && <div className="muted small">{d.hostname}</div>}
                     </td>
-                    <td>{d.network_name ?? '-'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className={`heatmap-network-btn ${netActive ? 'active' : ''}`}
+                        aria-pressed={netActive}
+                        title={netActive ? 'Clear network filter' : `Filter by network: ${netLabel}`}
+                        onClick={(e) => { e.stopPropagation(); onToggleNetwork(d.network_id); }}
+                      >
+                        {netLabel}
+                      </button>
+                    </td>
                     <td className="right"><RiskBadge score={d.risk_score} kind="risk" /></td>
                     <td className="right"><ScoreBadge score={d.exposure_score} /></td>
                     <td className="right"><RiskBadge score={d.combined_score} kind="combined" /></td>
@@ -138,18 +154,20 @@ function TopDevices({ items, filters, onToggleDevice }: {
 }
 
 /** Top lists sort client-side (10 rows each); clicking a row still filters the findings table. */
-export function VulnTopLists({ summary, filters, onToggleCve, onToggleDevice, onToggleNewSince }: {
+export function VulnTopLists({ summary, filters, onToggleCve, onToggleDevice, onToggleNetwork, onToggleNewSince }: {
   summary: VulnSummary;
   filters: VulnFilters;
   onToggleCve: (cveId: string) => void;
   onToggleDevice: (uuid: string) => void;
+  onToggleNetwork: (networkId: number | null) => void;
   onToggleNewSince: (value: 'scan' | 'db') => void;
 }) {
   return (
     <>
       <div className="grid halves">
         <TopCves items={summary.top_cves} filters={filters} onToggleCve={onToggleCve} />
-        <TopDevices items={summary.top_devices} filters={filters} onToggleDevice={onToggleDevice} />
+        <TopDevices items={summary.top_devices} filters={filters} onToggleDevice={onToggleDevice}
+          onToggleNetwork={onToggleNetwork} />
       </div>
       <div className="grid halves">
         <NewList title="New since last scan" items={summary.new_since_last_scan}

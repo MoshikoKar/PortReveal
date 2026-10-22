@@ -1,4 +1,5 @@
 """GET /api/vulns (filterable finding list) and GET /api/vulns/{cve_id} (CVE detail)."""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -47,10 +48,15 @@ def _uuid(c: TestClient, ip: str) -> str:
 
 def _seed_two_devices(db):
     net = make_network(db)
-    scan(ScriptedScanner([
-        host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01"),
-        host("10.0.0.2", [port(80, "http", "nginx", "1.18")], mac="00:11:22:33:44:02"),
-    ]), network_id=net.id)
+    scan(
+        ScriptedScanner(
+            [
+                host("10.0.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:01"),
+                host("10.0.0.2", [port(80, "http", "nginx", "1.18")], mac="00:11:22:33:44:02"),
+            ]
+        ),
+        network_id=net.id,
+    )
     da = device_by_ip(db, "10.0.0.1")
     db_ = device_by_ip(db, "10.0.0.2")
     pa = next(p for p in da.ports if p.port == 22)
@@ -120,8 +126,7 @@ def test_list_vulns_filters_new_since_scan_and_db(admin, db):
     # Seed ran a completed scan before inserting findings → they count as new since that scan.
     assert admin.get("/api/vulns", params={"new_since": "scan"}).json()["total"] == 2
 
-    db.add(VulnFeedState(source="nvd", last_synced_at=now - timedelta(hours=1), record_count=1,
-                         mirror_complete=True))
+    db.add(VulnFeedState(source="nvd", last_synced_at=now - timedelta(hours=1), record_count=1, mirror_complete=True))
     db.commit()
     assert admin.get("/api/vulns", params={"new_since": "db"}).json()["total"] == 2
 
@@ -321,9 +326,14 @@ def test_list_vulns_q_digit_port_is_exact_not_substring(admin, db):
     db.flush()
     db.refresh(db_)
     p122 = next(p for p in db_.ports if p.port == 122)
-    db.add(DevicePortVuln(
-        device_port_id=p122.id, cve_id="CVE-2024-MED", state=VULN_STATE_POTENTIAL, matched_at=utcnow(),
-    ))
+    db.add(
+        DevicePortVuln(
+            device_port_id=p122.id,
+            cve_id="CVE-2024-MED",
+            state=VULN_STATE_POTENTIAL,
+            matched_at=utcnow(),
+        )
+    )
     db.commit()
 
     body = admin.get("/api/vulns", params={"q": "22"}).json()
@@ -507,25 +517,63 @@ def test_cve_detail_first_seen_uses_min_lifecycle_first_seen(admin, db):
 
 
 # --- CSV export --------------------------------------------------------------------------------------
+CSV_HEADER_PREFIX = [
+    "network",
+    "device_name",
+    "hostname",
+    "ip",
+    "mac",
+    "port",
+    "protocol",
+    "service",
+    "product",
+    "version",
+    "cve",
+    "title",
+    "cvss",
+    "severity",
+    "kev",
+    "epss",
+    "state",
+]
+
+
+def _csv_lines(text: str) -> list[str]:
+    """Strip UTF-8 BOM then split rows."""
+    return text.lstrip("\ufeff").strip().splitlines()
+
+
+def _assert_csv_header(header: list[str]) -> None:
+    """Date columns name the local timezone; everything before them is stable."""
+    assert header[:17] == CSV_HEADER_PREFIX
+    assert header[17].startswith("first_seen (") and header[17].endswith(")")
+    assert header[18].startswith("last_matched (") and header[18].endswith(")")
+    assert header[19] == "cve_link"
+
+
 def test_export_vulns_streams_header_and_rows(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/export")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert "attachment" in r.headers["content-disposition"]
-    lines = r.text.strip().splitlines()
+    assert r.content.startswith(b"\xef\xbb\xbf")  # UTF-8 BOM for Excel
+    lines = _csv_lines(r.text)
     header = lines[0].split(",")
-    assert header == ["cve_id", "device_ip", "device_hostname", "network", "port", "protocol", "service",
-                      "cvss_base", "severity", "kev", "epss", "state", "first_seen", "matched_at",
-                      "hidden_reasons"]
+    _assert_csv_header(header)
+    assert "hidden_reasons" not in header  # only appended when q is set
     assert len(lines) == 3  # header + 2 findings
     body = "\n".join(lines)
     assert "CVE-2024-CRIT" in body and "CVE-2024-MED" in body
-    # Without q, hidden_reasons stays empty.
-    assert all(line.endswith(",") or line.split(",")[-1] == "" for line in lines[1:])
+    assert "Yes" in body and "No" in body
+    assert "nvd.nist.gov/vuln/detail/CVE-2024-CRIT" in body
 
 
 def test_export_vulns_hidden_reasons_column_with_q(admin, db):
+    """With ``q``, rich CSV gains a trailing hidden_reasons column (search includes hidden rows)."""
+    import csv
+    import io
+
     _seed_two_devices(db)
     put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0, include_potential=False))
     row = db.query(DevicePortVuln).filter_by(cve_id="CVE-2024-CRIT").one()
@@ -533,26 +581,228 @@ def test_export_vulns_hidden_reasons_column_with_q(admin, db):
     db.commit()
 
     r = admin.get("/api/vulns/export", params={"q": "2024"})
-    lines = r.text.strip().splitlines()
-    assert lines[0].endswith("hidden_reasons")
-    by_cve = {line.split(",")[0]: line for line in lines[1:]}
-    assert "Dismissed" in by_cve["CVE-2024-CRIT"]
+    rows = list(csv.reader(io.StringIO(r.text.lstrip("\ufeff"))))
+    header, *data = rows
+    assert header[-1] == "hidden_reasons"
+    _assert_csv_header(header[:-1])
+    by_cve = {row[header.index("cve")]: row for row in data}
+    assert "Dismissed" in by_cve["CVE-2024-CRIT"][header.index("hidden_reasons")]
     # MED is potential + below floor → semicolon-joined reasons.
-    assert "Potential (hidden)" in by_cve["CVE-2024-MED"]
-    assert "Below CVSS floor" in by_cve["CVE-2024-MED"]
-    assert ";" in by_cve["CVE-2024-MED"]
+    med_reasons = by_cve["CVE-2024-MED"][header.index("hidden_reasons")]
+    assert "Potential (hidden)" in med_reasons
+    assert "Below CVSS floor" in med_reasons
+    assert ";" in med_reasons
 
 
 def test_export_vulns_respects_filters(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/export", params={"severity": "critical"})
-    lines = r.text.strip().splitlines()
+    lines = _csv_lines(r.text)
     assert len(lines) == 2  # header + 1 finding
     assert "CVE-2024-CRIT" in lines[1] and "CVE-2024-MED" not in lines[1]
+
+
+def test_export_vulns_respects_network_device_cve_kev(admin, db):
+    net, da, _db = _seed_two_devices(db)
+    by_net = _csv_lines(admin.get("/api/vulns/export", params={"network_id": net.id}).text)
+    assert len(by_net) == 3
+    assert "vulns_" in admin.get("/api/vulns/export", params={"network_id": net.id}).headers["content-disposition"]
+    assert "test-net" in admin.get("/api/vulns/export", params={"network_id": net.id}).headers["content-disposition"].lower()
+
+    by_device = _csv_lines(admin.get("/api/vulns/export", params={"device_uuid": da.uuid}).text)
+    assert len(by_device) == 2 and "CVE-2024-CRIT" in by_device[1]
+
+    by_cve = _csv_lines(admin.get("/api/vulns/export", params={"cve_id": "CVE-2024-MED"}).text)
+    assert len(by_cve) == 2 and "CVE-2024-MED" in by_cve[1]
+
+    kev_yes = _csv_lines(admin.get("/api/vulns/export", params={"kev": "true"}).text)
+    assert len(kev_yes) == 2 and "CVE-2024-CRIT" in kev_yes[1]
+    kev_no = _csv_lines(admin.get("/api/vulns/export", params={"kev": "false"}).text)
+    assert len(kev_no) == 2 and "CVE-2024-MED" in kev_no[1]
 
 
 def test_export_vulns_no_rows_still_returns_header_only(admin, db):
     _seed_two_devices(db)
     r = admin.get("/api/vulns/export", params={"network_id": 999999})
-    lines = r.text.strip().splitlines()
+    lines = _csv_lines(r.text)
     assert len(lines) == 1
+    _assert_csv_header(lines[0].split(","))
+
+
+def test_export_vulns_hebrew_network_name_content_disposition(admin, db):
+    """Non-ASCII network names must not 500: ASCII filename= + RFC 5987 filename*."""
+    from urllib.parse import unquote
+
+    # Generic Hebrew placeholder network name (not a real org/site).
+    net = make_network(db, cidr="10.30.0.0/24", name="רשת-בדיקה")
+    scan(ScriptedScanner([host("10.30.0.1", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:30")]), network_id=net.id)
+    d = device_by_ip(db, "10.30.0.1")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-HEB", cvss_base=9.8, kev=True, summary="hebrew net"))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-HEB", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    r = admin.get("/api/vulns/export", params={"network_id": net.id})
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    # Starlette encodes headers as latin-1; this must not raise.
+    cd.encode("latin-1")
+    assert 'filename="' in cd
+    assert "filename*=UTF-8''" in cd
+    # UTF-8 form keeps the Hebrew slug; ASCII fallback stays latin-1-safe and drops empty segments.
+    assert "רשת" in unquote(cd) or "%D7%A8" in cd
+    assert "vulns_" in cd
+    assert "vulns_-_" not in cd
+    ascii_name = cd.split("filename=")[1].split(";")[0].strip().strip('"')
+    assert ascii_name.startswith("vulns_") and ascii_name.endswith(".csv")
+    assert "_-_" not in ascii_name
+    assert "CVE-2024-HEB" in r.text
+
+
+def test_export_vulns_csv_injection_prefix(admin, db):
+    """Hostname / title / product cells starting with =+-@ get a leading apostrophe."""
+    net = make_network(db, cidr="10.40.0.0/24", name="Inj Net")
+    scan(
+        ScriptedScanner(
+            [
+                host(
+                    "10.40.0.1", [port(22, "ssh", "=EvilProduct", "1.0")], hostname="=cmd|' /C calc'!A0", mac="00:11:22:33:44:40"
+                ),
+            ]
+        ),
+        network_id=net.id,
+    )
+    d = device_by_ip(db, "10.40.0.1")
+    d.hostname = "=cmd|' /C calc'!A0"
+    p = next(pp for pp in d.ports if pp.port == 22)
+    p.product = "+1+1"
+    db.add(
+        Vulnerability(
+            cve_id="CVE-2024-INJ",
+            cvss_base=5.0,
+            kev=False,
+            summary="@SUM(A1:A10) formula title",
+        )
+    )
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-INJ", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    import csv
+    import io
+
+    r = admin.get("/api/vulns/export", params={"cve_id": "CVE-2024-INJ"})
+    assert r.status_code == 200
+    rows = list(csv.reader(io.StringIO(r.text.lstrip("\ufeff"))))
+    assert len(rows) == 2
+    header, data = rows
+    hostname = data[header.index("hostname")]
+    product = data[header.index("product")]
+    title = data[header.index("title")]
+    assert hostname.startswith("'=")
+    assert product.startswith("'+")
+    assert title.startswith("'@")
+
+
+def test_export_vulns_unassigned_network_label(admin, db):
+    _seed_two_devices(db)
+    orphan = device_by_ip(db, "10.0.0.2")
+    orphan.network_id = None
+    db.commit()
+
+    import csv
+    import io
+
+    r = admin.get("/api/vulns/export", params={"network_id": "unassigned"})
+    rows = list(csv.reader(io.StringIO(r.text.lstrip("\ufeff"))))
+    assert len(rows) == 2
+    assert rows[1][rows[0].index("network")] == "Unassigned"
+    assert "CVE-2024-MED" in rows[1]
+
+
+def test_vulns_routes_accept_q_and_network_together(admin, db):
+    """List, summary, and CSV all compose ``q`` with ``network_id`` (and other facets)."""
+    import csv
+    import io
+
+    net, _da, other = _seed_two_devices(db)
+    net_b = make_network(db, cidr="10.1.0.0/24", name="other-net")
+    other.network_id = net_b.id
+    put_section(db, VulnSettings(enabled=True, min_cvss_display=6.0, include_potential=False))
+    db.commit()
+
+    # q alone lifts the floor → both CVEs; network scopes to CRIT's device only.
+    alone = admin.get("/api/vulns", params={"q": "2024"}).json()
+    assert alone["total"] == 2
+    listed = admin.get("/api/vulns", params={"q": "2024", "network_id": net.id}).json()
+    assert listed["total"] == 1
+    assert listed["items"][0]["cve_id"] == "CVE-2024-CRIT"
+
+    # kev + network + q still compose.
+    kev = admin.get(
+        "/api/vulns",
+        params={
+            "q": "2024",
+            "network_id": net.id,
+            "kev": "true",
+        },
+    ).json()
+    assert kev["total"] == 1 and kev["items"][0]["kev"] is True
+
+    summary = admin.get("/api/vulns/summary", params={"q": "2024", "network_id": net.id}).json()
+    assert summary["findings_total"] == 1
+    assert summary["severity_counts"]["critical"] == 1
+
+    exported = admin.get("/api/vulns/export", params={"q": "2024", "network_id": net.id})
+    rows = list(csv.reader(io.StringIO(exported.text.lstrip("\ufeff"))))
+    assert rows[0][-1] == "hidden_reasons"
+    assert len(rows) == 2
+    assert "CVE-2024-CRIT" in rows[1]
+    assert "CVE-2024-MED" not in exported.text
+    cd = exported.headers["content-disposition"]
+    assert "vulns_" in cd and "search" in cd
+
+
+def test_export_filename_preserves_underscores_in_ascii_fallback(admin, db):
+    """ASCII ``filename=`` keeps underscores (``vulns_network-a_YYYYMMDD`` style), not hyphens-only."""
+    from app.core.vuln.filters import content_disposition_attachment, sanitize_filename_part
+
+    assert "_" in sanitize_filename_part("network_a")
+    assert sanitize_filename_part("network_a", ascii_only=True) == "network_a"
+    # Spaces/dots become hyphens; underscores stay.
+    assert sanitize_filename_part("My_Net Work", ascii_only=True) == "my_net-work"
+    cd = content_disposition_attachment("vulns_network_a_20261022.csv")
+    assert 'filename="vulns_network_a_20261022.csv"' in cd
+    assert "filename*=UTF-8''vulns_network_a_20261022.csv" in cd
+
+
+def test_export_filename_ascii_drops_empty_slug_parts_for_hebrew_network(admin, db):
+    """Hebrew network slug → ASCII fallback drops empty/dash segments (not ``vulns_-_YYYYMMDD``)."""
+    from urllib.parse import unquote
+
+    from app.core.vuln.filters import content_disposition_attachment
+
+    cd = content_disposition_attachment("vulns_רשת-בדיקה_20261022.csv")
+    assert 'filename="vulns_20261022.csv"' in cd
+    assert "vulns_-_" not in cd
+    assert "רשת" in unquote(cd) or "%D7%A8" in cd
+
+    net = make_network(db, cidr="10.30.0.0/24", name="רשת-בדיקה")
+    scan(
+        ScriptedScanner([host("10.30.0.2", [port(22, "ssh", "OpenSSH", "7.4")], mac="00:11:22:33:44:31")]),
+        network_id=net.id,
+    )
+    d = device_by_ip(db, "10.30.0.2")
+    p = next(pp for pp in d.ports if pp.port == 22)
+    db.add(Vulnerability(cve_id="CVE-2024-HEB2", cvss_base=9.8, kev=True, summary="hebrew net 2"))
+    db.flush()
+    db.add(DevicePortVuln(device_port_id=p.id, cve_id="CVE-2024-HEB2", state=VULN_STATE_CONFIRMED, matched_at=utcnow()))
+    db.commit()
+
+    r = admin.get("/api/vulns/export", params={"network_id": net.id})
+    assert r.status_code == 200
+    ascii_name = r.headers["content-disposition"].split("filename=")[1].split(";")[0].strip().strip('"')
+    assert ascii_name.startswith("vulns_")
+    assert "_-_" not in ascii_name
+    assert ascii_name.endswith(".csv")
