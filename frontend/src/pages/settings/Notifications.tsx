@@ -141,12 +141,14 @@ function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) 
           <summary>Which events count as alerts?</summary>
           <div className="muted small stack" style={{ gap: 6, marginTop: 8 }}>
             <p>
-              Each network has a notify mode: <strong>alert</strong> (create an event and notify),
-              {' '}<strong>record</strong> (create an event, no outbound notify), or <strong>silent</strong> (no event).
+              Notify behaviour is derived from inventory state: before a network has a baseline,
+              changes are <strong>silent</strong> (no event). With a baseline they are
+              {' '}<strong>alerts</strong> (<code>notify=true</code>). Hosts outside any network are
+              {' '}<strong>recorded</strong> only (<code>notify=false</code>, no outbound notify).
             </p>
             <p>
-              Email digests and webhooks (by default) only send <strong>alert</strong> events
-              (<code>notify=true</code>). Webhooks can opt into record events per endpoint.
+              Email digests and webhooks (by default) only send alert events. Webhooks can opt into
+              record events per endpoint.
             </p>
           </div>
         </details>
@@ -223,14 +225,17 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
     setTestMsg(null);
     setTesting(true);
     try {
-      // Save first so the test uses the values on screen.
-      const out = await put<NotificationSettings>('/settings/notifications', body());
-      res.setData(out);
-      setForm(out);
-      setPassword(null);
-      setRecipientsText(null);
+      // Send on-screen SMTP values without persisting; omit password to use the stored one.
       const r = await post<{ ok: boolean; message: string }>('/settings/notifications/test', {
-        recipient: testTo || null,
+        smtp_host: form.smtp_host,
+        smtp_port: form.smtp_port,
+        security: form.security,
+        username: form.username,
+        sender: form.sender,
+        ...(testTo
+          ? { recipient: testTo }
+          : { recipients: recipients.split(/[\s,;]+/).filter(Boolean) }),
+        ...(password !== null ? { password } : {}),
       });
       setTestMsg({ ok: r.ok, text: r.message });
     } catch (e: any) {
@@ -302,9 +307,10 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
             {EVENT_CATEGORIES.map((cat) => {
               const types = cat.types.filter((t) => form.available_event_types.includes(t) || always.has(t));
               if (!types.length) return null;
+              const selected = types.filter((t) => always.has(t) || form.event_types.includes(t)).length;
               return (
                 <details key={cat.title} className="notif-explain">
-                  <summary>{cat.title}</summary>
+                  <summary>{cat.title}{selected ? ` (${selected} selected)` : ''}</summary>
                   <div className="row wrap" style={{ gap: 14, marginTop: 8 }}>
                     {types.map((t) => {
                       const locked = always.has(t);
@@ -353,15 +359,34 @@ type WebhookDraft = {
   event_types: EventType[];
   include_record_events: boolean;
   rotate_secret: boolean;
+  /** Optional paste-your-own secret; shown once after save, never listed again. */
+  custom_secret: string;
 };
 
 function emptyDraft(): WebhookDraft {
-  return { name: '', url: '', enabled: true, event_types: [], include_record_events: false, rotate_secret: true };
+  return {
+    name: '', url: '', enabled: true, event_types: [], include_record_events: false,
+    rotate_secret: true, custom_secret: '',
+  };
+}
+
+function draftSnapshot(d: WebhookDraft) {
+  return {
+    id: d.id ?? null,
+    name: d.name,
+    url: d.url,
+    enabled: d.enabled,
+    event_types: d.event_types,
+    include_record_events: d.include_record_events,
+    rotate_secret: d.rotate_secret,
+    custom_secret: d.custom_secret,
+  };
 }
 
 function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const { data, error, loading, reload } = useApi<WebhookEndpoint[]>('/webhooks');
   const [draft, setDraft] = useState<WebhookDraft | null>(null);
+  const [draftBase, setDraftBase] = useState<WebhookDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -369,17 +394,22 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
   const [testResult, setTestResult] = useState<{ id: number; result: WebhookTestResult } | null>(null);
   const [pending, setPending] = useState<string | null>(null);
 
-  const draftDirty = !!draft && (
-    !!draft.name.trim() || !!draft.url.trim() || draft.event_types.length > 0 || draft.include_record_events
-    || (draft.id != null)
-  );
-  useReportDirty(!!draft && draftDirty, onDirtyChange);
+  const draftDirty = !!draft && !!draftBase
+    && JSON.stringify(draftSnapshot(draft)) !== JSON.stringify(draftSnapshot(draftBase));
+  useReportDirty(draftDirty, onDirtyChange);
 
-  const closeDraft = () => confirmDiscard(!!draft) && setDraft(null);
+  // Modal already confirms when dirty; Cancel mirrors that. Closing after confirm just clears state.
+  const closeDraft = () => { setDraft(null); setDraftBase(null); };
+
+  const openCreate = () => {
+    const d = emptyDraft();
+    setSaveError(null);
+    setDraft(d);
+    setDraftBase({ ...d, event_types: [...d.event_types] });
+  };
 
   const openEdit = (h: WebhookEndpoint) => {
-    setSaveError(null);
-    setDraft({
+    const d: WebhookDraft = {
       id: h.id,
       name: h.name,
       url: h.url,
@@ -387,7 +417,11 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
       event_types: [...h.event_types],
       include_record_events: h.include_record_events,
       rotate_secret: false,
-    });
+      custom_secret: '',
+    };
+    setSaveError(null);
+    setDraft(d);
+    setDraftBase({ ...d, event_types: [...d.event_types] });
   };
 
   const saveDraft = async () => {
@@ -395,21 +429,26 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
     setSaving(true);
     setSaveError(null);
     try {
-      const payload = {
+      const pasted = draft.custom_secret.trim();
+      const payload: Record<string, unknown> = {
         name: draft.name.trim(),
         url: draft.url.trim(),
         enabled: draft.enabled,
         event_types: draft.event_types.length ? draft.event_types : null,
         include_record_events: draft.include_record_events,
-        rotate_secret: draft.rotate_secret,
       };
+      if (pasted) {
+        payload.secret = pasted;
+      } else if (draft.rotate_secret) {
+        payload.rotate_secret = true;
+      }
       let out: WebhookEndpoint;
       if (draft.id != null) {
         out = await patch<WebhookEndpoint>(`/webhooks/${draft.id}`, payload);
       } else {
         out = await post<WebhookEndpoint>('/webhooks', payload);
       }
-      setDraft(null);
+      closeDraft();
       if (out.secret) setRevealedSecret({ name: out.name, secret: out.secret });
       reload();
     } catch (e: any) {
@@ -480,9 +519,7 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
       title="Webhooks"
       flush
       actions={
-        <button className="btn primary sm" onClick={() => { setDraft(emptyDraft()); setSaveError(null); }}>
-          Add webhook
-        </button>
+        <button className="btn primary sm" onClick={openCreate}>Add webhook</button>
       }
     >
       <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -532,14 +569,13 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
                   <td className="small">{eventFilterSummary(h.event_types)}</td>
                   <td className="small nowrap">{h.last_success_at ? relTime(h.last_success_at) : '—'}</td>
                   <td className="small">
-                    {h.last_error
-                      ? <span className="badge high" title={h.last_error}>{h.last_error.slice(0, 48)}</span>
-                      : '—'}
-                    {testResult?.id === h.id && (
-                      <div className={`alert ${testResult.result.ok ? 'ok' : 'error'}`} style={{ marginTop: 4 }}>
+                    {testResult?.id === h.id ? (
+                      <div className={`alert ${testResult.result.ok ? 'ok' : 'error'}`}>
                         Test: {testResult.result.ok ? `OK (${testResult.result.latency_ms} ms)` : testResult.result.error}
                       </div>
-                    )}
+                    ) : h.last_error ? (
+                      <span className="badge high" title={h.last_error}>{h.last_error.slice(0, 48)}</span>
+                    ) : '—'}
                   </td>
                   <td className="right">
                     <div className="row wrap" style={{ justifyContent: 'flex-end', gap: 4 }}>
@@ -566,7 +602,7 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
           dirty={draftDirty}
           footer={
             <>
-              <button className="btn ghost" onClick={closeDraft}>Cancel</button>
+              <button className="btn ghost" onClick={() => confirmDiscard(draftDirty) && closeDraft()}>Cancel</button>
               <button className="btn primary" onClick={saveDraft}
                 disabled={saving || !draft.name.trim() || !draft.url.trim()}>
                 {saving ? 'Saving…' : 'Save'}
@@ -596,31 +632,52 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
             </label>
             <span className="hint">Off by default — only alert-mode events are sent, matching email.</span>
             <label className="check">
-              <input type="checkbox" checked={draft.rotate_secret}
-                onChange={(e) => setDraft({ ...draft, rotate_secret: e.target.checked })} />
+              <input
+                type="checkbox"
+                checked={draft.rotate_secret && !draft.custom_secret.trim()}
+                disabled={!!draft.custom_secret.trim()}
+                onChange={(e) => setDraft({ ...draft, rotate_secret: e.target.checked })}
+              />
               {draft.id != null ? 'Rotate signing secret' : 'Generate signing secret'}
             </label>
-            <span className="hint">Secret is shown once after save, then never again.</span>
+            <label className="field">Or paste your own secret (optional)
+              <input
+                type="password"
+                value={draft.custom_secret}
+                maxLength={200}
+                autoComplete="new-password"
+                placeholder={draft.id != null ? 'Leave blank to keep current' : ''}
+                onChange={(e) => setDraft({
+                  ...draft,
+                  custom_secret: e.target.value,
+                  rotate_secret: e.target.value.trim() ? false : draft.rotate_secret,
+                })}
+              />
+              <span className="hint">Shown once after save, then never again.</span>
+            </label>
 
             <div className="field">
               <span>Event types</span>
               <span className="hint" style={{ display: 'block', marginBottom: 6 }}>
                 Leave all unchecked to receive every type (still subject to the notify-flag rule above).
               </span>
-              {EVENT_CATEGORIES.map((cat) => (
-                <details key={cat.title} className="notif-explain">
-                  <summary>{cat.title}</summary>
-                  <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
-                    {cat.types.map((t) => (
-                      <label key={t} className="check small">
-                        <input type="checkbox" checked={draft.event_types.includes(t)}
-                          onChange={(e) => toggleDraftType(t, e.target.checked)} />
-                        {EVENT_LABELS[t]}
-                      </label>
-                    ))}
-                  </div>
-                </details>
-              ))}
+              {EVENT_CATEGORIES.map((cat) => {
+                const selected = cat.types.filter((t) => draft.event_types.includes(t)).length;
+                return (
+                  <details key={cat.title} className="notif-explain">
+                    <summary>{cat.title}{selected ? ` (${selected} selected)` : ''}</summary>
+                    <div className="row wrap" style={{ gap: 12, marginTop: 8 }}>
+                      {cat.types.map((t) => (
+                        <label key={t} className="check small">
+                          <input type="checkbox" checked={draft.event_types.includes(t)}
+                            onChange={(e) => toggleDraftType(t, e.target.checked)} />
+                          {EVENT_LABELS[t]}
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                );
+              })}
             </div>
             <ErrorBox error={saveError} />
           </div>

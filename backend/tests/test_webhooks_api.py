@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from unittest.mock import patch
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -123,16 +126,23 @@ def test_webhook_notify_flag_skips_record_unless_opt_in(db, monkeypatch):
     db.commit()
 
     posted: list[str] = []
+    bodies: dict[str, bytes] = {}
 
-    def post(url, **_k):
+    def post(url, *, content=None, headers=None, timeout=None):
         posted.append(url)
+        bodies[url] = content
         return httpx.Response(204)
 
     monkeypatch.setattr(webhooks.httpx, "post", post)
     webhooks.deliver_event_ids([alert_ev.id, record_ev.id])
 
-    assert posted.count("https://hooks.example.com/alert") == 1  # alert only
-    assert posted.count("https://hooks.example.com/record") == 2  # alert + record
+    # One POST per hook (batched): alert hook gets only the alert event; record hook gets both.
+    assert posted.count("https://hooks.example.com/alert") == 1
+    assert posted.count("https://hooks.example.com/record") == 1
+    alert_body = json.loads(bodies["https://hooks.example.com/alert"])
+    record_body = json.loads(bodies["https://hooks.example.com/record"])
+    assert alert_body["id"] == alert_ev.id and "batch" not in alert_body
+    assert record_body["batch"] is True and record_body["count"] == 2
 
 
 def test_webhook_master_switch_disables_delivery(db, monkeypatch):
@@ -150,6 +160,53 @@ def test_webhook_master_switch_disables_delivery(db, monkeypatch):
     monkeypatch.setattr(webhooks.httpx, "post", post)
     webhooks.deliver_event_ids([ev.id])
     assert posted == []
+
+
+def test_webhook_validation_strips_and_requires_host(client):
+    h = csrf(client)
+    assert client.post("/api/webhooks", json={"name": "   ", "url": "https://hooks.example.com/x"}, headers=h).status_code == 422
+    assert client.post("/api/webhooks", json={"name": "ok", "url": "http://   "}, headers=h).status_code == 422
+    assert (
+        client.post("/api/webhooks", json={"name": "  SIEM  ", "url": "  https://hooks.example.com/x  "}, headers=h).status_code
+        == 201
+    )
+    row = client.get("/api/webhooks", headers=h).json()[0]
+    assert row["name"] == "SIEM" and row["url"] == "https://hooks.example.com/x"
+
+
+def test_webhook_crud_writes_audit_without_secret(client):
+    h = csrf(client)
+    r = client.post(
+        "/api/webhooks",
+        json={
+            "name": "audited",
+            "url": "https://hooks.example.com/a",
+            "rotate_secret": True,
+        },
+        headers=h,
+    )
+    assert r.status_code == 201
+    secret = r.json()["secret"]
+    wid = r.json()["id"]
+    assert client.patch(f"/api/webhooks/{wid}", json={"enabled": False}, headers=h).status_code == 200
+    assert client.patch(f"/api/webhooks/{wid}", json={"rotate_secret": True}, headers=h).status_code == 200
+
+    def post(url, **_k):
+        return httpx.Response(204)
+
+    with patch.object(webhooks.httpx, "post", post):
+        assert client.post(f"/api/webhooks/{wid}/test", headers=h).status_code == 200
+    assert client.delete(f"/api/webhooks/{wid}", headers=h).status_code == 204
+
+    audit = client.get("/api/audit", headers=h).json()["items"]
+    actions = [a["action"] for a in audit]
+    assert "webhook.create" in actions
+    assert "webhook.update" in actions
+    assert "webhook.test" in actions
+    assert "webhook.delete" in actions
+    blob = str(audit)
+    assert secret not in blob
+    assert "secret_rotated" in blob or "secret_set" in blob
 
 
 def test_notifications_partial_put_preserves_omitted(client):
@@ -178,3 +235,45 @@ def test_notifications_partial_put_preserves_omitted(client):
     assert body["digest_time"] == "09:00"
     assert "always_notify_types" in body
     assert "watch_match" in body["always_notify_types"]
+
+
+def test_smtp_test_uses_onscreen_values_without_persist(client, monkeypatch):
+    h = csrf(client)
+    assert (
+        client.put(
+            "/api/settings/notifications",
+            json={
+                "enabled": False,
+                "smtp_host": "stored.example.com",
+                "smtp_port": 25,
+                "security": "none",
+                "sender": "nm@example.com",
+                "recipients": ["ops@example.com"],
+            },
+            headers=h,
+        ).status_code
+        == 200
+    )
+
+    seen = {}
+
+    def fake_send(cfg, subject, body, html_body=None):
+        seen["host"] = cfg.smtp_host
+        seen["recipients"] = list(cfg.recipients)
+
+    monkeypatch.setattr("app.api.settings.send_email", fake_send)
+    r = client.post(
+        "/api/settings/notifications/test",
+        json={
+            "smtp_host": "onscreen.example.com",
+            "smtp_port": 587,
+            "security": "starttls",
+            "sender": "nm@example.com",
+            "recipients": ["qa@example.com"],
+        },
+        headers=h,
+    )
+    assert r.status_code == 200, r.text
+    assert seen["host"] == "onscreen.example.com" and seen["recipients"] == ["qa@example.com"]
+    stored = client.get("/api/settings/notifications", headers=h).json()
+    assert stored["smtp_host"] == "stored.example.com"

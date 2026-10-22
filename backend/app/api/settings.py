@@ -387,15 +387,51 @@ def put_notifications(body: NotificationIn, request: Request, db: Session = Depe
 
 
 class TestEmailIn(BaseModel):
+    """Test SMTP using on-screen values without persisting. Omitted fields use stored settings.
+
+    ``password`` omitted → use the stored password; empty string clears auth for this test only.
+    """
+
     recipient: str | None = Field(None, max_length=255)
+    smtp_host: str | None = Field(None, max_length=255)
+    smtp_port: int | None = Field(None, ge=1, le=65535)
+    security: str | None = Field(None, pattern="^(none|starttls|ssl)$")
+    username: str | None = Field(None, max_length=255)
+    password: str | None = Field(None, max_length=1024)
+    sender: str | None = Field(None, max_length=255)
+    recipients: list[str] | None = Field(None, max_length=100)
 
 
 @router.post("/notifications/test")
 def test_notifications(body: TestEmailIn, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    cfg = get_section(db, NotificationSettings)
-    if body.recipient:
-        cfg = cfg.model_copy(update={"recipients": [body.recipient.strip()]})
-    db.commit()  # end the read transaction: no DB connection is held during SMTP I/O (up to the 20 s timeout)
+    current = get_section(db, NotificationSettings)
+    updates: dict = {}
+    if body.smtp_host is not None:
+        updates["smtp_host"] = body.smtp_host
+    if body.smtp_port is not None:
+        updates["smtp_port"] = body.smtp_port
+    if body.security is not None:
+        updates["security"] = body.security
+    if body.username is not None:
+        updates["username"] = body.username
+    if body.sender is not None:
+        updates["sender"] = body.sender
+    if body.recipients is not None:
+        updates["recipients"] = body.recipients
+    elif body.recipient:
+        updates["recipients"] = [body.recipient.strip()]
+    if body.password is not None:
+        updates["password_enc"] = encrypt_secret(body.password)
+    # Ensure enabled so send_email does not refuse; this does not persist.
+    updates["enabled"] = True
+    try:
+        cfg = current.model_copy(update=updates)
+        NotificationSettings.model_validate(cfg.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if not cfg.smtp_host or not cfg.recipients:
+        raise HTTPException(422, "SMTP host and at least one recipient are required to send a test")
+    db.commit()  # end the read transaction: no DB connection is held during SMTP I/O
     try:
         subject, plain, html_body = format_sample_digest()
         send_email(cfg, subject, plain + f"\nSent by: {user.username}\n", html_body)
@@ -407,12 +443,12 @@ def test_notifications(body: TestEmailIn, request: Request, db: Session = Depend
             user.username,
             "settings.smtp_test",
             cfg.smtp_host,
-            {"ok": False, "error": reason, "error_type": type(exc).__name__},
+            {"ok": False, "error": reason, "error_type": type(exc).__name__, "persisted": False},
             _ip(request),
         )
         db.commit()
         raise ApiError(502, f"Sending failed: {reason}.", "smtp_send_failed") from exc
-    audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": True}, _ip(request))
+    audit(db, user.username, "settings.smtp_test", cfg.smtp_host, {"ok": True, "persisted": False}, _ip(request))
     db.commit()
     return {"ok": True, "message": f"Test email sent to {', '.join(cfg.recipients)}"}
 

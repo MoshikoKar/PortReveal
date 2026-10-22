@@ -4,9 +4,13 @@ Delivery follows the CVE watchlist pattern: load a plan, close the DB session, p
 then short follow-up transactions to record success/error. Holding a write lock during HTTP
 would block SQLite (and stall Postgres writers under load).
 
-Notify-flag default (safe): only events with ``notify=True`` (network alert mode) are sent,
-matching the email digest. Hooks with ``include_record_events=True`` also receive
-``notify=False`` (record) events that match their type filter. Silent modes never create rows.
+Notify-flag default (safe): only events with ``notify=True`` (alert) are sent, matching the
+email digest. Hooks with ``include_record_events=True`` also receive ``notify=False`` (record)
+events that match their type filter. Silent modes never create rows.
+
+Each delivery round posts **once per hook** (batched when multiple events match). Hooks run
+concurrently with a wall-clock round budget so a slow/dead endpoint cannot stall the scan
+worker or scheduler for (events × hooks × timeout).
 """
 
 from __future__ import annotations
@@ -16,10 +20,10 @@ import hmac
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from .. import metrics
 from ..db import SessionLocal, get_engine, session_scope, utcnow
@@ -31,6 +35,9 @@ log = logging.getLogger(__name__)
 
 USER_AGENT = "PortReveal-Webhook/1.0"
 HTTP_TIMEOUT = 8.0
+# Cap wall time for one delivery round across all hooks (parallel).
+ROUND_TIMEOUT = 15.0
+MAX_HOOK_WORKERS = 8
 
 
 def _host(url: str) -> str:
@@ -88,21 +95,16 @@ def _hook_accepts(hook: WebhookEndpoint, event: Event) -> bool:
         return False
     if event.notify:
         return True
-    # Record-mode events: only when the hook explicitly opts in.
     return bool(hook.include_record_events)
 
 
-def deliver_event(db: Session, event: Event) -> None:
-    """Deliver one event. Prefer ``deliver_event_ids`` so HTTP does not hold the caller's session."""
-    # Flush so the event id is durable for the follow-up load; caller still owns the transaction.
-    db.flush()
-    if event.id is None:
-        return
-    deliver_event_ids([event.id])
-
-
 def deliver_event_ids(event_ids: list[int]) -> None:
-    """Deliver events after the creating transaction has committed (no DB lock during HTTP)."""
+    """Deliver events after the creating transaction has committed (no DB lock during HTTP).
+
+    One signed POST per enabled hook (batched when several events match). Hooks are posted in
+    parallel; the round stops waiting after ``ROUND_TIMEOUT`` and records a timeout for any
+    hook still in flight.
+    """
     ids = [i for i in event_ids if i]
     if not ids:
         return
@@ -113,12 +115,39 @@ def deliver_event_ids(event_ids: list[int]) -> None:
         return
     if not plan:
         return
-    for item in plan:
-        _post_and_record(item)
+
+    workers = min(MAX_HOOK_WORKERS, len(plan))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="webhook") as pool:
+        futures = {pool.submit(_post_hook_batch, item): item for item in plan}
+        done, not_done = wait(futures, timeout=ROUND_TIMEOUT)
+        for fut in done:
+            item = futures[fut]
+            try:
+                ok, err = fut.result()
+            except Exception as exc:
+                ok, err = False, str(exc)[:500]
+                log.warning(
+                    "webhook %s (%s) delivery raised: %s",
+                    item["hook_id"],
+                    item["host"],
+                    type(exc).__name__,
+                )
+            _record_hook_result(item["hook_id"], ok=ok, err=err)
+        for fut in not_done:
+            item = futures[fut]
+            # Do not wait for the in-flight POST; mark skipped for this round.
+            log.warning(
+                "webhook %s (%s) skipped after round timeout (%.0fs)",
+                item["hook_id"],
+                item["host"],
+                ROUND_TIMEOUT,
+            )
+            metrics.observe_webhook_delivery("network_error")
+            _record_hook_result(item["hook_id"], ok=False, err=f"timeout after {int(ROUND_TIMEOUT)}s (round budget)")
 
 
 def _load_delivery_plan(event_ids: list[int]) -> list[dict]:
-    """Read events + hooks, build signed POST jobs, then close the session (no writes)."""
+    """Read events + hooks, group matching events per hook, then close the session (no writes)."""
     get_engine()
     db = SessionLocal()
     try:
@@ -132,63 +161,74 @@ def _load_delivery_plan(event_ids: list[int]) -> list[dict]:
         if not hooks:
             return []
         jobs: list[dict] = []
-        for event in events:
-            payload = _event_payload(event)
-            body = json.dumps(payload, default=str).encode()
-            for hook in hooks:
-                if not _hook_accepts(hook, event):
-                    continue
-                secret = decrypt_secret(hook.secret_enc) if hook.secret_enc else ""
-                headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
-                if secret:
-                    headers["X-NF-Signature"] = _sign(secret, body)
-                jobs.append(
-                    {
-                        "hook_id": hook.id,
-                        "url": hook.url,
-                        "host": _host(hook.url),
-                        "headers": headers,
-                        "body": body,
-                        "event_id": event.id,
-                    }
-                )
+        for hook in hooks:
+            matched = [_event_payload(ev) for ev in events if _hook_accepts(hook, ev)]
+            if not matched:
+                continue
+            secret = decrypt_secret(hook.secret_enc) if hook.secret_enc else ""
+            jobs.append(
+                {
+                    "hook_id": hook.id,
+                    "url": hook.url,
+                    "host": _host(hook.url),
+                    "secret": secret,
+                    "events": matched,
+                }
+            )
         return jobs
     finally:
         db.close()
 
 
-def _post_and_record(item: dict) -> None:
-    ok = False
-    err: str | None = None
+def _build_body(events: list[dict]) -> bytes:
+    """Single-event payloads keep the historical shape; multi-event use a batch envelope."""
+    if len(events) == 1:
+        return json.dumps(events[0], default=str).encode()
+    payload = {
+        "batch": True,
+        "count": len(events),
+        "events": events,
+    }
+    return json.dumps(payload, default=str).encode()
+
+
+def _post_hook_batch(item: dict) -> tuple[bool, str | None]:
+    """HTTP only — no DB session. Returns (ok, error_message)."""
+    body = _build_body(item["events"])
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+    if item["secret"]:
+        headers["X-NF-Signature"] = _sign(item["secret"], body)
+    n = len(item["events"])
     try:
-        r = httpx.post(item["url"], content=item["body"], headers=item["headers"], timeout=HTTP_TIMEOUT)
+        r = httpx.post(item["url"], content=body, headers=headers, timeout=HTTP_TIMEOUT)
         if r.status_code >= 400:
-            err = f"HTTP {r.status_code}"
             metrics.observe_webhook_delivery("http_error")
             log.warning(
-                "webhook %s (%s) answered HTTP %s for event %s",
+                "webhook %s (%s) answered HTTP %s for %d event(s)",
                 item["hook_id"],
                 item["host"],
                 r.status_code,
-                item["event_id"],
+                n,
             )
-        else:
-            ok = True
-            metrics.observe_webhook_delivery("ok")
+            return False, f"HTTP {r.status_code}"
+        metrics.observe_webhook_delivery("ok")
+        return True, None
     except Exception as exc:
-        err = str(exc)[:500]
         metrics.observe_webhook_delivery("network_error")
         log.warning(
-            "webhook %s (%s) delivery failed for event %s: %s",
+            "webhook %s (%s) delivery failed for %d event(s): %s",
             item["hook_id"],
             item["host"],
-            item["event_id"],
+            n,
             type(exc).__name__,
         )
+        return False, str(exc)[:500]
 
+
+def _record_hook_result(hook_id: int, *, ok: bool, err: str | None) -> None:
     try:
         with session_scope() as db:
-            row = db.get(WebhookEndpoint, item["hook_id"])
+            row = db.get(WebhookEndpoint, hook_id)
             if row is None:
                 return
             if ok:
@@ -197,11 +237,11 @@ def _post_and_record(item: dict) -> None:
             else:
                 row.last_error = err
     except Exception:
-        log.exception("Failed to record webhook %s delivery result", item["hook_id"])
+        log.exception("Failed to record webhook %s delivery result", hook_id)
 
 
 def send_test_webhook(hook: WebhookEndpoint) -> dict:
-    """POST a signed synthetic test event; update last_success/last_error. Returns a result dict."""
+    """POST a signed synthetic test event. Returns a result dict (caller records last_success/error)."""
     payload = {
         "id": 0,
         "type": "webhook_test",
