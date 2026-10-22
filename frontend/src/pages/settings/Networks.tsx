@@ -2,8 +2,26 @@ import { useEffect, useState } from 'react';
 import { del, post, put } from '../../api';
 import { Card, Empty, ErrorBox, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import { useApp } from '../../context';
+import {
+  NETWORK_NAME_HINT,
+  NETWORK_NAME_LEGACY_HINT,
+  NETWORK_NAME_MAX,
+  NETWORK_NAME_MAX_MSG,
+  isLegacyNetworkName,
+  networkNameError,
+  trimNetworkName,
+} from '../../networkName';
 import type { ArpSnmp, Network } from '../../types';
 import { NETWORK_ZONES, fmtTime, useApi, useInFlight } from '../../util';
+
+function NetworkNameCharsetHint() {
+  return (
+    <>
+      Use English letters, numbers, spaces and{' '}
+      <code>-</code> <code>_</code> <code>.</code> <code>(</code> <code>)</code> only
+    </>
+  );
+}
 
 /** Secrets are blank unless being changed; the *_set flags say whether a stored one exists. */
 type ArpDraft = {
@@ -190,12 +208,21 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [nameTouched, setNameTouched] = useState(false);
   const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
-  const canSave = !!draft && !!draft.name.trim() && !!draft.cidr.trim() && (!draft.arp || !!draft.arp.host.trim());
+  // Legacy names with other characters stay editable for other fields; only validate when the name is new or changed.
+  const nameUnchanged = !!draft?.id && trimNetworkName(draft.name) === trimNetworkName(initial?.name ?? '');
+  const nameErr = draft && !nameUnchanged
+    ? networkNameError(draft.name, { requireNonEmpty: nameTouched })
+    : null;
+  const legacyName = !!draft?.id && nameUnchanged && isLegacyNetworkName(draft.name);
+  const nameDescId = nameErr ? 'network-name-error' : legacyName ? 'network-name-legacy' : undefined;
+  const canSave = !!draft && !!trimNetworkName(draft.name) && !nameErr && !!draft.cidr.trim()
+    && (!draft.arp || !!draft.arp.host.trim());
   useReportDirty(!!draft && dirty, onDirtyChange);
 
-  const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
+  const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); setNameTouched(false); };
   const draftOf = (n: Network): Draft => ({
     id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '',
     vpn_s2s: n.vpn_s2s, expected_countries: n.expected_countries ?? [], arp: arpDraft(n.arp_snmp),
@@ -327,10 +354,31 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
           dirty={dirty}
           footer={<>
             <button className="btn ghost" onClick={closeDraft}>Cancel</button>
-            <button className="btn primary" onClick={save} disabled={saving || !canSave} title={canSave ? undefined : 'Enter a name and a CIDR'}>{saving ? 'Saving…' : 'Save'}</button>
+            <button className="btn primary" onClick={save} disabled={saving || !canSave}
+              title={canSave ? undefined : (nameErr || 'Enter a name and a CIDR')}>{saving ? 'Saving…' : 'Save'}</button>
           </>}
         >
-          <label className="field">Name<input type="text" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" /></label>
+          <label className="field">Name
+            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <input type="text" value={draft.name} aria-invalid={!!nameErr} aria-describedby={nameDescId}
+                maxLength={legacyName ? undefined : NETWORK_NAME_MAX}
+                title={`At most ${NETWORK_NAME_MAX} characters`}
+                onChange={(e) => { setNameTouched(true); setDraft({ ...draft, name: e.target.value }); }}
+                onBlur={() => setNameTouched(true)} placeholder="Office LAN" style={{ flex: 1 }} />
+              <span className="hint mono" title={NETWORK_NAME_MAX_MSG}
+                style={nameErr === NETWORK_NAME_MAX_MSG ? { color: 'var(--high)' } : undefined}>
+                {trimNetworkName(draft.name).length}/{NETWORK_NAME_MAX}
+              </span>
+            </div>
+            {nameErr && (
+              <span id="network-name-error" className="hint" style={{ color: 'var(--high)' }} role="alert">
+                {nameErr === NETWORK_NAME_HINT ? <NetworkNameCharsetHint /> : nameErr}
+              </span>
+            )}
+            {legacyName && !nameErr && (
+              <span id="network-name-legacy" className="hint">{NETWORK_NAME_LEGACY_HINT}</span>
+            )}
+          </label>
           <label className="field" title="IPv4, maximum size /16 (65,536 addresses). Changing it resets the baseline.">
             CIDR
             <input type="text" value={draft.cidr} onChange={(e) => setDraft({ ...draft, cidr: e.target.value })} placeholder="10.0.0.0/24"
