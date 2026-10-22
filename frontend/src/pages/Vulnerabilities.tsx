@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { downloadBlob, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
@@ -10,9 +10,11 @@ import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
 import type { VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
 import {
-  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, parseVulnFilters, scrollToVulnFindings,
-  setVulnFilter, toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter,
-  VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
+  applyVulnSearchQ, buildVulnQuery, clearVulnFilters, formatVulnFilterChip, liveSearchParams,
+  clearVulnFindingsHash, parseVulnFilters, scrollToVulnFindings, setVulnFilter,
+  shouldResyncVulnQInput, shouldScrollVulnFindingsHash, toggleHeatmapCell, toggleVulnFilter,
+  toggleVendorProductFilter, withPendingVulnSearchQ, VULN_FILTER_KEYS,
+  type VulnFilterKey, type VulnFilters,
 } from '../vulnFilters';
 
 /** Merge optimistic filters into the current URL (keeps page/sort until applySp drops page). */
@@ -60,42 +62,135 @@ export default function Vulnerabilities() {
   }, [searchKey]);
 
   const page = Number(sp.get('page') || 1);
+  const q = sp.get('q') ?? '';
+  const onlyHidden = sp.get('only_hidden') === '1';
+  // Local input + debounce into URL. Do NOT sync q→qInput on every URL write (that drops keystrokes);
+  // only resync when URL q changed externally (back/forward/link).
+  const [qInput, setQInput] = useState(q);
+  const lastWrittenQ = useRef(q);
+  const searchDebounceRef = useRef<number | null>(null);
+  const cancelSearchDebounce = () => {
+    if (searchDebounceRef.current != null) {
+      window.clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+  };
+  /** Write trimmed q onto the live address-bar params (RR's setSp(prev=>) snapshot is stale). */
+  const commitSearchQ = (raw: string) => {
+    const trimmed = raw.trim();
+    const next = applyVulnSearchQ(liveSearchParams(), trimmed);
+    lastWrittenQ.current = trimmed;
+    if (!next) return;
+    setSp(next, { replace: true });
+  };
+  useEffect(() => {
+    if (shouldResyncVulnQInput(q, lastWrittenQ.current)) {
+      lastWrittenQ.current = q;
+      setQInput(q);
+    }
+  }, [q]);
+  useEffect(() => {
+    cancelSearchDebounce();
+    searchDebounceRef.current = window.setTimeout(() => {
+      searchDebounceRef.current = null;
+      commitSearchQ(qInput);
+    }, 300);
+    return () => cancelSearchDebounce();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
+
+  // First keystroke of a new search scrolls the findings table into view.
+  const wasSearching = useRef(Boolean(q));
+  useEffect(() => {
+    const nowSearching = Boolean(qInput.trim());
+    if (nowSearching && !wasSearching.current) scrollToVulnFindings();
+    wasSearching.current = nowSearching;
+  }, [qInput]);
+
   const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', undefined, 30000);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const labelCtx = useMemo(() => labelContextFromSummary(data), [data]);
 
-  // Deep links from the watchlist (`?cve_id=…#vuln-findings`) should scroll once findings exist.
+  // Deep links from the watchlist (`?cve_id=…#vuln-findings`): scroll once per arrival, then drop
+  // the hash so the 30s /vulns/summary poll does not jump the page back to findings.
+  const scrolledFindingsHashKey = useRef<string | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (window.location.hash !== '#vuln-findings') return;
-    const t = window.setTimeout(() => scrollToVulnFindings(), 50);
+    const arrivalKey = `${searchKey}${window.location.hash}`;
+    if (!shouldScrollVulnFindingsHash(window.location.hash, arrivalKey, scrolledFindingsHashKey.current)) {
+      return;
+    }
+    if (!document.getElementById('vuln-findings')) return;
+    scrolledFindingsHashKey.current = arrivalKey;
+    const t = window.setTimeout(() => {
+      scrollToVulnFindings();
+      window.history.replaceState(null, '', clearVulnFindingsHash(window.location.href));
+    }, 50);
     return () => window.clearTimeout(t);
   }, [searchKey, data]);
 
   const applySp = (next: URLSearchParams, scroll = true) => {
-    setFilters(parseVulnFilters(next));
-    setSp(next);
+    // Cancel pending debounce so a late timer cannot rewrite this navigation with a stale snapshot.
+    cancelSearchDebounce();
+    // Keep in-progress (not-yet-debounced) search text so facet clicks don't drop typed q.
+    const withQ = withPendingVulnSearchQ(next, qInput);
+    lastWrittenQ.current = qInput.trim();
+    setFilters(parseVulnFilters(withQ));
+    setSp(withQ);
     if (scroll) scrollToVulnFindings();
   };
-  // Toggle against optimistic filters so a second click before the URL catches up still clears.
-  const liveSp = () => spWithFilters(sp, filters);
+  // Build facet updates from the live address bar + optimistic filters (not a stale RR snapshot).
+  const liveSp = () => spWithFilters(liveSearchParams(), filters);
   const toggle = (key: VulnFilterKey, value: string) => applySp(toggleVulnFilter(liveSp(), key, value));
   const set = (key: VulnFilterKey, value: string | undefined, scroll = true) =>
     applySp(setVulnFilter(liveSp(), key, value), scroll);
   const toggleVendorProduct = (facetKey: string) => applySp(toggleVendorProductFilter(liveSp(), facetKey));
   const setPage = (p: number) => {
-    const next = new URLSearchParams(sp);
+    const next = liveSearchParams();
     if (p <= 1) next.delete('page');
     else next.set('page', String(p));
     setSp(next);
   };
+  const clearSearch = () => {
+    cancelSearchDebounce();
+    lastWrittenQ.current = '';
+    setQInput('');
+    const next = liveSearchParams();
+    next.delete('q');
+    next.delete('only_hidden');
+    next.delete('page');
+    setSp(next, { replace: true });
+  };
+  const clearAll = () => {
+    // Do not route through applySp: setQInput is async and withPendingVulnSearchQ would
+    // re-commit the pre-clear search text from this render's closure.
+    cancelSearchDebounce();
+    lastWrittenQ.current = '';
+    setQInput('');
+    const next = clearVulnFilters(liveSearchParams());
+    setFilters(parseVulnFilters(next));
+    setSp(next);
+  };
+  const toggleOnlyHidden = () => {
+    cancelSearchDebounce();
+    const next = withPendingVulnSearchQ(liveSearchParams(), qInput);
+    if (next.get('only_hidden') === '1') next.delete('only_hidden');
+    else next.set('only_hidden', '1');
+    next.delete('page');
+    lastWrittenQ.current = qInput.trim();
+    setSp(next);
+    scrollToVulnFindings();
+  };
   const activeFilters = Object.entries(filters) as [VulnFilterKey, string][];
+  const hasSearch = Boolean(q);
+  const showFilterBar = activeFilters.length > 0 || hasSearch || onlyHidden;
   // Findings sort lives in the URL next to the filters (filter helpers keep it, and drop only `page`).
   const sortKey: FindingSort = FINDING_SORTS.find((k) => k === sp.get('sort')) ?? 'risk';
   const findingSort = { key: sortKey, desc: sp.get('order') === 'desc' };
   const setFindingSort = (key: FindingSort) => {
-    const next = new URLSearchParams(sp);
+    cancelSearchDebounce();
+    const next = withPendingVulnSearchQ(liveSearchParams(), qInput);
     if (key === 'risk') {
       next.delete('sort');
       next.delete('order');
@@ -105,6 +200,7 @@ export default function Vulnerabilities() {
       next.set('order', desc ? 'desc' : 'asc');
     }
     next.delete('page');
+    lastWrittenQ.current = qInput.trim();
     setSp(next);
   };
 
@@ -113,7 +209,10 @@ export default function Vulnerabilities() {
     setExporting(true);
     try {
       await downloadBlob(
-        `/vulns/export${query(buildVulnQuery(filters))}`,
+        `/vulns/export${query(buildVulnQuery(filters, {
+          q: q || undefined,
+          only_hidden: onlyHidden ? 'true' : undefined,
+        }))}`,
         `portreveal-vulns-${new Date().toISOString().slice(0, 10)}.csv`,
       );
     } catch (e: unknown) {
@@ -147,20 +246,65 @@ export default function Vulnerabilities() {
           <button type="button" className="btn" onClick={() => window.print()}>Print report</button>
         </div>
       </div>
+
+      <div className="vuln-search-bar no-print">
+        <div className="row wrap gap-2" style={{ alignItems: 'center' }}>
+          <div className="row gap-1" style={{ flex: 1, minWidth: 260, alignItems: 'center' }}>
+            <input
+              type="text"
+              inputMode="search"
+              enterKeyHint="search"
+              className="vuln-search-input"
+              placeholder="Search CVE, device, product… or port:22"
+              aria-label="Search findings"
+              title="Also shows findings normally hidden by the CVSS floor, dismissal, or potential filter. Use port:22 for an exact port."
+              value={qInput}
+              onChange={(e) => setQInput(e.target.value)}
+              style={{ flex: 1, minWidth: 200 }}
+            />
+            {qInput.length > 0 && (
+              <button type="button" className="btn sm ghost" aria-label="Clear search"
+                onClick={clearSearch} title="Clear search">✕</button>
+            )}
+          </div>
+          {hasSearch && (
+            <span className="badge accent" title="Search lifts the display floor for matching rows">
+              Includes hidden findings
+            </span>
+          )}
+        </div>
+        {hasSearch && (
+          <p className="muted small" style={{ margin: '8px 0 0' }}>
+            Cards and charts above are not filtered by this search - only the findings table is.
+          </p>
+        )}
+      </div>
+
       {exportError && <div className="alert error no-print">{exportError}</div>}
       <ErrorBox error={error} />
       {/* Chips stay outside the summary loading gate so filter state paints immediately on click. */}
-      {activeFilters.length > 0 && (
+      {showFilterBar && (
         <div className="row wrap gap-2">
           <span className="muted small">Filters:</span>
+          {hasSearch && (
+            <button type="button" className="btn sm toggle on" aria-pressed="true" title="Clear search"
+              onClick={clearSearch}>
+              Search: &quot;{q}&quot; <span aria-hidden>✕</span>
+            </button>
+          )}
+          {onlyHidden && (
+            <button type="button" className="btn sm toggle on" aria-pressed="true" title="Show all matches"
+              onClick={toggleOnlyHidden}>
+              Only hidden <span aria-hidden>✕</span>
+            </button>
+          )}
           {activeFilters.map(([key, value]) => (
             <button key={key} type="button" className="btn sm toggle on" aria-pressed="true" title="Remove this filter"
               onClick={() => set(key, undefined, false)}>
               {formatVulnFilterChip(key, value, labelCtx)} <span aria-hidden>✕</span>
             </button>
           ))}
-          <button type="button" className="btn sm ghost"
-            onClick={() => applySp(clearVulnFilters(sp), false)}>Clear all</button>
+          <button type="button" className="btn sm ghost" onClick={clearAll}>Clear all</button>
         </div>
       )}
       {!data ? (!error && <Loading />) : (
@@ -244,6 +388,9 @@ export default function Vulnerabilities() {
           <div id="vuln-findings">
             <VulnFindingsTable
               filters={filters}
+              q={q}
+              onlyHidden={onlyHidden}
+              onToggleOnlyHidden={toggleOnlyHidden}
               page={page}
               onPage={setPage}
               sort={findingSort}

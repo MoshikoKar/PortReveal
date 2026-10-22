@@ -831,6 +831,14 @@ export interface VulnFindingListItem extends DeviceVuln {
   os_name: string | null;
   device_type: string | null;
   first_seen_at: string | null;
+  /** Present when listing with `q`: why this row is hidden from the default (non-search) view. */
+  hidden_reasons?: string[];
+}
+
+/** GET /api/vulns list envelope; `hidden_total` / `total_matches` appear when `q` is set. */
+export interface VulnFindingsPage extends Paged<VulnFindingListItem> {
+  hidden_total?: number;
+  total_matches?: number;
 }
 
 export interface CveAffectedDevice {

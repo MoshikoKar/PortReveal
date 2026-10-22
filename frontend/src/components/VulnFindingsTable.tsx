@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { del, post } from '../api';
 import { useApp } from '../context';
-import type { Paged, VulnFindingListItem } from '../types';
+import type { VulnFindingsPage } from '../types';
 import { fmtTime, useApi } from '../util';
-import { buildVulnQuery, type VulnFilters } from '../vulnFilters';
+import { buildVulnQuery, displayHiddenReasons, type VulnFilters } from '../vulnFilters';
 import { dismissBusyKey, findingRowKey, formatCvss, formatEpss } from '../vulnFormat';
 import { Card, Empty, ErrorBox, Pager, SkeletonRows, SortTh } from './ui';
 
@@ -19,9 +19,13 @@ export const FINDING_DESC_FIRST: readonly FindingSort[] = ['cvss', 'first_seen']
 /** Paginated CVE-centric findings table. Dismiss/undismiss reuse the existing per-device endpoints;
  * after a mutation the parent reloads the summary so cards stay in sync. */
 export function VulnFindingsTable({
-  filters, page, onPage, sort, onSort, onToggleDismissed, onChanged,
+  filters, q, onlyHidden, onToggleOnlyHidden, page, onPage, sort, onSort, onToggleDismissed, onChanged,
 }: {
   filters: VulnFilters;
+  /** Debounced search term from the URL (`q`); lifts the display floor when non-empty. */
+  q: string;
+  onlyHidden: boolean;
+  onToggleOnlyHidden: () => void;
   page: number;
   onPage: (page: number) => void;
   sort: { key: FindingSort; desc: boolean };
@@ -30,15 +34,18 @@ export function VulnFindingsTable({
   onChanged: () => void;
 }) {
   const { isAdmin } = useApp();
+  const searching = Boolean(q);
   const params = buildVulnQuery(filters, {
     page, page_size: PAGE_SIZE,
     sort: sort.key === 'risk' ? undefined : sort.key,
     order: sort.key === 'risk' ? undefined : sort.desc ? 'desc' : 'asc',
+    q: q || undefined,
+    only_hidden: searching && onlyHidden ? 'true' : undefined,
   });
   const sortTh = (key: FindingSort, label: string) => (
     <SortTh active={sort.key === key} desc={sort.desc} onSort={() => onSort(key)}>{label}</SortTh>
   );
-  const { data, error, reload } = useApi<Paged<VulnFindingListItem>>('/vulns', params, 30000);
+  const { data, error, reload } = useApi<VulnFindingsPage>('/vulns', params, 30000);
   const [busy, setBusy] = useState<string | null>(null);
   const showingDismissed = filters.state === 'dismissed';
 
@@ -69,6 +76,8 @@ export function VulnFindingsTable({
   };
 
   const items = data?.items ?? [];
+  const matchTotal = data?.total_matches ?? data?.total ?? 0;
+  const hiddenTotal = data?.hidden_total ?? 0;
 
   return (
     <Card title="Findings" flush actions={
@@ -86,12 +95,29 @@ export function VulnFindingsTable({
         </label>
       </>
     }>
+      {searching && (
+        <div className="row wrap gap-2" style={{ padding: '10px 14px 0', alignItems: 'center' }}>
+          <span className="small">
+            <strong>{matchTotal.toLocaleString()}</strong> matches
+            {hiddenTotal > 0 && (
+              <> · <strong>{hiddenTotal.toLocaleString()}</strong> normally hidden</>
+            )}
+          </span>
+          <label className="check small" title="Show only findings the default list would hide">
+            <input type="checkbox" checked={onlyHidden} onChange={onToggleOnlyHidden} />
+            Only hidden
+          </label>
+          <span className="badge accent">Includes hidden findings</span>
+        </div>
+      )}
       <ErrorBox error={error} />
       {!data ? (!error && <SkeletonRows cols={isAdmin ? 8 : 7} rows={5} />) : !items.length ? (
         <Empty>
           {showingDismissed
             ? 'No dismissed findings.'
-            : (
+            : searching
+              ? (onlyHidden ? 'No normally-hidden findings match this search.' : 'No findings match this search.')
+              : (
               <>
                 No findings match the current filters.
                 <div className="muted small" style={{ marginTop: 8 }}>
@@ -122,12 +148,19 @@ export function VulnFindingsTable({
                 {items.map((v) => {
                   const key = findingRowKey(v);
                   const busyKey = dismissBusyKey(v.device_uuid, v.cve_id);
+                  const reasons = displayHiddenReasons(v.state, v.hidden_reasons);
                   return (
                     <tr key={key} className={v.state === 'dismissed' ? 'dim' : ''}>
                       <td className="mono nowrap">
                         <Link to={`/vulnerabilities/${encodeURIComponent(v.cve_id)}`}>{v.cve_id}</Link>
                         {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
                         {v.epss != null && <span className="muted small" style={{ marginLeft: 6 }}>{formatEpss(v.epss)}</span>}
+                        {reasons.map((reason) => (
+                          <span key={reason} className="badge outline" style={{ marginLeft: 6 }}
+                            title="Normally hidden from the default findings list">
+                            {reason}
+                          </span>
+                        ))}
                       </td>
                       <td>
                         <Link className="mono" to={`/devices/${v.device_uuid}`}>{v.device_ip}</Link>
@@ -139,9 +172,22 @@ export function VulnFindingsTable({
                       </td>
                       <td className="mono small">{formatCvss(v.cvss_base)}</td>
                       <td>
-                        <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}>
+                        <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}
+                          title={
+                            v.state === 'dismissed' && (v.hidden_reasons ?? []).includes('Dismissed')
+                              ? 'Dismissed (normally hidden from the default list)'
+                              : v.state === 'potential' && (v.hidden_reasons ?? []).includes('Potential (hidden)')
+                                ? 'Potential (normally hidden when include_potential is off)'
+                                : undefined
+                          }>
                           {v.state}
                         </span>
+                        {v.state === 'potential' && (v.hidden_reasons ?? []).includes('Potential (hidden)') && (
+                          <span className="badge outline" style={{ marginLeft: 6 }}
+                            title="Normally hidden when include_potential is off">
+                            hidden
+                          </span>
+                        )}
                       </td>
                       <td className="small muted">{fmtTime(v.first_seen_at)}</td>
                       {isAdmin && (

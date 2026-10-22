@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildVulnQuery, clearVulnFilters, formatVulnFilterChip, formatVulnFilterValue, parseVulnFilters,
-  setVulnFilter, splitVendorProductKey, toggleHeatmapCell, toggleVulnFilter,
-  toggleVendorProductFilter, vendorProductFacetActive, vulnFilterLink,
+  buildVulnQuery, clearVulnFindingsHash, clearVulnFilters, formatVulnFilterChip,
+  formatVulnFilterValue, parseVulnFilters, setVulnFilter, shouldScrollVulnFindingsHash,
+  splitVendorProductKey, toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter,
+  vendorProductFacetActive, vulnFilterLink, VULN_FINDINGS_HASH,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -74,6 +75,13 @@ describe('clearVulnFilters', () => {
     expect(next.get('kev')).toBeNull();
     expect(next.get('sort')).toBe('cvss');
     expect(next.get('page')).toBeNull();
+  });
+
+  it('also clears the findings search q and only_hidden', () => {
+    const sp = new URLSearchParams('q=openssh&only_hidden=1');
+    const next = clearVulnFilters(sp);
+    expect(next.get('q')).toBeNull();
+    expect(next.get('only_hidden')).toBeNull();
   });
 });
 
@@ -175,5 +183,21 @@ describe('formatVulnFilterChip', () => {
     expect(formatVulnFilterChip('new_since', 'scan')).toBe('new since: last scan');
     expect(formatVulnFilterChip('device_uuid', 'abc', { deviceLabels: { abc: '10.0.0.1' } }))
       .toBe('device: 10.0.0.1');
+  });
+});
+
+describe('vuln findings deep-link hash scroll', () => {
+  it('scrolls once per arrival key, not on every data refresh with the same hash', () => {
+    const key = `cve_id=CVE-1${VULN_FINDINGS_HASH}`;
+    expect(shouldScrollVulnFindingsHash(VULN_FINDINGS_HASH, key, null)).toBe(true);
+    expect(shouldScrollVulnFindingsHash(VULN_FINDINGS_HASH, key, key)).toBe(false);
+    expect(shouldScrollVulnFindingsHash('', key, null)).toBe(false);
+  });
+
+  it('clears only the findings hash for replaceState', () => {
+    expect(clearVulnFindingsHash('/vulnerabilities?cve_id=CVE-1#vuln-findings'))
+      .toBe('/vulnerabilities?cve_id=CVE-1');
+    expect(clearVulnFindingsHash('/vulnerabilities?cve_id=CVE-1#other'))
+      .toBe('/vulnerabilities?cve_id=CVE-1#other');
   });
 });

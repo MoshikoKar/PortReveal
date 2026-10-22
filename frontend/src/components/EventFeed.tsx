@@ -82,7 +82,10 @@ export function EventDetail({ ev }: { ev: ChangeEvent }) {
             <>
               <span className="muted"> · {stateLabel}</span>
               {detail.port != null && (
-                <span className="chip new">{(detail.protocol || 'tcp').toUpperCase()}/{detail.port}</span>
+                <>
+                  {' '}
+                  <span className="chip new">{(detail.protocol || 'tcp').toUpperCase()}/{detail.port}</span>
+                </>
               )}
               {detail.cvss != null && <span className="muted"> · CVSS {detail.cvss}</span>}
               {detail.kev && <span className="badge high" style={{ marginLeft: 6 }}>KEV</span>}
