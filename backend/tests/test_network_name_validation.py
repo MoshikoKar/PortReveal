@@ -223,3 +223,33 @@ def test_edit_other_fields_with_legacy_trailing_space(client, db):
     assert r.json()["enabled"] is False
     db.expire_all()
     assert db.get(Network, nid).name == "רשת ישנה "
+
+
+def test_edit_other_fields_keeps_legacy_overlength_name(client, db):
+    """Names longer than NETWORK_NAME_MAX stay editable for other fields; rename is rejected."""
+    setup_admin(client)
+    h = csrf(client)
+    long_name = "Legacy Long Network Name XX"  # > 25
+    assert len(long_name) > NETWORK_NAME_MAX
+    legacy = Network(name=long_name, cidr="10.15.0.0/24", description="legacy", enabled=True)
+    db.add(legacy)
+    db.commit()
+    nid = legacy.id
+
+    r = client.put(
+        f"/api/networks/{nid}",
+        json={"name": long_name, "cidr": "10.15.0.0/24", "description": "updated", "enabled": False},
+        headers=h,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == long_name
+    assert r.json()["description"] == "updated"
+
+    r = client.put(
+        f"/api/networks/{nid}",
+        json={"name": long_name + "!", "cidr": "10.15.0.0/24", "enabled": True},
+        headers=h,
+    )
+    assert_plain_422(r, NETWORK_NAME_MAX_MSG)
+    db.expire_all()
+    assert db.get(Network, nid).name == long_name

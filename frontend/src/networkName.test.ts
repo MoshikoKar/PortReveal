@@ -48,9 +48,11 @@ describe('networkNameError', () => {
 });
 
 describe('isLegacyNetworkName', () => {
-  it('detects non-English stored names', () => {
+  it('detects non-English or over-length stored names', () => {
     expect(isLegacyNetworkName('רשת ישנה')).toBe(true);
+    expect(isLegacyNetworkName('a'.repeat(NETWORK_NAME_MAX + 1))).toBe(true);
     expect(isLegacyNetworkName('Office LAN')).toBe(false);
+    expect(isLegacyNetworkName('a'.repeat(NETWORK_NAME_MAX))).toBe(false);
     expect(isLegacyNetworkName('')).toBe(false);
   });
 });

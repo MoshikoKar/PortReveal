@@ -5,6 +5,8 @@ import { useApp } from '../../context';
 import {
   NETWORK_NAME_HINT,
   NETWORK_NAME_LEGACY_HINT,
+  NETWORK_NAME_MAX,
+  NETWORK_NAME_MAX_MSG,
   isLegacyNetworkName,
   networkNameError,
   trimNetworkName,
@@ -357,9 +359,17 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
           </>}
         >
           <label className="field">Name
-            <input type="text" value={draft.name} aria-invalid={!!nameErr} aria-describedby={nameDescId}
-              onChange={(e) => { setNameTouched(true); setDraft({ ...draft, name: e.target.value }); }}
-              onBlur={() => setNameTouched(true)} placeholder="Office LAN" />
+            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <input type="text" value={draft.name} aria-invalid={!!nameErr} aria-describedby={nameDescId}
+                maxLength={legacyName ? undefined : NETWORK_NAME_MAX}
+                title={`At most ${NETWORK_NAME_MAX} characters`}
+                onChange={(e) => { setNameTouched(true); setDraft({ ...draft, name: e.target.value }); }}
+                onBlur={() => setNameTouched(true)} placeholder="Office LAN" style={{ flex: 1 }} />
+              <span className="hint mono" title={NETWORK_NAME_MAX_MSG}
+                style={nameErr === NETWORK_NAME_MAX_MSG ? { color: 'var(--high)' } : undefined}>
+                {trimNetworkName(draft.name).length}/{NETWORK_NAME_MAX}
+              </span>
+            </div>
             {nameErr && (
               <span id="network-name-error" className="hint" style={{ color: 'var(--high)' }} role="alert">
                 {nameErr === NETWORK_NAME_HINT ? <NetworkNameCharsetHint /> : nameErr}

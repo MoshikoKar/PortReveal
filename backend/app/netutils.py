@@ -17,7 +17,7 @@ from collections.abc import Iterable, Iterator
 
 MAX_SCAN_ADDRESSES = 65536
 MIN_NETWORK_PREFIX = 16
-NETWORK_NAME_MAX = 120
+NETWORK_NAME_MAX = 25
 NETWORK_NAME_RAW_MAX = 10_000  # reject before trim so huge padding cannot burn CPU
 NETWORK_NAME_EMPTY_MSG = "Name must not be empty"
 NETWORK_NAME_MAX_MSG = f"At most {NETWORK_NAME_MAX} characters"
