@@ -739,12 +739,23 @@ def test_notifications_tabs_and_webhook_crud(live_app, browser):
         nav = page.get_by_role("navigation", name="Notification settings")
         for link_name, section, heading in (
             ("Email", "email", "Email digest"),
+            ("Recipients", "recipients", "Recipients"),
             ("Webhooks", "webhooks", "Webhooks"),
             ("CVE Watchlist", "cve-watchlist", "CVE watchlist alerts"),
         ):
             nav.get_by_role("link", name=link_name, exact=True).click()
             expect(page).to_have_url(f"{base}/settings/notifications/{section}")
             expect(page.get_by_role("heading", name=heading)).to_be_visible(timeout=10_000)
+
+        # Recipients: create a group (daily digest default)
+        nav.get_by_role("link", name="Recipients", exact=True).click()
+        page.get_by_role("button", name="Add group").click()
+        page.get_by_label("Name", exact=True).fill("e2e-soc")
+        page.get_by_role("button", name="+ Email").click()
+        page.get_by_label("Address", exact=True).fill("soc@example.com")
+        page.get_by_role("button", name="Save").click()
+        expect(page.get_by_text("e2e-soc", exact=True)).to_be_visible(timeout=10_000)
+        expect(page.get_by_test_id("group-summary").filter(has_text="e2e-soc")).to_be_visible()
 
         # Back to Webhooks for CRUD
         nav.get_by_role("link", name="Webhooks", exact=True).click()

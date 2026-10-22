@@ -160,6 +160,7 @@ def tick(now: datetime | None = None) -> None:
     today = now.date().isoformat()
     queued: list[int] = []
     send_digest = False
+    send_hourly = False
     retention_files: tuple[int, int] | None = None
     ret_counts: dict[str, int] = {}
     stale_captures: list[str] = []
@@ -241,6 +242,12 @@ def tick(now: datetime | None = None) -> None:
                 state["last_notification_date"] = today
                 changed = True
                 send_digest = True
+        # Hourly recipient-group flush once per local hour.
+        hour_key = now.strftime("%Y-%m-%dT%H")
+        if state.get("last_channel_hourly") != hour_key:
+            state["last_channel_hourly"] = hour_key
+            changed = True
+            send_hourly = True
 
         if changed:
             set_value(db, STATE_KEY, state)
@@ -258,7 +265,18 @@ def tick(now: datetime | None = None) -> None:
             keep = live_capture_uuids(db)
         ret_counts.update(cleanup_files(stale_captures, keep, raw_days))
         log.info("Retention cleanup (%s days): %s", ret_days, ret_counts)
+    if send_hourly:
+        try:
+            from .channels import flush_due_holds
+            flush_due_holds(mode="hourly")
+        except Exception:
+            log.exception("hourly recipient-group flush failed")
     if send_digest:
+        try:
+            from .channels import flush_due_holds
+            flush_due_holds(mode="daily")
+        except Exception:
+            log.exception("daily recipient-group flush failed")
         result = send_daily_digest()
         log.info("daily notification digest: %s", result)
         if result == "failed":

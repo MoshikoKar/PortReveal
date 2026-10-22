@@ -45,6 +45,8 @@ MAX_HOOK_WORKERS = 8
 # Split large deliveries into multiple POSTs (same envelope shape as CVE watchlist batches).
 MAX_BATCH_EVENTS = 50
 QUEUE_MAXSIZE = 256
+# Cap coalesced events waiting behind a stuck hook (overflow is recorded as dropped).
+MAX_PENDING_EVENTS_PER_HOOK = 200
 
 _delivery_queue: queue.Queue[list[int] | None] | None = None
 _worker_thread: threading.Thread | None = None
@@ -169,6 +171,17 @@ def stop_delivery_worker() -> None:
         except queue.Full:
             return
     thr.join(timeout=HTTP_DEADLINE + 2)
+    # In-flight POSTs abandoned at shutdown: mark hook status so the UI is truthful.
+    with _hook_state_lock:
+        busy_ids = list(_hook_busy)
+        pending_counts = {hid: len(evs) for hid, evs in _hook_pending.items()}
+        _hook_pending.clear()
+    for hid in busy_ids:
+        n = pending_counts.get(hid, 0)
+        msg = "delivery interrupted: shutdown"
+        if n:
+            msg = f"{_drop_label(n)} dropped: shutdown; {msg}"
+        _record_hook_result(hid, ok=False, err=msg)
     with _worker_lock:
         if thr.is_alive():
             # Keep the handle so start_delivery_worker will not spawn a second dispatcher.
@@ -189,6 +202,11 @@ def schedule_event_delivery(event_ids: list[int], *, wait: bool = False) -> None
         return
     if wait:
         deliver_event_ids(ids)
+        try:
+            from .channels import deliver_channel_event_ids
+            deliver_channel_event_ids(ids)
+        except Exception:
+            log.exception("recipient-group delivery failed")
         return
     if _stopping:
         log.warning("webhook delivery refused during shutdown; dropping %d event(s)", len(ids))
@@ -203,7 +221,17 @@ def schedule_event_delivery(event_ids: list[int], *, wait: bool = False) -> None
         _delivery_queue.put_nowait(ids)
     except queue.Full:
         log.warning("webhook delivery queue full; dropping %d event(s)", len(ids))
-        _record_dropped_events(ids, "queue full")
+        # Record status off the scan/scheduler thread so a busy DB cannot stall callers.
+        threading.Thread(
+            target=_record_dropped_events, args=(ids, "queue full"),
+            name="webhook-drop-status", daemon=True,
+        ).start()
+    # Recipient groups (email / Slack / Teams / filtered webhooks) share the same event ids.
+    try:
+        from .channels import schedule_channel_delivery
+        schedule_channel_delivery(ids)
+    except Exception:
+        log.exception("recipient-group delivery scheduling failed")
 
 
 def _worker_loop() -> None:
@@ -277,18 +305,36 @@ def _dispatch_event_ids(event_ids: list[int]) -> None:
         _submit_hook_job(item)
 
 
+def _drop_label(n: int) -> str:
+    return "1 event" if n == 1 else f"{n} events"
+
+
 def _submit_hook_job(item: dict) -> None:
     """Ensure at most one in-flight delivery chain per hook; coalesce extras onto pending."""
     global _hook_inflight
     hid = item["hook_id"]
+    overflow: list[dict] = []
+    start_now = False
+    pool = None
     with _hook_state_lock:
         if hid in _hook_busy:
             bucket = _hook_pending.setdefault(hid, [])
-            bucket.extend(item["events"])
-            return
-        _hook_busy.add(hid)
-        _hook_inflight += 1
-        pool = _hook_pool
+            room = max(0, MAX_PENDING_EVENTS_PER_HOOK - len(bucket))
+            if room:
+                bucket.extend(item["events"][:room])
+            overflow = list(item["events"][room:])
+        else:
+            _hook_busy.add(hid)
+            _hook_inflight += 1
+            pool = _hook_pool
+            start_now = True
+    if overflow:
+        _record_hook_result(
+            hid, ok=False,
+            err=f"{_drop_label(len(overflow))} dropped: pending cap ({MAX_PENDING_EVENTS_PER_HOOK})",
+        )
+    if not start_now:
+        return
     if pool is None:
         with _hook_state_lock:
             _hook_busy.discard(hid)
@@ -352,7 +398,7 @@ def _record_dropped_events(event_ids: list[int], reason: str) -> None:
         return
     for item in plan:
         n = len(item["events"])
-        _record_hook_result(item["hook_id"], ok=False, err=f"{n} events dropped: {reason}")
+        _record_hook_result(item["hook_id"], ok=False, err=f"{_drop_label(n)} dropped: {reason}")
 
 
 def _load_delivery_plan(event_ids: list[int]) -> list[dict]:
@@ -520,8 +566,10 @@ def _record_hook_result(hook_id: int, *, ok: bool, err: str | None) -> None:
             if ok:
                 row.last_success_at = utcnow()
                 row.last_error = None
+                row.last_error_at = None
             else:
                 row.last_error = err
+                row.last_error_at = utcnow()
     except Exception:
         log.exception("Failed to record webhook %s delivery result", hook_id)
 

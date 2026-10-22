@@ -83,6 +83,7 @@ def _out(h: WebhookEndpoint, *, secret: str | None = None) -> dict:
         "created_at": h.created_at,
         "last_success_at": h.last_success_at,
         "last_error": h.last_error,
+        "last_error_at": h.last_error_at,
     }
     if secret is not None:
         data["secret"] = secret

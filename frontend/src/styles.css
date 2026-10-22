@@ -506,6 +506,13 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .notif-explain > summary:hover { color: var(--text); }
 .notif-explain[open] > summary { margin-bottom: 4px; color: var(--text); }
 
+.recipient-group-card {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.recipient-group-card:last-child { border-bottom: none; }
+.recipient-group-card.dim { opacity: 0.65; }
+
 .progress { height: 6px; background: var(--panel-3); border-radius: var(--radius-pill); overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); transition: width 0.6s ease; }
 

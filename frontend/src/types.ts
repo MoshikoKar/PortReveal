@@ -618,8 +618,52 @@ export interface WebhookEndpoint {
   created_at: string;
   last_success_at: string | null;
   last_error: string | null;
+  last_error_at: string | null;
   /** Present only immediately after create or rotate; never stored client-side after dismiss. */
   secret?: string;
+}
+
+export type RecipientDeliveryMode = 'immediate' | 'hourly' | 'daily';
+export type RecipientDestKind = 'email' | 'webhook' | 'slack' | 'teams';
+export type RecipientMinSeverity = 'info' | 'low' | 'medium' | 'high';
+
+export interface RecipientDestination {
+  id: number;
+  kind: RecipientDestKind;
+  enabled: boolean;
+  target: string | null;
+  webhook_id: number | null;
+  has_url: boolean;
+  url_hint: string | null;
+}
+
+export interface RecipientGroup {
+  id: number;
+  name: string;
+  enabled: boolean;
+  is_default: boolean;
+  event_types: EventType[];
+  min_severity: RecipientMinSeverity;
+  network_ids: number[];
+  delivery_mode: RecipientDeliveryMode;
+  digest_time: string | null;
+  max_per_hour: number;
+  dedupe_seconds: number;
+  quiet_start: string | null;
+  quiet_end: string | null;
+  quiet_bypass_critical: boolean;
+  summary: string;
+  destinations: RecipientDestination[];
+  created_at: string;
+  updated_at: string;
+  last_success_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+}
+
+export interface RecipientGroupTestResult {
+  ok: boolean;
+  error: string | null;
 }
 
 export interface WebhookTestResult {

@@ -3,6 +3,7 @@ import type { EventType } from '../../types';
 export const NOTIFICATION_SECTIONS = [
   { id: 'general', label: 'General' },
   { id: 'email', label: 'Email' },
+  { id: 'recipients', label: 'Recipients' },
   { id: 'webhooks', label: 'Webhooks' },
   { id: 'cve-watchlist', label: 'CVE Watchlist' },
 ] as const;
