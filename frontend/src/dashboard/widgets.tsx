@@ -22,7 +22,7 @@ const TYPE_COLORS: Record<EventType, string> = {
   version_changed: 'var(--low)', device_reappeared: 'var(--low)', service_detected: 'var(--info)',
   tag_added: 'var(--info)', tag_removed: 'var(--info)', watch_match: 'var(--medium)', policy_violation: 'var(--high)',
   banner_changed: 'var(--info)', os_changed: 'var(--medium)', monitor_change: 'var(--medium)',
-  geo_mismatch: 'var(--high)',
+  geo_mismatch: 'var(--high)', cve_watch_match: 'var(--high)',
 };
 
 const LEVEL_COLORS = { high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)' } as const;

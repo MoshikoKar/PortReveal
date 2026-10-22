@@ -217,6 +217,7 @@ API (session cookie, or a read-only token from **Settings → API tokens** sent 
 | `GET /api/host/{ip}` | One host document (services, TLS, HTTP, screenshots) |
 | `GET /api/reports/exposure` · `rare-services` · `version-skew` · `subnets` · `heatmap` | Reports |
 | `/api/saved-searches` | Watches, policies, and monitors (CRUD) |
+| `/api/cve-watchlist` | CVE watchlist (list; admin CRUD + bulk add) |
 | `/api/webhooks` | Outbound event webhooks (admin) |
 | `GET /api/events/stream` | SSE event feed |
 
@@ -578,6 +579,7 @@ docker/Dockerfile, docker-compose.yml
 - Continuous discovery and service inventory via nmap (or labelled mock data)
 - Change detection for devices, ports, services, versions, IP moves, and geo mismatches
 - Inventory search (`field:value` queries, facets, export), tags, exposure scores, watches and reports
+- CVE watchlist: subscribe to CVE IDs and alert immediately (in-app, optional email/webhooks) when they appear
 - Optional expected-country geo check (DB-IP Lite, local MMDB; flags published public IPs outside the network's countries)
 - Enrichment: banners, TLS certs, SNMP sys*, CPE provenance, SSH host keys, subnet heatmap
 - SOC-style dashboard with devices, ports, changes, scans, and settings

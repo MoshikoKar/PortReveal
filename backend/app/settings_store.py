@@ -134,6 +134,9 @@ class NotificationSettings(BaseModel):
         ]
     )
     digest_time: str = "08:00"  # local time HH:MM - one categorized HTML summary per day
+    # CVE watchlist delivery channels (in-app events are always on).
+    watchlist_email_enabled: bool = True  # immediate email (not waiting for the daily digest)
+    watchlist_webhooks_enabled: bool = True
 
     @field_validator("digest_time")
     @classmethod
