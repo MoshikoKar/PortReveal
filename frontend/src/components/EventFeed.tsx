@@ -43,7 +43,8 @@ export function EventDetail({ ev }: { ev: ChangeEvent }) {
       return <span><span className="mono">{ev.ip}</span>{ev.new_value && <span className="muted"> · {ev.new_value}</span>}</span>;
     case 'watch_match':
     case 'policy_violation':
-      return <span>{ev.new_value}</span>;
+    case 'cve_watch_match':
+      return <span>{ev.new_value ?? ev.message}</span>;
     case 'monitor_change':
       return <span>{ev.new_value}{port && <> {port}</>}</span>;
     case 'geo_mismatch':

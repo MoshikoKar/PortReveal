@@ -128,6 +128,32 @@ def test_sign_in_dashboard_and_devices_list(live_app, browser):
     assert errors == []
 
 
+def test_cve_watchlist_add_and_list(live_app, browser):
+    """Admin can add a CVE on the watchlist page and see it listed (pending until local sync)."""
+    from playwright.sync_api import expect
+
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, live_app)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
+        page.get_by_role("link", name="CVE Watchlist").click()
+        expect(page).to_have_url(f"{live_app}/vulnerabilities/watchlist")
+        expect(page.get_by_role("heading", name="CVE Watchlist")).to_be_visible()
+
+        page.get_by_label("CVE IDs").fill("CVE-2026-109618")
+        page.get_by_role("button", name="Add to watchlist").click()
+        expect(page.locator("tbody tr").filter(has_text="CVE-2026-109618")).to_be_visible(timeout=10_000)
+        expect(page.get_by_text("Pending sync", exact=True)).to_be_visible()
+    finally:
+        page.close()
+    assert errors == []
+
+
 def test_dashboard_layout_resize_save_and_reload(live_app, browser):
     """Customize → resize a card → Save → reload → layout still applied."""
     from playwright.sync_api import expect

@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import __version__, metrics
 from .api import (
     auth,
+    cve_watchlist,
     dashboard,
     data_transfer,
     devices,
@@ -124,7 +125,8 @@ app = FastAPI(
 )
 
 for r in (auth, setup, system, dashboard, devices, events, scans, networks, exclusions, settings, users, misc,
-          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks, vuln_jobs, vulns):
+          web_captures, data_transfer, search, watches, reports, tokens, host, webhooks, vuln_jobs, vulns,
+          cve_watchlist):
     app.include_router(r.router)
 
 

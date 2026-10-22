@@ -264,6 +264,8 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
     enabled: s.enabled, smtp_host: s.smtp_host, smtp_port: s.smtp_port, security: s.security, username: s.username,
     ...(password !== null ? { password } : {}), sender: s.sender,
     recipients: recipients.split(/[\s,;]+/).filter(Boolean), event_types: s.event_types, digest_time: s.digest_time,
+    watchlist_email_enabled: s.watchlist_email_enabled,
+    watchlist_webhooks_enabled: s.watchlist_webhooks_enabled,
   });
   const save = async () => {
     if (await f.save(body())) {
@@ -332,6 +334,26 @@ export function NotificationsForm({ part = 'all', onSaved, onDirtyChange }: {
                   <input type="time" value={s.digest_time} onChange={(e) => set({ digest_time: e.target.value })} />
                   <span className="hint">Server-local time. Pending changes since the last send are grouped into one HTML email.</span>
                 </label>
+              </div>
+            )}
+            {part === 'all' && (
+              <div className="field">
+                <span>CVE watchlist alerts</span>
+                <div className="muted small" style={{ marginBottom: 8 }}>
+                  In-app events are always recorded. Email and webhooks are optional delivery channels.
+                </div>
+                <div className="row wrap" style={{ gap: 14 }}>
+                  <label className="check small">
+                    <input type="checkbox" checked={s.watchlist_email_enabled}
+                      onChange={(e) => set({ watchlist_email_enabled: e.target.checked })} />
+                    Immediate email (uses SMTP settings above)
+                  </label>
+                  <label className="check small">
+                    <input type="checkbox" checked={s.watchlist_webhooks_enabled}
+                      onChange={(e) => set({ watchlist_webhooks_enabled: e.target.checked })} />
+                    Webhooks (respects each endpoint&apos;s event-type filter)
+                  </label>
+                </div>
               </div>
             )}
           </>

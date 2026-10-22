@@ -86,7 +86,7 @@ export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
   | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
   | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed'
-  | 'os_changed' | 'monitor_change' | 'geo_mismatch';
+  | 'os_changed' | 'monitor_change' | 'geo_mismatch' | 'cve_watch_match';
 
 export interface ChangeEvent {
   id: number;
@@ -597,6 +597,26 @@ export interface NotificationSettings {
   event_types: EventType[];
   digest_time: string;
   available_event_types: EventType[];
+  /** Immediate email when a watched CVE is found (does not wait for the daily digest). */
+  watchlist_email_enabled: boolean;
+  /** Deliver cve_watch_match through configured webhooks. */
+  watchlist_webhooks_enabled: boolean;
+}
+
+export type CveWatchlistStatus = 'pending' | 'not_found' | 'found';
+
+export interface CveWatchlistEntry {
+  id: number;
+  cve_id: string;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+  enabled: boolean;
+  status: CveWatchlistStatus;
+  affected_devices: number;
+  finding_count: number;
+  last_alert_at: string | null;
+  cve_known: boolean;
 }
 
 export interface LdapSettings {

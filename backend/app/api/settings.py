@@ -313,6 +313,8 @@ class NotificationIn(BaseModel):
     recipients: list[str] = Field(default_factory=list, max_length=100)
     event_types: list[str] = Field(default_factory=list)
     digest_time: str = Field("08:00", max_length=5)
+    watchlist_email_enabled: bool = True
+    watchlist_webhooks_enabled: bool = True
 
 
 def notifications_out(cfg: NotificationSettings) -> dict:

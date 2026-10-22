@@ -665,6 +665,11 @@ def sync_and_rescore(db: Session, cfg: VulnSettings, *, fetch: Fetcher | None = 
     db.commit()
     _release_session_memory(db)
     refresh_after_scan_or_sync(db, now=now)
+    db.commit()
+    _release_session_memory(db)
+    from .watchlist import check_watchlist_safe
+    check_watchlist_safe(db, now=now)
+    db.commit()
     return results
 
 

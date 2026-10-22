@@ -327,6 +327,8 @@ def run_vuln_job(job_id: int, ctx: ScanContext) -> str:
                notes=partial_reason, error=partial_reason if status == VULN_JOB_PARTIAL else None)
         with session_scope() as db:
             refresh_after_scan_or_sync(db, now=utcnow())
+            from .watchlist import check_watchlist_safe
+            check_watchlist_safe(db, now=utcnow())
         return status
     except ScanCancelled:
         _update(job_id, status=VULN_JOB_CANCELLED, finished_at=utcnow(), stage=None,
