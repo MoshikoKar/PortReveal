@@ -55,20 +55,42 @@ export function clearVulnFilters(sp: URLSearchParams): URLSearchParams {
   return next;
 }
 
+/** Live query string from the address bar (not React Router's render-captured searchParams). */
+export function liveSearchParams(): URLSearchParams {
+  if (typeof window === 'undefined') return new URLSearchParams();
+  return new URLSearchParams(window.location.search);
+}
+
 /**
- * Apply a debounced findings-search term to the current URL params without dropping other
- * filters (facet clicks may have updated the URL while the debounce was pending).
- * Returns null when `q` is already in sync (no navigation needed).
+ * Apply a findings-search term onto `prev` without dropping other filters.
+ * Callers must pass **live** params (`liveSearchParams()` / `window.location.search`):
+ * react-router 7's `setSp(prev => …)` feeds a render-captured snapshot, which is stale after
+ * Clear all / facet clicks during the debounce window.
+ * Trims `qInput`; whitespace-only clears search. Returns null when `q` is already in sync.
  */
 export function applyVulnSearchQ(prev: URLSearchParams, qInput: string): URLSearchParams | null {
-  if ((prev.get('q') ?? '') === qInput) return null;
+  const q = qInput.trim();
+  if ((prev.get('q') ?? '') === q) return null;
   const next = new URLSearchParams(prev);
-  if (qInput) next.set('q', qInput);
+  if (q) next.set('q', q);
   else {
     next.delete('q');
     next.delete('only_hidden');
   }
   next.delete('page');
+  return next;
+}
+
+/** Merge in-progress (possibly not-yet-debounced) search text into a filter URL update. */
+export function withPendingVulnSearchQ(sp: URLSearchParams, qInput: string): URLSearchParams {
+  const next = new URLSearchParams(sp);
+  const q = qInput.trim();
+  if (q) next.set('q', q);
+  else {
+    next.delete('q');
+    // Keep only_hidden only when a real q remains; otherwise drop it with the search.
+    next.delete('only_hidden');
+  }
   return next;
 }
 

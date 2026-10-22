@@ -182,6 +182,12 @@ export function VulnFindingsTable({
                           }>
                           {v.state}
                         </span>
+                        {v.state === 'potential' && (v.hidden_reasons ?? []).includes('Potential (hidden)') && (
+                          <span className="badge outline" style={{ marginLeft: 6 }}
+                            title="Normally hidden when include_potential is off">
+                            hidden
+                          </span>
+                        )}
                       </td>
                       <td className="small muted">{fmtTime(v.first_seen_at)}</td>
                       {isAdmin && (
