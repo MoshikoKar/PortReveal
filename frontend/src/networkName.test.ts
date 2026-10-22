@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NETWORK_NAME_EMPTY_MSG,
   NETWORK_NAME_HINT,
   NETWORK_NAME_MAX,
   NETWORK_NAME_MAX_MSG,
@@ -12,6 +13,7 @@ describe('trimNetworkName', () => {
   it('strips whitespace and BOM like String.trim', () => {
     expect(trimNetworkName('  Office  ')).toBe('Office');
     expect(trimNetworkName('\ufeffOffice\ufeff')).toBe('Office');
+    expect(trimNetworkName('\u00a0Lab\u00a0')).toBe('Lab');
   });
 });
 
@@ -35,10 +37,13 @@ describe('networkNameError', () => {
     expect(networkNameError(`  ${'a'.repeat(NETWORK_NAME_MAX + 1)}  `)).toBe(NETWORK_NAME_MAX_MSG);
   });
 
-  it('ignores empty input (Save already requires a name)', () => {
+  it('returns empty message only when requireNonEmpty (field touched)', () => {
     expect(networkNameError('')).toBeNull();
     expect(networkNameError('   ')).toBeNull();
     expect(networkNameError('\ufeff')).toBeNull();
+    expect(networkNameError('', { requireNonEmpty: true })).toBe(NETWORK_NAME_EMPTY_MSG);
+    expect(networkNameError('   ', { requireNonEmpty: true })).toBe(NETWORK_NAME_EMPTY_MSG);
+    expect(networkNameError('\ufeff', { requireNonEmpty: true })).toBe(NETWORK_NAME_EMPTY_MSG);
   });
 });
 

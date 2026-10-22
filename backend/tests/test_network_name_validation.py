@@ -1,4 +1,5 @@
 """Network name charset: create/rename reject non-English characters; legacy names stay editable."""
+
 from __future__ import annotations
 
 import pytest
@@ -60,9 +61,15 @@ def test_validate_network_name_rejects_disallowed(name):
         validate_network_name(name)
 
 
-def test_trim_network_name_strips_bom_and_whitespace():
+def test_trim_network_name_matches_js_string_trim():
     assert trim_network_name("\ufeff  Lab  \ufeff") == "Lab"
     assert trim_network_name("\ufeff") == ""
+    # JS WhiteSpace / LineTerminator samples
+    assert trim_network_name("\t\n\v\f\r Lab \u00a0\u1680") == "Lab"
+    assert trim_network_name("\u2000\u200aLab\u2028\u2029\u202f\u205f\u3000") == "Lab"
+    # Python str.isspace() would strip these; JS String.trim does not
+    assert trim_network_name("\x1cLab\x1f") == "\x1cLab\x1f"
+    assert trim_network_name("\x85Lab\x85") == "\x85Lab\x85"
 
 
 def test_create_accepts_valid_name(client):
@@ -110,6 +117,14 @@ def test_create_rejects_too_long_after_trim_with_plain_422(client):
     r = client.post("/api/networks", json={"name": ok, "cidr": "10.11.3.0/24"}, headers=h)
     assert r.status_code == 201, r.text
     assert r.json()["name"] == "b" * NETWORK_NAME_MAX
+
+
+def test_create_rejects_oversized_raw_name_with_plain_422(client):
+    """Former Field(max_length=1000) list-style 422; now same plain message as other length errors."""
+    setup_admin(client)
+    h = csrf(client)
+    r = client.post("/api/networks", json={"name": "x" * 1001, "cidr": "10.11.4.0/24"}, headers=h)
+    assert_plain_422(r, NETWORK_NAME_MAX_MSG)
 
 
 def test_rename_to_invalid_name_is_rejected(client, db):

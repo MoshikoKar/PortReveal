@@ -206,18 +206,21 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [nameTouched, setNameTouched] = useState(false);
   const { pending, track } = useInFlight();
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   // Legacy names with other characters stay editable for other fields; only validate when the name is new or changed.
   const nameUnchanged = !!draft?.id && trimNetworkName(draft.name) === trimNetworkName(initial?.name ?? '');
-  const nameErr = draft && !nameUnchanged ? networkNameError(draft.name) : null;
+  const nameErr = draft && !nameUnchanged
+    ? networkNameError(draft.name, { requireNonEmpty: nameTouched })
+    : null;
   const legacyName = !!draft?.id && nameUnchanged && isLegacyNetworkName(draft.name);
   const nameDescId = nameErr ? 'network-name-error' : legacyName ? 'network-name-legacy' : undefined;
   const canSave = !!draft && !!trimNetworkName(draft.name) && !nameErr && !!draft.cidr.trim()
     && (!draft.arp || !!draft.arp.host.trim());
   useReportDirty(!!draft && dirty, onDirtyChange);
 
-  const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); };
+  const openDraft = (d: Draft) => { setDraft(d); setInitial(d); setSaveError(null); setNameTouched(false); };
   const draftOf = (n: Network): Draft => ({
     id: n.id, name: n.name, cidr: n.cidr, description: n.description ?? '', enabled: n.enabled, zone: n.zone ?? '',
     vpn_s2s: n.vpn_s2s, expected_countries: n.expected_countries ?? [], arp: arpDraft(n.arp_snmp),
@@ -355,7 +358,8 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
         >
           <label className="field">Name
             <input type="text" value={draft.name} aria-invalid={!!nameErr} aria-describedby={nameDescId}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Office LAN" />
+              onChange={(e) => { setNameTouched(true); setDraft({ ...draft, name: e.target.value }); }}
+              onBlur={() => setNameTouched(true)} placeholder="Office LAN" />
             {nameErr && (
               <span id="network-name-error" className="hint" style={{ color: 'var(--high)' }} role="alert">
                 {nameErr === NETWORK_NAME_HINT ? <NetworkNameCharsetHint /> : nameErr}

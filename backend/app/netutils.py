@@ -7,6 +7,7 @@ Accepted target syntax (comma, semicolon, whitespace or newline separated):
     10.0.0.10-50            last-octet range
     server01.corp.local     hostname (ad-hoc scan targets only; resolved once)
 """
+
 from __future__ import annotations
 
 import bisect
@@ -23,11 +24,15 @@ NETWORK_NAME_MAX_MSG = f"At most {NETWORK_NAME_MAX} characters"
 NETWORK_NAME_CHARS_MSG = "Use English letters, numbers, spaces and - _ . ( ) only"
 # New/renamed network names only; legacy rows with other characters remain readable.
 _NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9 ._()-]+$")
-_BOM = "\ufeff"
-
-_HOSTNAME_RE = re.compile(
-    r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
+# Exact JS String.prototype.trim set: WhiteSpace + LineTerminator (not Python str.isspace).
+_JS_TRIM_CHARS = frozenset(
+    "\t\n\v\f\r "
+    "\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
 )
+
+_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$")
 _SPLIT_RE = re.compile(r"[\s,;]+")
 
 
@@ -36,11 +41,11 @@ class TargetError(ValueError):
 
 
 def trim_network_name(name: str) -> str:
-    """Strip BOM and whitespace like JavaScript String.trim (Python strip alone keeps \\ufeff)."""
+    """Strip the same characters as JavaScript String.prototype.trim."""
     s = name or ""
-    while s and (s[0].isspace() or s[0] == _BOM):
+    while s and s[0] in _JS_TRIM_CHARS:
         s = s[1:]
-    while s and (s[-1].isspace() or s[-1] == _BOM):
+    while s and s[-1] in _JS_TRIM_CHARS:
         s = s[:-1]
     return s
 
@@ -212,10 +217,7 @@ class AddressSet:
     def to_cidrs(self) -> list[str]:
         out: list[str] = []
         for s, e in self._iv:
-            out.extend(
-                str(n)
-                for n in ipaddress.summarize_address_range(ipaddress.IPv4Address(s), ipaddress.IPv4Address(e))
-            )
+            out.extend(str(n) for n in ipaddress.summarize_address_range(ipaddress.IPv4Address(s), ipaddress.IPv4Address(e)))
         return out
 
     def chunks(self, size: int) -> list[list[str]]:

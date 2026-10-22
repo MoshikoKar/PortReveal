@@ -20,10 +20,13 @@ export function isLegacyNetworkName(raw: string): boolean {
   return !!name && !NETWORK_NAME_RE.test(name);
 }
 
-/** Error for a new or changed network name, or null when valid / still empty. */
-export function networkNameError(raw: string): string | null {
+/**
+ * Error for a new or changed network name, or null when valid.
+ * Empty/whitespace-only: returns NETWORK_NAME_EMPTY_MSG when requireNonEmpty is true (field touched).
+ */
+export function networkNameError(raw: string, opts?: { requireNonEmpty?: boolean }): string | null {
   const name = trimNetworkName(raw);
-  if (!name) return null;
+  if (!name) return opts?.requireNonEmpty ? NETWORK_NAME_EMPTY_MSG : null;
   if (name.length > NETWORK_NAME_MAX) return NETWORK_NAME_MAX_MSG;
   if (!NETWORK_NAME_RE.test(name)) return NETWORK_NAME_HINT;
   return null;
