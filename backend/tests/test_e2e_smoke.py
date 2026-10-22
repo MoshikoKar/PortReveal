@@ -190,18 +190,19 @@ def test_cve_watchlist_add_and_list(live_app, browser):
     """Admin can add a CVE on the watchlist page and see it listed (pending until local sync)."""
     from playwright.sync_api import expect
 
+    base = live_app["base"]
     page = browser.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
-        _sign_in(page, live_app)
+        _sign_in(page, base)
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
 
         page.get_by_role("link", name="Vulnerabilities", exact=True).click()
         expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
         # Sidebar and page both link here; prefer the main-content button.
         page.get_by_role("main").get_by_role("link", name="CVE Watchlist").click()
-        expect(page).to_have_url(f"{live_app}/vulnerabilities/watchlist")
+        expect(page).to_have_url(f"{base}/vulnerabilities/watchlist")
         expect(page.get_by_role("heading", name="CVE Watchlist")).to_be_visible()
 
         page.get_by_label("CVE IDs").fill("CVE-2026-109618")
