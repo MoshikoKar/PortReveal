@@ -37,6 +37,7 @@ def upgrade() -> None:
         sa.Column("quiet_bypass_critical", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("rate_hour_bucket", sa.String(10), nullable=True),
         sa.Column("rate_sent", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("last_digest_on", sa.String(10), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.Column("last_success_at", sa.DateTime(), nullable=True),
@@ -66,6 +67,7 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_recipient_destinations_group_id", "recipient_destinations", ["group_id"])
+    op.create_index("ix_recipient_destinations_webhook_id", "recipient_destinations", ["webhook_id"])
     op.create_table(
         "recipient_holds",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -73,6 +75,8 @@ def upgrade() -> None:
         sa.Column("event_id", sa.Integer(), sa.ForeignKey("events.id", ondelete="CASCADE"), nullable=False),
         sa.Column("reason", sa.String(40), nullable=False),
         sa.Column("dedupe_key", sa.String(200), nullable=True),
+        sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("next_attempt_at", sa.DateTime(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.UniqueConstraint("group_id", "event_id", name="uq_recipient_hold_event"),
     )
@@ -80,6 +84,7 @@ def upgrade() -> None:
     op.create_index("ix_recipient_holds_event_id", "recipient_holds", ["event_id"])
     op.create_index("ix_recipient_holds_group_created", "recipient_holds", ["group_id", "created_at"])
     op.create_index("ix_recipient_holds_dedupe_key", "recipient_holds", ["dedupe_key"])
+    op.create_index("ix_recipient_holds_next_attempt", "recipient_holds", ["next_attempt_at"])
 
     with op.batch_alter_table("webhook_endpoints", schema=None) as batch_op:
         batch_op.add_column(sa.Column("last_error_at", sa.DateTime(), nullable=True))
@@ -102,23 +107,32 @@ def upgrade() -> None:
     recipients = cfg.get("recipients") if isinstance(cfg.get("recipients"), list) else []
     event_types = cfg.get("event_types") if isinstance(cfg.get("event_types"), list) else []
     digest_time = str(cfg.get("digest_time") or "08:00").strip() or "08:00"
-    # Always create the default group so upgrades have a channel even with empty recipients.
+    # Copy the global email enabled switch onto the default group.
+    group_enabled = bool(cfg.get("enabled", False))
+
+    # Use typed boolean binds — PostgreSQL rejects integer 1 for boolean columns.
     bind.execute(
         sa.text(
             "INSERT INTO recipient_groups "
             "(name, enabled, is_default, event_types, min_severity, network_ids, delivery_mode, "
             "digest_time, max_per_hour, dedupe_seconds, quiet_bypass_critical, rate_sent, "
             "created_at, updated_at) "
-            "VALUES (:name, 1, 1, :event_types, 'info', NULL, 'daily', :digest_time, 20, 300, 1, 0, "
-            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            "VALUES (:name, :enabled, :is_default, :event_types, 'info', NULL, 'daily', "
+            ":digest_time, 20, 300, :quiet_bypass, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
         ),
         {
             "name": "Email digest",
+            "enabled": group_enabled,
+            "is_default": True,
+            "quiet_bypass": True,
             "event_types": json.dumps(event_types) if event_types else None,
             "digest_time": digest_time,
         },
     )
-    gid = bind.execute(sa.text("SELECT id FROM recipient_groups WHERE is_default = 1 LIMIT 1")).scalar()
+    gid = bind.execute(
+        sa.text("SELECT id FROM recipient_groups WHERE is_default = :flag LIMIT 1"),
+        {"flag": True},
+    ).scalar()
     if gid and recipients:
         for addr in recipients:
             if not isinstance(addr, str) or not addr.strip():
@@ -126,9 +140,9 @@ def upgrade() -> None:
             bind.execute(
                 sa.text(
                     "INSERT INTO recipient_destinations (group_id, kind, enabled, target) "
-                    "VALUES (:gid, 'email', 1, :target)"
+                    "VALUES (:gid, 'email', :enabled, :target)"
                 ),
-                {"gid": gid, "target": addr.strip()},
+                {"gid": gid, "enabled": True, "target": addr.strip()},
             )
 
 

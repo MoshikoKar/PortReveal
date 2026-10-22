@@ -24,7 +24,6 @@ from ..models import (
 )
 from ..settings_store import (
     GeoSettings,
-    NotificationSettings,
     PresenceSettings,
     RetentionSettings,
     ScanSettings,
@@ -38,7 +37,6 @@ from .geo_sync import sync_due as geo_sync_due
 from .geo_sync import sync_running as geo_sync_running
 from .geo_sync import trigger_background_sync as trigger_geo_sync
 from .manager import create_scan, manager, network_has_active_scan
-from .notify import send_daily_digest
 from .presence import evaluate_absence, presence_scan_active
 from .retention import cleanup_files, live_capture_uuids, purge_expired
 from .vuln.sync import sync_due, sync_running, trigger_background_sync
@@ -159,8 +157,8 @@ def tick(now: datetime | None = None) -> None:
     now = now or datetime.now().astimezone()
     today = now.date().isoformat()
     queued: list[int] = []
-    send_digest = False
     send_hourly = False
+    flush_channels = True  # every tick: per-group daily times + retries
     retention_files: tuple[int, int] | None = None
     ret_counts: dict[str, int] = {}
     stale_captures: list[str] = []
@@ -233,16 +231,7 @@ def tick(now: datetime | None = None) -> None:
             log.info("geo feed sync is due: starting in the background")
             trigger_geo_sync(geo_cfg)
 
-        notify_cfg = get_section(db, NotificationSettings)
-        if notify_cfg.enabled and state.get("last_notification_date") != today:
-            hh, mm = (int(x) for x in notify_cfg.digest_time.split(":"))
-            due = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            if now >= due:
-                # Claim the day before SMTP so overlapping ticks cannot double-send.
-                state["last_notification_date"] = today
-                changed = True
-                send_digest = True
-        # Hourly recipient-group flush once per local hour.
+        # Hourly recipient-group flush once per local hour (rate overflow, hourly batches).
         hour_key = now.strftime("%Y-%m-%dT%H")
         if state.get("last_channel_hourly") != hour_key:
             state["last_channel_hourly"] = hour_key
@@ -265,26 +254,13 @@ def tick(now: datetime | None = None) -> None:
             keep = live_capture_uuids(db)
         ret_counts.update(cleanup_files(stale_captures, keep, raw_days))
         log.info("Retention cleanup (%s days): %s", ret_days, ret_counts)
-    if send_hourly:
+    if flush_channels:
         try:
             from .channels import flush_due_holds
-            flush_due_holds(mode="hourly")
+            # Daily groups flush at their own digest_time; hourly flag releases hourly/rate holds.
+            flush_due_holds(hourly=send_hourly)
         except Exception:
-            log.exception("hourly recipient-group flush failed")
-    if send_digest:
-        try:
-            from .channels import flush_due_holds
-            flush_due_holds(mode="daily")
-        except Exception:
-            log.exception("daily recipient-group flush failed")
-        result = send_daily_digest()
-        log.info("daily notification digest: %s", result)
-        if result == "failed":
-            with session_scope() as db:
-                state = dict(get_value(db, STATE_KEY, {}) or {})
-                if state.get("last_notification_date") == today:
-                    state["last_notification_date"] = None
-                    set_value(db, STATE_KEY, state)
+            log.exception("recipient-group flush failed")
     if queued:
         manager.wake()
 

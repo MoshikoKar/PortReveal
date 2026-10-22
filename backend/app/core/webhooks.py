@@ -190,11 +190,20 @@ def stop_delivery_worker() -> None:
             _worker_thread = None
 
 
+def enqueue_channel_delivery(event_ids: list[int]) -> None:
+    """Put channel-only work on the shared queue (CVE watchlist / direct callers)."""
+    ids = [i for i in event_ids if i]
+    if not ids:
+        return
+    _enqueue_delivery(ids, channels_only=True)
+
+
 def schedule_event_delivery(event_ids: list[int], *, wait: bool = False) -> None:
     """Enqueue delivery after the creating transaction has committed.
 
     ``wait=False`` (default): put ids on the bounded daemon queue and return immediately so
-    scan / scheduler / intel callers are never stalled by slow hooks.
+    scan / scheduler / intel callers are never stalled by slow hooks. The worker runs global
+    webhooks then recipient-group routing (no new thread per call).
     ``wait=True``: deliver synchronously on this thread (tests / CLI).
     """
     ids = [i for i in event_ids if i]
@@ -208,30 +217,44 @@ def schedule_event_delivery(event_ids: list[int], *, wait: bool = False) -> None
         except Exception:
             log.exception("recipient-group delivery failed")
         return
+    _enqueue_delivery(ids, channels_only=False)
+
+
+def _enqueue_delivery(ids: list[int], *, channels_only: bool) -> None:
     if _stopping:
         log.warning("webhook delivery refused during shutdown; dropping %d event(s)", len(ids))
-        _record_dropped_events(ids, "shutdown")
+        if not channels_only:
+            _record_dropped_events(ids, "shutdown")
         return
     start_delivery_worker()
     if _stopping or _delivery_queue is None:
         log.warning("webhook delivery worker unavailable; dropping %d event(s)", len(ids))
-        _record_dropped_events(ids, "shutdown")
+        if not channels_only:
+            _record_dropped_events(ids, "shutdown")
         return
+    item = {"ids": ids, "channels_only": channels_only}
     try:
-        _delivery_queue.put_nowait(ids)
+        _delivery_queue.put_nowait(item)
     except queue.Full:
         log.warning("webhook delivery queue full; dropping %d event(s)", len(ids))
-        # Record status off the scan/scheduler thread so a busy DB cannot stall callers.
+        if not channels_only:
+            threading.Thread(
+                target=_record_dropped_events, args=(ids, "queue full"),
+                name="webhook-drop-status", daemon=True,
+            ).start()
+        # Still attempt channel routing off the scan thread when the webhook queue is saturated.
         threading.Thread(
-            target=_record_dropped_events, args=(ids, "queue full"),
-            name="webhook-drop-status", daemon=True,
+            target=_safe_channel_deliver, args=(ids,),
+            name="channel-fallback", daemon=True,
         ).start()
-    # Recipient groups (email / Slack / Teams / filtered webhooks) share the same event ids.
+
+
+def _safe_channel_deliver(ids: list[int]) -> None:
     try:
-        from .channels import schedule_channel_delivery
-        schedule_channel_delivery(ids)
+        from .channels import deliver_channel_event_ids
+        deliver_channel_event_ids(ids)
     except Exception:
-        log.exception("recipient-group delivery scheduling failed")
+        log.exception("recipient-group delivery failed")
 
 
 def _worker_loop() -> None:
@@ -241,7 +264,20 @@ def _worker_loop() -> None:
         try:
             if item is None:
                 return
-            _dispatch_event_ids(item)
+            if isinstance(item, dict):
+                ids = list(item.get("ids") or [])
+                channels_only = bool(item.get("channels_only"))
+            else:
+                # Legacy bare list of event ids (tests / older callers).
+                ids = list(item)
+                channels_only = False
+            if not channels_only:
+                _dispatch_event_ids(ids)
+            try:
+                from .channels import deliver_channel_event_ids
+                deliver_channel_event_ids(ids)
+            except Exception:
+                log.exception("recipient-group delivery failed")
         except Exception:
             log.exception("webhook delivery worker failed")
         finally:
@@ -415,8 +451,13 @@ def _load_delivery_plan(event_ids: list[int]) -> list[dict]:
         hooks = list(db.scalars(select(WebhookEndpoint).where(WebhookEndpoint.enabled.is_(True))).all())
         if not hooks:
             return []
+        # Webhooks attached to a recipient group are group-managed — skip global fan-out.
+        from .channels import group_managed_webhook_ids
+        managed = group_managed_webhook_ids(db)
         jobs: list[dict] = []
         for hook in hooks:
+            if hook.id in managed:
+                continue
             matched = [_event_payload(ev) for ev in events if _hook_accepts(hook, ev)]
             if not matched:
                 continue

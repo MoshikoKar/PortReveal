@@ -24,6 +24,7 @@ from ..models import (
     DEST_WEBHOOK,
     EVENT_TYPES,
     SEVERITIES,
+    Network,
     RecipientDestination,
     RecipientGroup,
     WebhookEndpoint,
@@ -121,10 +122,12 @@ def _validate_group_fields(
 
 def _mask_url(url: str) -> str:
     try:
-        host = urlparse(url).hostname or "?"
+        parsed = urlparse(url)
+        host = parsed.hostname or "?"
+        scheme = parsed.scheme if parsed.scheme in ("http", "https") else "https"
     except Exception:
-        host = "?"
-    return f"https://{host}/…"
+        host, scheme = "?", "https"
+    return f"{scheme}://{host}/…"
 
 
 def _dest_out(d: RecipientDestination) -> dict:
@@ -145,23 +148,63 @@ def _dest_out(d: RecipientDestination) -> dict:
     return data
 
 
-def _group_summary(g: RecipientGroup) -> str:
+def _network_names(db: Session, ids: list[int] | None) -> dict[int, str]:
+    if not ids:
+        return {}
+    rows = db.scalars(select(Network).where(Network.id.in_(ids))).all()
+    return {n.id: n.name for n in rows}
+
+
+def _group_summary(g: RecipientGroup, net_names: dict[int, str] | None = None) -> str:
+    """One-line card summary — omits name/mode (shown as badges) to avoid repetition."""
     sev = {
         "high": "Critical+High",
         "medium": "Medium+",
         "low": "Low+",
         "info": "All severities",
     }.get(g.min_severity or "info", (g.min_severity or "info").capitalize())
-    nets = "All networks" if not g.network_ids else f"{len(g.network_ids)} networks"
+    ids = list(g.network_ids or [])
+    if not ids:
+        nets = "All networks"
+    else:
+        names = net_names or {}
+        labels = [names.get(i) or f"#{i}" for i in ids]
+        if len(labels) == 1:
+            nets = labels[0]
+        elif len(labels) == 2:
+            nets = f"{labels[0]}, {labels[1]}"
+        else:
+            nets = f"{labels[0]}, {labels[1]} +{len(labels) - 2}"
     when = {
         "immediate": "Immediate",
         "hourly": "Hourly",
         "daily": f"Daily {g.digest_time or '08:00'}".strip(),
     }.get(g.delivery_mode, g.delivery_mode)
-    return f"{g.name} · {sev} · {nets} · {when}"
+    return f"{sev} · {nets} · {when}"
 
 
-def _out(g: RecipientGroup) -> dict:
+def _friendly_error(err: str | None) -> str | None:
+    if not err:
+        return None
+    low = err.lower()
+    if "timeout" in low or "deadline" in low:
+        return "Delivery timed out"
+    if "connection" in low or "connect" in low:
+        return "Could not reach destination"
+    if low.startswith("http "):
+        return f"Destination returned an error ({err.split()[1] if len(err.split()) > 1 else 'HTTP'})"
+    if "smtp" in low:
+        return "Email delivery failed"
+    return "Delivery failed"
+
+
+def _out(g: RecipientGroup, net_names: dict[int, str] | None = None) -> dict:
+    dests = [_dest_out(d) for d in (g.destinations or [])]
+    kinds = []
+    for d in dests:
+        label = {"email": "Email", "slack": "Slack", "teams": "Teams", "webhook": "Webhook"}.get(d["kind"], d["kind"])
+        if label not in kinds:
+            kinds.append(label)
     return {
         "id": g.id,
         "name": g.name,
@@ -177,14 +220,35 @@ def _out(g: RecipientGroup) -> dict:
         "quiet_start": g.quiet_start,
         "quiet_end": g.quiet_end,
         "quiet_bypass_critical": g.quiet_bypass_critical,
-        "summary": _group_summary(g),
-        "destinations": [_dest_out(d) for d in (g.destinations or [])],
+        "summary": _group_summary(g, net_names),
+        "destination_kinds": kinds,
+        "destinations": dests,
         "created_at": g.created_at,
         "updated_at": g.updated_at,
         "last_success_at": g.last_success_at,
         "last_error": g.last_error,
         "last_error_at": g.last_error_at,
+        "last_error_friendly": _friendly_error(g.last_error),
     }
+
+
+def _require_destinations(destinations: list[DestinationIn] | None, *, allow_empty_disabled: bool = False) -> None:
+    if destinations is None:
+        return
+    if not destinations:
+        raise HTTPException(422, "at least one destination is required")
+    if not any(d.enabled for d in destinations) and not allow_empty_disabled:
+        raise HTTPException(422, "at least one destination must be enabled (or disable the group)")
+
+
+def _validate_network_ids(db: Session, network_ids: list[int] | None) -> list[int] | None:
+    if not network_ids:
+        return None
+    existing = set(db.scalars(select(Network.id).where(Network.id.in_(network_ids))).all())
+    missing = [i for i in network_ids if i not in existing]
+    if missing:
+        raise HTTPException(422, f"unknown network_ids: {missing}")
+    return list(network_ids)
 
 
 def _apply_destinations(db: Session, group: RecipientGroup, destinations: list[DestinationIn]) -> None:
@@ -234,7 +298,9 @@ def list_groups(db: Session = Depends(get_db), user=Depends(require_admin)):
     rows = db.scalars(
         select(RecipientGroup).options(selectinload(RecipientGroup.destinations)).order_by(RecipientGroup.id)
     ).unique().all()
-    return [_out(g) for g in rows]
+    all_net_ids = {i for g in rows for i in (g.network_ids or [])}
+    names = _network_names(db, list(all_net_ids)) if all_net_ids else {}
+    return [_out(g, names) for g in rows]
 
 
 @router.post("", status_code=201)
@@ -244,9 +310,11 @@ def create_group(body: GroupIn, request: Request, db: Session = Depends(get_db),
         event_types=body.event_types, digest_time=body.digest_time,
         quiet_start=body.quiet_start, quiet_end=body.quiet_end,
     )
+    _require_destinations(body.destinations)
+    net_ids = _validate_network_ids(db, body.network_ids)
     g = RecipientGroup(
         name=name, enabled=body.enabled, is_default=False,
-        event_types=types, min_severity=min_sev, network_ids=body.network_ids or None,
+        event_types=types, min_severity=min_sev, network_ids=net_ids,
         delivery_mode=mode, digest_time=digest,
         max_per_hour=body.max_per_hour, dedupe_seconds=body.dedupe_seconds,
         quiet_start=qs, quiet_end=qe, quiet_bypass_critical=body.quiet_bypass_critical,
@@ -257,11 +325,10 @@ def create_group(body: GroupIn, request: Request, db: Session = Depends(get_db),
     _apply_destinations(db, g, body.destinations)
     audit(db, user.username, "recipient_group.create", g.name, {"id": g.id, "mode": mode}, client_ip(request))
     db.commit()
-    db.refresh(g)
     g = db.scalar(
         select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations))
     )
-    return _out(g)
+    return _out(g, _network_names(db, g.network_ids))
 
 
 @router.patch("/{group_id}")
@@ -286,6 +353,8 @@ def patch_group(
         name=name, min_severity=min_sev, delivery_mode=mode, event_types=types,
         digest_time=digest, quiet_start=qs, quiet_end=qe,
     )
+    if "destinations" in data and body.destinations is not None:
+        _require_destinations(body.destinations, allow_empty_disabled=not data.get("enabled", g.enabled))
     g.name = name
     if "enabled" in data:
         g.enabled = data["enabled"]
@@ -296,7 +365,7 @@ def patch_group(
     g.quiet_start = qs
     g.quiet_end = qe
     if "network_ids" in data:
-        g.network_ids = data["network_ids"] or None
+        g.network_ids = _validate_network_ids(db, data["network_ids"])
     if "max_per_hour" in data:
         g.max_per_hour = data["max_per_hour"]
     if "dedupe_seconds" in data:
@@ -311,7 +380,7 @@ def patch_group(
     g = db.scalar(
         select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations))
     )
-    return _out(g)
+    return _out(g, _network_names(db, g.network_ids))
 
 
 @router.delete("/{group_id}", status_code=204)

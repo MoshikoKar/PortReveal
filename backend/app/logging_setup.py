@@ -85,6 +85,14 @@ def setup_logging() -> None:
         root.addHandler(fh)
     except OSError as exc:
         root.warning("file logging disabled: %s", exc)
-    for noisy in ("uvicorn.access", "sqlalchemy.engine", "watchfiles", "alembic.runtime.migration"):
+    # httpx/httpcore log full request URLs at INFO (Slack/Teams webhook tokens live in the path).
+    for noisy in (
+        "uvicorn.access",
+        "sqlalchemy.engine",
+        "watchfiles",
+        "alembic.runtime.migration",
+        "httpx",
+        "httpcore",
+    ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     _configured = True

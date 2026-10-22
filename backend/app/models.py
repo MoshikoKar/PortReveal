@@ -818,6 +818,8 @@ class RecipientGroup(Base):
     # Rate-cap bookkeeping (local hour bucket YYYYMMDDHH)
     rate_hour_bucket: Mapped[str | None] = mapped_column(String(10))
     rate_sent: Mapped[int] = mapped_column(Integer, default=0)
+    # Local YYYY-MM-DD of last successful daily digest flush for this group.
+    last_digest_on: Mapped[str | None] = mapped_column(String(10))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
@@ -850,6 +852,7 @@ class RecipientHold(Base):
     __tablename__ = "recipient_holds"
     __table_args__ = (
         Index("ix_recipient_holds_group_created", "group_id", "created_at"),
+        Index("ix_recipient_holds_next_attempt", "next_attempt_at"),
         UniqueConstraint("group_id", "event_id", name="uq_recipient_hold_event"),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -857,6 +860,8 @@ class RecipientHold(Base):
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
     reason: Mapped[str] = mapped_column(String(40))  # digest | hourly | rate_cap | quiet | dedupe
     dedupe_key: Mapped[str | None] = mapped_column(String(200), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 

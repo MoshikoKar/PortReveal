@@ -376,9 +376,16 @@ def put_notifications(body: NotificationIn, request: Request, db: Session = Depe
         cfg = NotificationSettings.model_validate(data)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    if cfg.enabled and (not cfg.smtp_host or not cfg.recipients):
-        raise HTTPException(422, "SMTP host and at least one recipient are required to enable notifications")
+    # Recipients live on recipient groups; SMTP enablement only requires a host.
+    if cfg.enabled and not cfg.smtp_host:
+        raise HTTPException(422, "SMTP host is required to enable email notifications")
     put_section(db, cfg)
+    # Keep the default recipient group's enabled flag in sync with the master email switch.
+    if body.enabled is not None:
+        from ..models import RecipientGroup
+        default = db.scalar(select(RecipientGroup).where(RecipientGroup.is_default.is_(True)))
+        if default is not None:
+            default.enabled = bool(body.enabled)
     audit(
         db,
         user.username,

@@ -738,7 +738,7 @@ def test_notifications_tabs_and_webhook_crud(live_app, browser):
 
         nav = page.get_by_role("navigation", name="Notification settings")
         for link_name, section, heading in (
-            ("Email", "email", "Email digest"),
+            ("Email", "email", "Email"),
             ("Recipients", "recipients", "Recipients"),
             ("Webhooks", "webhooks", "Webhooks"),
             ("CVE Watchlist", "cve-watchlist", "CVE watchlist alerts"),

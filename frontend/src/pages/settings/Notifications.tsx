@@ -171,12 +171,11 @@ function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) 
   );
 }
 
-// --- Email -------------------------------------------------------------------
+// --- Email (SMTP only; recipients live on the Recipients tab) ----------------
 function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const res = useApi<NotificationSettings>('/settings/notifications');
   const [form, setForm] = useState<NotificationSettings | null>(null);
   const [password, setPassword] = useState<string | null>(null);
-  const [recipientsText, setRecipientsText] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testTo, setTestTo] = useState('');
@@ -185,46 +184,37 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
 
   useEffect(() => { if (res.data) setForm(res.data); }, [res.data]);
 
-  const recipientsDirty = recipientsText !== null && recipientsText !== (form?.recipients ?? []).join('\n');
   const formDirty = !!form && !!res.data && JSON.stringify({
-    ...form, available_event_types: undefined, always_notify_types: undefined, password_set: undefined,
-    watchlist_email_enabled: undefined, watchlist_webhooks_enabled: undefined, webhooks_enabled: undefined,
+    smtp_host: form.smtp_host, smtp_port: form.smtp_port, security: form.security,
+    username: form.username, sender: form.sender, enabled: form.enabled,
   }) !== JSON.stringify({
-    ...res.data, available_event_types: undefined, always_notify_types: undefined, password_set: undefined,
-    watchlist_email_enabled: undefined, watchlist_webhooks_enabled: undefined, webhooks_enabled: undefined,
+    smtp_host: res.data.smtp_host, smtp_port: res.data.smtp_port, security: res.data.security,
+    username: res.data.username, sender: res.data.sender, enabled: res.data.enabled,
   });
-  const dirty = formDirty || password !== null || recipientsDirty;
+  const dirty = formDirty || password !== null;
   useReportDirty(dirty, onDirtyChange);
 
   if (!form) return <Card title="Email"><ErrorBox error={res.error} /><Loading /></Card>;
 
-  const always = new Set(form.always_notify_types || []);
-  const recipients = recipientsText ?? form.recipients.join('\n');
   const set = (patch: Partial<NotificationSettings>) => setForm({ ...form, ...patch });
-
-  const body = () => ({
-    enabled: form.enabled,
-    smtp_host: form.smtp_host,
-    smtp_port: form.smtp_port,
-    security: form.security,
-    username: form.username,
-    ...(password !== null ? { password } : {}),
-    sender: form.sender,
-    recipients: recipients.split(/[\s,;]+/).filter(Boolean),
-    event_types: form.event_types,
-    digest_time: form.digest_time,
-  });
 
   const save = async () => {
     if (saving) return;
     setSaving(true);
     setMsg(null);
     try {
-      const out = await put<NotificationSettings>('/settings/notifications', body());
+      const out = await put<NotificationSettings>('/settings/notifications', {
+        enabled: form.enabled,
+        smtp_host: form.smtp_host,
+        smtp_port: form.smtp_port,
+        security: form.security,
+        username: form.username,
+        sender: form.sender,
+        ...(password !== null ? { password } : {}),
+      });
       res.setData(out);
       setForm(out);
       setPassword(null);
-      setRecipientsText(null);
       setMsg({ ok: true, text: 'Saved.' });
     } catch (e: any) {
       setMsg({ ok: false, text: e.message });
@@ -234,19 +224,20 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   };
 
   const testConnection = async () => {
+    if (!testTo.trim()) {
+      setTestMsg({ ok: false, text: 'Enter a test recipient address.' });
+      return;
+    }
     setTestMsg(null);
     setTesting(true);
     try {
-      // Send on-screen SMTP values without persisting; omit password to use the stored one.
       const r = await post<{ ok: boolean; message: string }>('/settings/notifications/test', {
         smtp_host: form.smtp_host,
         smtp_port: form.smtp_port,
         security: form.security,
         username: form.username,
         sender: form.sender,
-        ...(testTo
-          ? { recipient: testTo }
-          : { recipients: recipients.split(/[\s,;]+/).filter(Boolean) }),
+        recipient: testTo.trim(),
         ...(password !== null ? { password } : {}),
       });
       setTestMsg({ ok: r.ok, text: r.message });
@@ -257,20 +248,12 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
     }
   };
 
-  const toggleType = (t: EventType, on: boolean) => {
-    if (always.has(t)) return;
-    set({
-      event_types: on
-        ? [...new Set([...form.event_types, t])]
-        : form.event_types.filter((x) => x !== t),
-    });
-  };
-
   return (
-    <Card title="Email digest">
+    <Card title="Email">
       <div className="stack">
         <div className="muted small">
-          One categorized HTML summary per day via an internal SMTP relay (default port 25, no authentication).
+          SMTP relay used by recipient groups and CVE watchlist email. Audience addresses and digest
+          schedules live on the <strong>Recipients</strong> tab.
         </div>
         <div className="form-grid">
           <label className="field">SMTP host / IP
@@ -301,61 +284,16 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
         </div>
         <label className="check">
           <input type="checkbox" checked={form.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
-          Send email notifications
+          Enable SMTP (also toggles the default Email digest group)
         </label>
-        <label className="field">Legacy digest recipients
-          <textarea rows={3} value={recipients} onChange={(e) => setRecipientsText(e.target.value)}
-            placeholder={'it-team@example.com\nsoc@example.com'} />
-          <span className="hint">
-            One address per line. Prefer the Recipients tab for per-audience channels; this list still drives the
-            legacy daily digest and is copied into the default group on upgrade.
-          </span>
-        </label>
-        <label className="field">Daily summary time (HH:MM)
-          <input type="time" value={form.digest_time} onChange={(e) => set({ digest_time: e.target.value })} />
-          <span className="hint">Server-local time. Pending alert events since the last send are grouped into one HTML email.</span>
-        </label>
-
-        <div className="field">
-          <span>Digest event types</span>
-          <div className="stack" style={{ gap: 10, marginTop: 6 }}>
-            {EVENT_CATEGORIES.map((cat) => {
-              const types = cat.types.filter((t) => form.available_event_types.includes(t) || always.has(t));
-              if (!types.length) return null;
-              const selected = types.filter((t) => always.has(t) || form.event_types.includes(t)).length;
-              return (
-                <details key={cat.title} className="notif-explain">
-                  <summary>{cat.title}{selected ? ` (${selected} selected)` : ''}</summary>
-                  <div className="row wrap" style={{ gap: 14, marginTop: 8 }}>
-                    {types.map((t) => {
-                      const locked = always.has(t);
-                      const checked = locked || form.event_types.includes(t);
-                      return (
-                        <label key={t} className="check small" title={locked ? 'Always included in the digest' : undefined}>
-                          <input type="checkbox" checked={checked} disabled={locked}
-                            onChange={(e) => toggleType(t, e.target.checked)} />
-                          {EVENT_LABELS[t]}
-                          {locked && <span className="hint"> (always included)</span>}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </details>
-              );
-            })}
-          </div>
-          <span className="hint" style={{ marginTop: 8, display: 'block' }}>
-            Watch matches, policy violations, monitor changes, and CVE watchlist matches are always included in the
-            digest when they have not already been emailed immediately. Other types are optional.
-          </span>
-        </div>
-
         <Msg msg={msg} />
         {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
         <div className="row wrap">
-          <button className="btn primary" onClick={save} disabled={saving || testing}>{saving ? 'Saving…' : 'Save'}</button>
-          <input type="email" placeholder="test recipient (default: all recipients)" value={testTo}
-            onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 260 }} />
+          <button className="btn primary" onClick={save} disabled={saving || testing || !dirty}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <input type="email" placeholder="test recipient" value={testTo}
+            onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 220 }} />
           <button className="btn" onClick={testConnection} disabled={!form.smtp_host || saving || testing}>
             {testing ? 'Testing…' : 'Test connection'}
           </button>
@@ -478,13 +416,17 @@ function groupSnapshot(d: GroupDraft) {
   };
 }
 
-function deliveryStatus(g: RecipientGroup): string {
+function deliveryStatusLine(g: RecipientGroup): { text: string; tone: 'ok' | 'warn' | 'muted'; title?: string } {
   if (g.last_error) {
     const when = g.last_error_at ? ` · ${relTime(g.last_error_at)}` : '';
-    return `Error${when}: ${g.last_error.slice(0, 80)}`;
+    return {
+      text: `${g.last_error_friendly || 'Delivery failed'}${when}`,
+      tone: 'warn',
+      title: g.last_error,
+    };
   }
-  if (g.last_success_at) return `Last delivery ${relTime(g.last_success_at)}`;
-  return 'No deliveries yet';
+  if (g.last_success_at) return { text: `Last delivery ${relTime(g.last_success_at)}`, tone: 'ok' };
+  return { text: 'No deliveries yet', tone: 'muted' };
 }
 
 function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
@@ -695,14 +637,28 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
                     <strong>{g.name}</strong>
                     {g.is_default && <span className="badge">Default</span>}
                     <span className="badge muted">{g.delivery_mode}</span>
+                    {(g.destination_kinds || []).map((k) => (
+                      <span key={k} className="badge muted" title={k}>{k}</span>
+                    ))}
                   </div>
                   <div className="muted small" data-testid="group-summary">{g.summary}</div>
-                  <div className="small" style={{ color: g.last_error ? 'var(--danger)' : 'var(--text-2)' }}>
+                  <div className="small">
                     {testResult?.id === g.id ? (
                       <span className={testResult.result.ok ? 'ok' : 'error'}>
                         Test: {testResult.result.ok ? 'OK' : (testResult.result.error || 'failed')}
                       </span>
-                    ) : deliveryStatus(g)}
+                    ) : (() => {
+                      const st = deliveryStatusLine(g);
+                      return (
+                        <span
+                          className={st.tone === 'warn' ? 'recipient-status-error' : undefined}
+                          style={{ color: st.tone === 'warn' ? 'var(--danger)' : 'var(--text-2)' }}
+                          title={st.title}
+                        >
+                          {st.text}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
                 <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
@@ -769,8 +725,9 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
               Enabled
             </label>
 
+            <h3 className="recipient-section-title">WHAT</h3>
             <div className="field">
-              <span>What — event types</span>
+              <span>Event types</span>
               <span className="hint" style={{ display: 'block', marginBottom: 6 }}>
                 Leave all unchecked to include every type (still alert-only).
               </span>
@@ -828,8 +785,9 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
               </div>
             </div>
 
+            <h3 className="recipient-section-title">HOW</h3>
             <div className="field">
-              <span>How — destinations</span>
+              <span>Destinations</span>
               <div className="row wrap" style={{ gap: 6, marginBottom: 8 }}>
                 <button type="button" className="btn sm" onClick={() => addDestination('email')}>+ Email</button>
                 <button type="button" className="btn sm" onClick={() => addDestination('webhook')}>+ Webhook</button>
@@ -900,17 +858,18 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
               ))}
             </div>
 
-            <label className="field">When — delivery
+            <h3 className="recipient-section-title">WHEN</h3>
+            <label className="field">Delivery
               <select
                 value={draft.delivery_mode}
                 onChange={(e) => setDraft({ ...draft, delivery_mode: e.target.value as RecipientDeliveryMode })}
               >
                 <option value="daily">Daily digest (recommended)</option>
                 <option value="hourly">Hourly batch</option>
-                <option value="immediate">Immediate (critical / CVE only)</option>
+                <option value="immediate">Immediate</option>
               </select>
               {draft.delivery_mode === 'immediate' && (
-                <span className="hint">Recommended only for critical events and the CVE watchlist.</span>
+                <span className="hint">Recommended for Critical / CVE watchlist only. Events in one delivery round are batched into a single message per destination.</span>
               )}
             </label>
             {draft.delivery_mode === 'daily' && (
@@ -923,49 +882,59 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
               </label>
             )}
 
-            <div className="form-grid">
-              <label className="field">Max messages / hour
-                <input
-                  type="number"
-                  min={1}
-                  max={500}
-                  value={draft.max_per_hour}
-                  onChange={(e) => setDraft({ ...draft, max_per_hour: Number(e.target.value) || 1 })}
-                />
-                <span className="hint">Overflow rolls into the next digest.</span>
-              </label>
-              <label className="field">Dedupe window (seconds)
-                <input
-                  type="number"
-                  min={0}
-                  max={86400}
-                  value={draft.dedupe_seconds}
-                  onChange={(e) => setDraft({ ...draft, dedupe_seconds: Number(e.target.value) || 0 })}
-                />
-              </label>
-              <label className="field">Quiet hours start
-                <input
-                  type="time"
-                  value={draft.quiet_start}
-                  onChange={(e) => setDraft({ ...draft, quiet_start: e.target.value })}
-                />
-              </label>
-              <label className="field">Quiet hours end
-                <input
-                  type="time"
-                  value={draft.quiet_end}
-                  onChange={(e) => setDraft({ ...draft, quiet_end: e.target.value })}
-                />
-              </label>
-            </div>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={draft.quiet_bypass_critical}
-                onChange={(e) => setDraft({ ...draft, quiet_bypass_critical: e.target.checked })}
-              />
-              Critical / CVE watchlist may bypass quiet hours
-            </label>
+            <h3 className="recipient-section-title">HOW MUCH</h3>
+            <details className="notif-explain">
+              <summary>Advanced (rate cap, dedupe{(draft.delivery_mode === 'daily') ? '' : ', quiet hours'})</summary>
+              <div className="form-grid" style={{ marginTop: 10 }}>
+                <label className="field">Max messages / hour
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={draft.max_per_hour}
+                    onChange={(e) => setDraft({ ...draft, max_per_hour: Number(e.target.value) || 1 })}
+                  />
+                  <span className="hint">Overflow rolls into the next digest.</span>
+                </label>
+                <label className="field">Dedupe window (seconds)
+                  <input
+                    type="number"
+                    min={0}
+                    max={86400}
+                    value={draft.dedupe_seconds}
+                    onChange={(e) => setDraft({ ...draft, dedupe_seconds: Number(e.target.value) || 0 })}
+                  />
+                </label>
+                {(draft.delivery_mode === 'immediate' || draft.delivery_mode === 'hourly') && (
+                  <>
+                    <label className="field">Quiet hours start
+                      <input
+                        type="time"
+                        value={draft.quiet_start}
+                        onChange={(e) => setDraft({ ...draft, quiet_start: e.target.value })}
+                      />
+                    </label>
+                    <label className="field">Quiet hours end
+                      <input
+                        type="time"
+                        value={draft.quiet_end}
+                        onChange={(e) => setDraft({ ...draft, quiet_end: e.target.value })}
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+              {(draft.delivery_mode === 'immediate' || draft.delivery_mode === 'hourly') && (
+                <label className="check" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={draft.quiet_bypass_critical}
+                    onChange={(e) => setDraft({ ...draft, quiet_bypass_critical: e.target.checked })}
+                  />
+                  Critical / CVE watchlist may bypass quiet hours
+                </label>
+              )}
+            </details>
 
             <ErrorBox error={saveError} />
           </div>
@@ -1183,7 +1152,14 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
             <tbody>
               {data.map((h) => (
                 <tr key={h.id} className={!h.enabled ? 'dim' : undefined}>
-                  <td><strong>{h.name}</strong></td>
+                  <td>
+                    <strong>{h.name}</strong>
+                    {h.group_managed && (
+                      <span className="badge muted" style={{ marginLeft: 6 }} title="Receives only events routed by a recipient group">
+                        Group
+                      </span>
+                    )}
+                  </td>
                   <td className="mono small">{urlHost(h.url)}</td>
                   <td>
                     <label className="check small">

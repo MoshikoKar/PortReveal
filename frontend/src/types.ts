@@ -615,6 +615,8 @@ export interface WebhookEndpoint {
   has_secret: boolean;
   event_types: EventType[];
   include_record_events: boolean;
+  /** Attached to a recipient group — only receives that group's routed events. */
+  group_managed: boolean;
   created_at: string;
   last_success_at: string | null;
   last_error: string | null;
@@ -653,12 +655,14 @@ export interface RecipientGroup {
   quiet_end: string | null;
   quiet_bypass_critical: boolean;
   summary: string;
+  destination_kinds: string[];
   destinations: RecipientDestination[];
   created_at: string;
   updated_at: string;
   last_success_at: string | null;
   last_error: string | null;
   last_error_at: string | null;
+  last_error_friendly: string | null;
 }
 
 export interface RecipientGroupTestResult {
