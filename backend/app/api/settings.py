@@ -154,6 +154,11 @@ def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     put_section(db, cfg)
+    # Display-floor / potential settings change which findings the summary counts — bust cache now
+    # so /api/vulns/summary does not lag the list for up to the 30s TTL.
+    from ..core.vuln.summary import invalidate_vuln_summary_cache
+
+    invalidate_vuln_summary_cache()
     audit(
         db,
         user.username,

@@ -1,20 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { downloadBlob, query } from '../api';
+import { downloadBlob, get, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
 import { FINDING_DESC_FIRST, FINDING_SORTS, VulnFindingsTable, type FindingSort } from '../components/VulnFindingsTable';
 import { VulnHeatmap } from '../components/VulnHeatmap';
+import { VulnPrintReport } from '../components/VulnPrintReport';
 import { VulnTopLists } from '../components/VulnTopLists';
 import { VulnRiskTrend, VulnSeverityTrend, VulnTrend } from '../components/VulnTrend';
 import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
-import type { VulnSummary } from '../types';
+import type { Network, Paged, VulnFindingListItem, VulnSummary } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
 import {
   applyVulnSearchQ, buildVulnQuery, clearVulnFilters, formatVulnFilterChip, liveSearchParams,
   clearVulnFindingsHash, parseVulnFilters, scrollToVulnFindings, setVulnFilter,
-  shouldResyncVulnQInput, shouldScrollVulnFindingsHash, toggleHeatmapCell, toggleVulnFilter,
-  toggleVendorProductFilter, withPendingVulnSearchQ, VULN_FILTER_KEYS,
-  type VulnFilterKey, type VulnFilters,
+  shouldResyncVulnQInput, shouldScrollVulnFindingsHash, toggleHeatmapCell,
+  toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter, withPendingVulnSearchQ,
+  vulnExportFilename, VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
 } from '../vulnFilters';
 
 /** Merge optimistic filters into the current URL (keeps page/sort until applySp drops page). */
@@ -32,9 +33,22 @@ const SEVERITY_COLOR: Record<string, string> = {
   critical: 'var(--high)', high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)',
 };
 
-function labelContextFromSummary(summary: VulnSummary | null | undefined) {
+const REPORT_PAGE_SIZE = 500;
+
+/** Stable key for the summary query so print can wait for the matching response. */
+function summaryFilterKey(filters: VulnFilters, q: string, onlyHidden: boolean): string {
+  return query(buildVulnQuery(filters, {
+    q: q || undefined,
+    only_hidden: q && onlyHidden ? 'true' : undefined,
+  }));
+}
+
+function labelContextFromSummary(summary: VulnSummary | null | undefined, networks: Network[] | null | undefined) {
   const networkNames: Record<string, string> = {};
   const deviceLabels: Record<string, string> = {};
+  for (const n of networks ?? []) {
+    networkNames[String(n.id)] = n.name;
+  }
   if (!summary) return { networkNames, deviceLabels };
   for (const b of summary.facets.network) {
     networkNames[String(b.key)] = b.label ?? String(b.key);
@@ -52,6 +66,37 @@ function labelContextFromSummary(summary: VulnSummary | null | undefined) {
   return { networkNames, deviceLabels };
 }
 
+/** Fetch every finding matching the active filters (for print/PDF), paging at the API max. */
+async function fetchAllFindings(
+  filters: VulnFilters, q: string, onlyHidden: boolean,
+): Promise<VulnFindingListItem[]> {
+  const items: VulnFindingListItem[] = [];
+  let page = 1;
+  let total = Infinity;
+  while (items.length < total) {
+    const body = await get<Paged<VulnFindingListItem>>(
+      '/vulns',
+      buildVulnQuery(filters, {
+        page, page_size: REPORT_PAGE_SIZE, sort: 'risk',
+        q: q || undefined,
+        only_hidden: q && onlyHidden ? 'true' : undefined,
+      }),
+    );
+    total = body.total;
+    items.push(...body.items);
+    if (!body.items.length) break;
+    page += 1;
+    if (page > 100) break; // hard stop: 50k rows
+  }
+  return items;
+}
+
+const waitForPrintPaint = () => new Promise<void>((resolve) => {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => resolve());
+  });
+});
+
 export default function Vulnerabilities() {
   const [sp, setSp] = useSearchParams();
   const searchKey = sp.toString();
@@ -64,8 +109,6 @@ export default function Vulnerabilities() {
   const page = Number(sp.get('page') || 1);
   const q = sp.get('q') ?? '';
   const onlyHidden = sp.get('only_hidden') === '1';
-  // Local input + debounce into URL. Do NOT sync q→qInput on every URL write (that drops keystrokes);
-  // only resync when URL q changed externally (back/forward/link).
   const [qInput, setQInput] = useState(q);
   const lastWrittenQ = useRef(q);
   const searchDebounceRef = useRef<number | null>(null);
@@ -75,7 +118,6 @@ export default function Vulnerabilities() {
       searchDebounceRef.current = null;
     }
   };
-  /** Write trimmed q onto the live address-bar params (RR's setSp(prev=>) snapshot is stale). */
   const commitSearchQ = (raw: string) => {
     const trimmed = raw.trim();
     const next = applyVulnSearchQ(liveSearchParams(), trimmed);
@@ -99,7 +141,6 @@ export default function Vulnerabilities() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qInput]);
 
-  // First keystroke of a new search scrolls the findings table into view.
   const wasSearching = useRef(Boolean(q));
   useEffect(() => {
     const nowSearching = Boolean(qInput.trim());
@@ -107,10 +148,47 @@ export default function Vulnerabilities() {
     wasSearching.current = nowSearching;
   }, [qInput]);
 
-  const { data, error, reload } = useApi<VulnSummary>('/vulns/summary', undefined, 30000);
+  const summaryParams = useMemo(
+    () => buildVulnQuery(filters, {
+      q: q || undefined,
+      only_hidden: q && onlyHidden ? 'true' : undefined,
+    }),
+    [filters, q, onlyHidden],
+  );
+  const wantedSummaryKey = useMemo(
+    () => summaryFilterKey(filters, q, onlyHidden),
+    [filters, q, onlyHidden],
+  );
+  const { data, error, reload, loading: summaryLoading } = useApi<VulnSummary>(
+    '/vulns/summary', summaryParams, 30000,
+  );
+  // useApi keeps the previous payload while a new filter fetch is in flight — track which
+  // filter key the current `data` actually belongs to so print cannot pair network-B findings
+  // with an all-networks (or network-A) summary.
+  const [loadedSummaryKey, setLoadedSummaryKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (summaryLoading) {
+      setLoadedSummaryKey(null);
+      return;
+    }
+    if (data) setLoadedSummaryKey(wantedSummaryKey);
+  }, [summaryLoading, data, wantedSummaryKey]);
+  const summaryReady = !!data && !summaryLoading && loadedSummaryKey === wantedSummaryKey;
+
+  const networks = useApi<Network[]>('/networks');
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const labelCtx = useMemo(() => labelContextFromSummary(data), [data]);
+  const [printFindings, setPrintFindings] = useState<VulnFindingListItem[]>([]);
+  const [printLoading, setPrintLoading] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [pendingPrint, setPendingPrint] = useState(() => sp.get('print') === '1');
+  const printInFlight = useRef(false);
+  const labelCtx = useMemo(() => labelContextFromSummary(data, networks.data), [data, networks.data]);
+
+  useEffect(() => {
+    if (sp.get('print') === '1') setPendingPrint(true);
+  }, [searchKey, sp]);
 
   // Deep links from the watchlist (`?cve_id=…#vuln-findings`): scroll once per arrival, then drop
   // the hash so the 30s /vulns/summary poll does not jump the page back to findings.
@@ -131,16 +209,13 @@ export default function Vulnerabilities() {
   }, [searchKey, data]);
 
   const applySp = (next: URLSearchParams, scroll = true) => {
-    // Cancel pending debounce so a late timer cannot rewrite this navigation with a stale snapshot.
     cancelSearchDebounce();
-    // Keep in-progress (not-yet-debounced) search text so facet clicks don't drop typed q.
     const withQ = withPendingVulnSearchQ(next, qInput);
     lastWrittenQ.current = qInput.trim();
     setFilters(parseVulnFilters(withQ));
     setSp(withQ);
     if (scroll) scrollToVulnFindings();
   };
-  // Build facet updates from the live address bar + optimistic filters (not a stale RR snapshot).
   const liveSp = () => spWithFilters(liveSearchParams(), filters);
   const toggle = (key: VulnFilterKey, value: string) => applySp(toggleVulnFilter(liveSp(), key, value));
   const set = (key: VulnFilterKey, value: string | undefined, scroll = true) =>
@@ -163,8 +238,6 @@ export default function Vulnerabilities() {
     setSp(next, { replace: true });
   };
   const clearAll = () => {
-    // Do not route through applySp: setQInput is async and withPendingVulnSearchQ would
-    // re-commit the pre-clear search text from this render's closure.
     cancelSearchDebounce();
     lastWrittenQ.current = '';
     setQInput('');
@@ -185,7 +258,6 @@ export default function Vulnerabilities() {
   const activeFilters = Object.entries(filters) as [VulnFilterKey, string][];
   const hasSearch = Boolean(q);
   const showFilterBar = activeFilters.length > 0 || hasSearch || onlyHidden;
-  // Findings sort lives in the URL next to the filters (filter helpers keep it, and drop only `page`).
   const sortKey: FindingSort = FINDING_SORTS.find((k) => k === sp.get('sort')) ?? 'risk';
   const findingSort = { key: sortKey, desc: sp.get('order') === 'desc' };
   const setFindingSort = (key: FindingSort) => {
@@ -211,9 +283,9 @@ export default function Vulnerabilities() {
       await downloadBlob(
         `/vulns/export${query(buildVulnQuery(filters, {
           q: q || undefined,
-          only_hidden: onlyHidden ? 'true' : undefined,
+          only_hidden: q && onlyHidden ? 'true' : undefined,
         }))}`,
-        `portreveal-vulns-${new Date().toISOString().slice(0, 10)}.csv`,
+        vulnExportFilename(filters, labelCtx),
       );
     } catch (e: unknown) {
       setExportError(e instanceof Error ? e.message : 'Export failed.');
@@ -222,14 +294,99 @@ export default function Vulnerabilities() {
     }
   };
 
+  const prepareReport = useCallback(async () => {
+    setPrintError(null);
+    setPrintLoading(true);
+    try {
+      const rows = await fetchAllFindings(filters, q, onlyHidden);
+      setPrintFindings(rows);
+      return true;
+    } catch (e: unknown) {
+      setPrintError(e instanceof Error ? e.message : 'Could not prepare the print report.');
+      return false;
+    } finally {
+      setPrintLoading(false);
+    }
+  }, [filters, q, onlyHidden]);
+
+  const printReport = useCallback(async () => {
+    // Wait for the summary that matches the current filters (not a stale all-networks payload).
+    if (!summaryReady) {
+      setPendingPrint(true);
+      return;
+    }
+    if (printInFlight.current) return;
+    printInFlight.current = true;
+    try {
+      const ok = await prepareReport();
+      if (!ok) return;
+      await waitForPrintPaint();
+      window.print();
+    } finally {
+      printInFlight.current = false;
+    }
+  }, [summaryReady, prepareReport]);
+
+  const openPreview = useCallback(async () => {
+    if (!summaryReady) {
+      setPrintError('Wait for the summary to finish loading for the current filters.');
+      return;
+    }
+    const ok = await prepareReport();
+    if (ok) setPreviewOpen(true);
+  }, [summaryReady, prepareReport]);
+
+  useEffect(() => {
+    if (!pendingPrint || !summaryReady) return;
+    let alive = true;
+    setPrintError(null);
+    setPrintLoading(true);
+    (async () => {
+      try {
+        const rows = await fetchAllFindings(filters, q, onlyHidden);
+        if (!alive) return;
+        setPrintFindings(rows);
+        setPrintLoading(false);
+        await waitForPrintPaint();
+        if (!alive) return;
+        window.print();
+        if (sp.get('print') === '1') {
+          const next = new URLSearchParams(sp);
+          next.delete('print');
+          setSp(next, { replace: true });
+        }
+      } catch (e: unknown) {
+        if (alive) {
+          setPrintError(e instanceof Error ? e.message : 'Could not prepare the print report.');
+          setPrintLoading(false);
+        }
+      } finally {
+        if (alive) setPendingPrint(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pendingPrint, summaryReady, filters, q, onlyHidden, sp, setSp]);
+
   const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
   const epssPct = data ? Math.round(data.epss_threshold * 100) : 0;
   const epssValue = data ? String(data.epss_threshold) : '0.1';
+  const networkSelectValue = filters.network_id ?? '';
+  const hasUnassigned = (data?.facets.network ?? []).some((b) => String(b.key) === 'unassigned');
+  const networkActive = !!networkSelectValue;
+  const networkLabel = networkSelectValue
+    ? (labelCtx.networkNames[networkSelectValue]
+      ?? (networkSelectValue === 'unassigned' ? 'Unassigned' : `Network ${networkSelectValue}`))
+    : 'All networks';
+  const filtered = activeFilters.length > 0 || hasSearch;
+  const snapshotNote = data?.snapshot_trend_note ?? null;
+  const printDisabled = printLoading || pendingPrint || !summaryReady;
 
   return (
     <>
-      <div className="page-head">
+      <div className="page-head no-print">
         <div>
           <h1>Vulnerabilities</h1>
           <p>
@@ -238,12 +395,37 @@ export default function Vulnerabilities() {
             own severity label. CVEs with no score in the cache are shown as unscored.
           </p>
         </div>
-        <div className="row wrap gap-2 no-print">
+        <div className="row wrap gap-2" style={{ alignItems: 'center' }}>
+          <label
+            className={`vuln-network-select ${networkActive ? 'active' : ''}`}
+            title="Scope the dashboard and reports to one network"
+          >
+            <span className="vuln-network-select-label">Network</span>
+            <select
+              aria-label={`Network filter: ${networkLabel}`}
+              value={networkSelectValue}
+              onChange={(e) => set('network_id', e.target.value || undefined, false)}
+            >
+              <option value="">All networks</option>
+              {hasUnassigned && <option value="unassigned">Unassigned</option>}
+              {(networks.data ?? []).map((n) => (
+                <option key={n.id} value={String(n.id)}>{n.name}</option>
+              ))}
+            </select>
+          </label>
           <Link className="btn" to="/vulnerabilities/watchlist">CVE Watchlist</Link>
           <button type="button" className="btn" disabled={exporting} onClick={() => { void exportCsv(); }}>
             {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
-          <button type="button" className="btn" onClick={() => window.print()}>Print report</button>
+          <button type="button" className="btn" disabled={printDisabled || !summaryReady}
+            onClick={() => { void openPreview(); }}>
+            {printLoading && !previewOpen ? 'Preparing…' : 'Preview'}
+          </button>
+          <button type="button" className="btn" disabled={printDisabled}
+            title={!summaryReady ? 'Waiting for summary to match the current filters…' : undefined}
+            onClick={() => { void printReport(); }}>
+            {printLoading || pendingPrint || !summaryReady ? 'Preparing…' : 'Print / PDF report'}
+          </button>
         </div>
       </div>
 
@@ -273,18 +455,13 @@ export default function Vulnerabilities() {
             </span>
           )}
         </div>
-        {hasSearch && (
-          <p className="muted small" style={{ margin: '8px 0 0' }}>
-            Cards and charts above are not filtered by this search - only the findings table is.
-          </p>
-        )}
       </div>
 
       {exportError && <div className="alert error no-print">{exportError}</div>}
+      {printError && <div className="alert error no-print">{printError}</div>}
       <ErrorBox error={error} />
-      {/* Chips stay outside the summary loading gate so filter state paints immediately on click. */}
       {showFilterBar && (
-        <div className="row wrap gap-2">
+        <div className="row wrap gap-2 no-print">
           <span className="muted small">Filters:</span>
           {hasSearch && (
             <button type="button" className="btn sm toggle on" aria-pressed="true" title="Clear search"
@@ -307,11 +484,40 @@ export default function Vulnerabilities() {
           <button type="button" className="btn sm ghost" onClick={clearAll}>Clear all</button>
         </div>
       )}
+
+      {previewOpen && (
+        <div className="vuln-print-preview no-print" role="region" aria-label="Report preview">
+          <div className="row wrap gap-2" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+            <strong>Report preview</strong>
+            <div className="row gap-2">
+              <button type="button" className="btn" disabled={printLoading}
+                onClick={() => { window.print(); }}>
+                Print / PDF
+              </button>
+              <button type="button" className="btn ghost" onClick={() => setPreviewOpen(false)}>
+                Close preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <VulnPrintReport
+        filters={filters}
+        labelCtx={labelCtx}
+        summary={summaryReady ? data : null}
+        findings={printFindings}
+        loading={printLoading}
+        error={printError}
+        preview={previewOpen}
+        searchQ={q || undefined}
+        onlyHidden={onlyHidden}
+      />
+
+      <div className="vuln-screen no-print">
       {!data ? (!error && <Loading />) : (
         <>
-          {/* Five columns: KEV + severities on the first row, the remaining figures on the second. */}
           <div className="grid kpis five">
-            {/* First tile as the most urgent figure; value tinted red when any KEV findings exist. */}
             <Kpi label="Actively exploited (CISA KEV)"
               value={<span style={{ color: data.kev_count > 0 ? 'var(--high)' : undefined }}>{data.kev_count}</span>}
               sub="Known to be exploited in the wild - the most urgent findings."
@@ -333,7 +539,10 @@ export default function Vulnerabilities() {
               sub="FIRST.org exploitation-probability score"
               active={filters.epss_min === epssValue}
               onClick={() => toggle('epss_min', epssValue)} />
-            <Kpi label="High-risk devices" value={risk.high} sub={`${risk.medium} medium · ${risk.low} low`}
+            <Kpi label="High-risk devices" value={risk.high}
+              sub={filtered
+                ? `Among matching findings · ${risk.medium} medium · ${risk.low} low`
+                : `${risk.medium} medium · ${risk.low} low`}
               color={risk.high ? 'var(--high)' : undefined}
               active={filters.risk_band === 'high'} onClick={() => toggle('risk_band', 'high')} />
             <Kpi label="Confirmed findings" value={data.confirmed_count}
@@ -342,7 +551,6 @@ export default function Vulnerabilities() {
               active={filters.state === 'potential'} onClick={() => toggle('state', 'potential')} />
           </div>
 
-          {/* One status line rather than a card: the API only exposes the oldest/newest enabled-source sync. */}
           <div className="row wrap gap-2 small muted">
             <span>
               Vulnerability feed - oldest enabled-source sync{' '}
@@ -366,15 +574,21 @@ export default function Vulnerabilities() {
               <VulnTrend points={data.weekly} />
             </Card>
             <Card title="Open vulnerabilities over time (by severity)">
+              {snapshotNote && <p className="muted small vuln-snapshot-note">{snapshotNote}</p>}
               <VulnSeverityTrend points={data.snapshot_trend} />
             </Card>
             <Card title="Average network risk score over time">
+              {snapshotNote && <p className="muted small vuln-snapshot-note">{snapshotNote}</p>}
               <VulnRiskTrend points={data.snapshot_trend} />
             </Card>
           </div>
 
-          <VulnHeatmap rows={data.severity_by_network} filters={filters}
-            onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))} />
+          <VulnHeatmap
+            rows={data.severity_by_network}
+            filters={filters}
+            onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))}
+            onNetworkClick={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
+          />
 
           <VulnFacets summary={data} filters={filters} onToggle={toggle}
             onToggleVendorProduct={toggleVendorProduct} />
@@ -383,6 +597,7 @@ export default function Vulnerabilities() {
             filters={filters}
             onToggleCve={(id) => toggle('cve_id', id)}
             onToggleDevice={(uuid) => toggle('device_uuid', uuid)}
+            onToggleNetwork={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
             onToggleNewSince={(v) => toggle('new_since', v)}
           />
           <div id="vuln-findings">
@@ -396,11 +611,13 @@ export default function Vulnerabilities() {
               sort={findingSort}
               onSort={setFindingSort}
               onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined, false)}
+              onToggleNetwork={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
               onChanged={() => { void reload(); }}
             />
           </div>
         </>
       )}
+      </div>
     </>
   );
 }

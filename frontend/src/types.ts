@@ -789,6 +789,7 @@ export interface VulnTopDevice {
   ip: string;
   hostname: string | null;
   device_type: string | null;
+  network_id: number | null;
   network_name: string | null;
   exposure_score: number;
   risk_score: number;
@@ -820,6 +821,8 @@ export interface VulnSummary {
   epss_high_count: number;
   confirmed_count: number;
   potential_count: number;
+  /** Total findings matching the active filters (parity with GET /api/vulns total). */
+  findings_total: number;
   risk_device_levels: { high: number; medium: number; low: number };
   feed: {
     oldest_synced_at: string | null;
@@ -842,6 +845,8 @@ export interface VulnSummary {
   }[];
   weekly: VulnWeeklyPoint[];
   snapshot_trend: VulnSnapshotPoint[];
+  /** Present when snapshot charts cannot honor every active filter (history is network-scoped only). */
+  snapshot_trend_note: string | null;
   top_devices: VulnTopDevice[];
   top_cves: VulnTopCve[];
   new_since_last_scan: VulnNewFinding[];
@@ -855,6 +860,7 @@ export interface VulnFindingListItem extends DeviceVuln {
   device_ip: string;
   device_hostname: string | null;
   network: string | null;
+  network_id: number | null;
   os_name: string | null;
   device_type: string | null;
   first_seen_at: string | null;

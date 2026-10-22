@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildVulnQuery, clearVulnFindingsHash, clearVulnFilters, formatVulnFilterChip,
-  formatVulnFilterValue, parseVulnFilters, setVulnFilter, shouldScrollVulnFindingsHash,
-  splitVendorProductKey, toggleHeatmapCell, toggleVulnFilter, toggleVendorProductFilter,
-  vendorProductFacetActive, vulnFilterLink, VULN_FINDINGS_HASH,
+  formatVulnFilterSummary, formatVulnFilterValue, formatVulnPrintFilterLine, localFilenameDay,
+  parseVulnFilters, setVulnFilter, shouldScrollVulnFindingsHash, splitVendorProductKey,
+  toggleHeatmapCell, toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter,
+  vendorProductFacetActive, vulnExportFilename, vulnFilterLink, VULN_FINDINGS_HASH,
 } from './vulnFilters';
 
 describe('parseVulnFilters', () => {
@@ -183,6 +184,51 @@ describe('formatVulnFilterChip', () => {
     expect(formatVulnFilterChip('new_since', 'scan')).toBe('new since: last scan');
     expect(formatVulnFilterChip('device_uuid', 'abc', { deviceLabels: { abc: '10.0.0.1' } }))
       .toBe('device: 10.0.0.1');
+    expect(formatVulnFilterChip('kev', 'false')).toBe('KEV: no');
+  });
+});
+
+describe('formatVulnFilterSummary / vulnExportFilename / toggleNetworkFilter', () => {
+  it('summarizes active filters for the print report header', () => {
+    expect(formatVulnFilterSummary({})).toBe('All networks (no filters)');
+    expect(formatVulnFilterSummary(
+      { network_id: '1', kev: 'true' },
+      { networkNames: { '1': 'Lab Alpha' } },
+    )).toBe('network: Lab Alpha · KEV: yes');
+  });
+
+  it('notes Includes hidden / Only hidden on the print filter line when searching', () => {
+    expect(formatVulnPrintFilterLine({}, {}, { searchQ: 'openssh' }))
+      .toBe('Search: "openssh" · Includes hidden');
+    expect(formatVulnPrintFilterLine({}, {}, { searchQ: 'openssh', onlyHidden: true }))
+      .toBe('Search: "openssh" · Only hidden');
+    expect(formatVulnPrintFilterLine(
+      { network_id: '1' },
+      { networkNames: { '1': 'Lab Alpha' } },
+      { searchQ: '2024', onlyHidden: true },
+    )).toBe('network: Lab Alpha · Search: "2024" · Only hidden');
+  });
+
+  it('builds a sanitized CSV filename with filter context', () => {
+    const name = vulnExportFilename(
+      { network_id: '1', severity: 'critical' },
+      { networkNames: { '1': 'Lab Alpha' } },
+    );
+    expect(name).toMatch(/^vulns_lab-alpha_critical_\d{8}\.csv$/);
+  });
+
+  it('uses local calendar day for the filename date (not UTC ISO)', () => {
+    const local = new Date(2026, 0, 5, 23, 30, 0); // Jan 5 local
+    expect(localFilenameDay(local)).toBe('20260105');
+  });
+
+  it('toggles network scope without touching severity', () => {
+    const set = toggleNetworkFilter(new URLSearchParams('severity=high'), 3);
+    expect(set.get('network_id')).toBe('3');
+    expect(set.get('severity')).toBe('high');
+    const cleared = toggleNetworkFilter(set, 3);
+    expect(cleared.get('network_id')).toBeNull();
+    expect(cleared.get('severity')).toBe('high');
   });
 });
 
