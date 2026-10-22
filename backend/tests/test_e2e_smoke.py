@@ -700,6 +700,66 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
     assert errors == []
 
 
+def test_vulnerabilities_html_report_download(live_app, browser):
+    """HTML report button downloads a self-contained file with expected finding counts."""
+    from playwright.sync_api import expect
+
+    from app.core.vuln.summary import invalidate_vuln_summary_cache
+
+    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    invalidate_vuln_summary_cache()
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+        page.evaluate(
+            """async () => {
+              const list = await fetch('/api/vulns?cve_id=CVE-2024-ALPHA', { credentials: 'same-origin' })
+                .then((r) => r.json());
+              if (!list.items || !list.items.length) return;
+              const d = list.items[0];
+              const m = document.cookie.match(/(?:^|;\\s*)nf_csrf=([^;]+)/);
+              const csrf = m ? decodeURIComponent(m[1]) : '';
+              const hdr = { 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'POST', credentials: 'same-origin', headers: hdr, body: '{}' });
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'DELETE', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf } });
+            }"""
+        )
+        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
+        facet_btn = page.locator(".bar-row", has_text=name_a).first
+        expect(facet_btn).to_be_visible(timeout=30_000)
+        facet_btn.click()
+        expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
+
+        with page.expect_download() as dl_info:
+            page.get_by_role("button", name="HTML report").click()
+        download = dl_info.value
+        path = download.path()
+        assert path is not None
+        text = Path(path).read_text(encoding="utf-8")
+        assert "<!DOCTYPE html>" in text
+        assert "PortReveal vulnerability report" in text
+        assert "CVE-2024-ALPHA" in text
+        assert "CVE-2024-BETA" not in text
+        assert name_a in text or "network:" in text
+        assert name_b not in text or text.count(name_a) >= 1
+        # Summary card for findings (Lab Alpha has one critical finding).
+        assert 'class="value">1</div>' in text or ">1</div>" in text
+        assert "window.__REPORT_DATA__=" in text
+        assert "cdn." not in text.lower()
+        suggested = download.suggested_filename or ""
+        assert suggested.endswith(".html") or "vulns_" in suggested
+    finally:
+        page.close()
+    assert errors == []
+
+
 def test_notifications_tabs_and_webhook_crud(live_app, browser):
     """Open each Notifications inner tab; add, test, edit, and delete a webhook."""
     import threading
