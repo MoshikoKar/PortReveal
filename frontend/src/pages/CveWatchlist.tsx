@@ -126,7 +126,7 @@ export default function CveWatchlist() {
           </p>
         </div>
         <div className="row" style={{ gap: 8 }}>
-          {isAdmin && <Link className="btn" to="/settings/notifications">Delivery settings</Link>}
+          {isAdmin && <Link className="btn" to="/settings/notifications/cve-watchlist">Delivery settings</Link>}
           <Link className="btn" to="/vulnerabilities">&larr; Back to vulnerabilities</Link>
         </div>
       </div>

@@ -5,6 +5,7 @@ run through a bounded thread pool, so at most `parallelism` nmap processes run
 at once, each with a timeout. A failed chunk/batch makes the scan *partial*;
 partial scans never remove state (see core/compare.py).
 """
+
 from __future__ import annotations
 
 import logging
@@ -58,6 +59,7 @@ from .web_capture.manager import web_capture_manager
 
 log = logging.getLogger(__name__)
 
+
 def effective_scan_settings(cfg: ScanSettings, vpn_s2s: bool) -> ScanSettings:
     """Scan settings for one scan. VPN S2S keeps the same shape and speed as a normal remote scan;
     only "fast" is dropped so the tunnel never sees the remote-fast 2000 pps ceiling. Stored
@@ -99,19 +101,24 @@ def scan_targets(db, scan: Scan) -> tuple[AddressSet, int]:
     return targets, len(base) - len(targets)
 
 
-def discovery_notes(live: dict[str, HostObservation], self_ips: frozenset[str], filtered: int,
-                    complete: bool) -> list[str]:
+def discovery_notes(live: dict[str, HostObservation], self_ips: frozenset[str], filtered: int, complete: bool) -> list[str]:
     """Scan notes that explain hosts missing from discovery (shown in scan history)."""
     notes: list[str] = []
     for ip in sorted(self_ips - live.keys(), key=ip_sort_key):
-        notes.append(f"{ip} is the PortReveal scanner host and did not answer probes sent from itself; "
-                     "this scan does not count against it (its inventory may not refresh).")
+        notes.append(
+            f"{ip} is the PortReveal scanner host and did not answer probes sent from itself; "
+            "this scan does not count against it (its inventory may not refresh)."
+        )
     if filtered:
-        notes.append(f"{filtered} address(es) answered only with a TCP reset / connection refused and no MAC; "
-                     "ignored as NAT/firewall false positives.")
+        notes.append(
+            f"{filtered} address(es) answered only with a TCP reset / connection refused and no MAC; "
+            "ignored as NAT/firewall false positives."
+        )
     if complete and not live:
-        notes.append("No target answered discovery probes (ICMP/ARP/TCP). A host that drops every probe "
-                     "looks the same as one that is offline.")
+        notes.append(
+            "No target answered discovery probes (ICMP/ARP/TCP). A host that drops every probe "
+            "looks the same as one that is offline."
+        )
     return notes
 
 
@@ -223,7 +230,10 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                 for d in db.scalars(select(Device)).all()
                 if d.current_ip in targets
                 and looks_like_truenas(
-                    hostname=d.hostname, dns_name=d.dns_name, os_name=d.os_name, vendor=d.vendor,
+                    hostname=d.hostname,
+                    dns_name=d.dns_name,
+                    os_name=d.os_name,
+                    vendor=d.vendor,
                 )
             }
             scan.status, scan.started_at, scan.scanner_mode = SCAN_RUNNING, utcnow(), scanner.mode
@@ -232,12 +242,18 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             ctx.raw_dir = settings.data_path / "raw" / f"scan_{scan_id}"
         log.info(
             "scan %s started: %s, %d addresses (%d excluded), scanner=%s",
-            scan_id, scan_type, len(targets), excluded_n, scanner.mode,
+            scan_id,
+            scan_type,
+            len(targets),
+            excluded_n,
+            scanner.mode,
         )
         if vpn_s2s:
             log.info(
                 "scan %s: VPN S2S profile (remote discovery rates, timing %s, parallelism %d)",
-                scan_id, cfg.timing, cfg.parallelism,
+                scan_id,
+                cfg.timing,
+                cfg.parallelism,
             )
 
         has_ports = scan_type in (SCAN_STANDARD, SCAN_FULL)
@@ -253,7 +269,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
         merged: list[StageResult] = []
 
         def disc_done(run: _StageRun) -> None:
-            for r in run.results[len(merged):]:
+            for r in run.results[len(merged) :]:
                 merged.append(r)
                 for h in r.hosts:
                     if h.ip not in targets:  # never report anything outside targets/exclusions
@@ -275,8 +291,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
             raise ScanStageError("discovery failed: " + disc.failures[0])
         discovery_complete = not disc.failures
         self_ips = frozenset(ip for ip in scanner_host_ips() if ip in targets)
-        scan_notes = discovery_notes(live, self_ips, sum(r.filtered for r in disc.results),
-                                     discovery_complete)
+        scan_notes = discovery_notes(live, self_ips, sum(r.filtered for r in disc.results), discovery_complete)
 
         # ---- Stage 2: port / service scan ---------------------------------------
         port_scope: str | None = None
@@ -301,11 +316,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                 with session_scope() as db:
                     refresh_days = get_section(db, ScanSettings).os_refresh_days
                     cutoff = utcnow() - timedelta(days=refresh_days)
-                    known = {
-                        d.current_ip: d for d in db.scalars(
-                            select(Device).where(Device.current_ip.in_(ips))
-                        ).all()
-                    }
+                    known = {d.current_ip: d for d in db.scalars(select(Device).where(Device.current_ip.in_(ips))).all()}
                 need_os, skip_os = [], []
                 for ip in ips:
                     d = known.get(ip)
@@ -314,8 +325,7 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                     else:
                         skip_os.append(ip)
             port_stage = "full port scan" if full else "service scan"
-            _update(scan_id, stage=f"{port_stage} (0/{len(ips)})", progress=disc_weight,
-                    hosts_discovered=len(live))
+            _update(scan_id, stage=f"{port_stage} (0/{len(ips)})", progress=disc_weight, hosts_discovered=len(live))
             done_hosts_box = [0]
 
             def port_done(run: _StageRun) -> None:
@@ -332,13 +342,16 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                 if not batch_ips:
                     return
                 p = PortProfile(
-                    full=profile.full, top_ports=profile.top_ports, timing=profile.timing,
-                    host_timeout_minutes=profile.host_timeout_minutes, os_detection=with_os,
-                    batch_size=profile.batch_size, max_rate=profile.max_rate,
+                    full=profile.full,
+                    top_ports=profile.top_ports,
+                    timing=profile.timing,
+                    host_timeout_minutes=profile.host_timeout_minutes,
+                    os_detection=with_os,
+                    batch_size=profile.batch_size,
+                    max_rate=profile.max_rate,
                 )
-                batches = [batch_ips[i:i + p.batch_size] for i in range(0, len(batch_ips), p.batch_size)]
-                result = _run_parallel(batches, lambda b: scanner.scan_ports(b, p, ctx),
-                                       cfg.parallelism, ctx, port_done)
+                batches = [batch_ips[i : i + p.batch_size] for i in range(0, len(batch_ips), p.batch_size)]
+                result = _run_parallel(batches, lambda b: scanner.scan_ports(b, p, ctx), cfg.parallelism, ctx, port_done)
                 for r in result.results:
                     port_scope = port_scope or r.port_scope
                     for h in r.hosts:
@@ -401,23 +414,29 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                 net = db.get(Network, network_id)
                 if scan_type == SCAN_STANDARD and net is not None:
                     create_snapshot(db, net, scan, utcnow())
-                if (scanner.mode == "mock" and scan_type in (SCAN_STANDARD, SCAN_DISCOVERY)
-                        and trigger != TRIGGER_PRESENCE):
+                if scanner.mode == "mock" and scan_type in (SCAN_STANDARD, SCAN_DISCOVERY) and trigger != TRIGGER_PRESENCE:
                     key = mock_step_key(network_id)
                     set_value(db, key, min(int(get_value(db, key, 0)) + 1, LAST_STEP))
             if has_ports and status in (SCAN_COMPLETED, SCAN_PARTIAL):
                 auto_capture_id = maybe_enqueue_auto_web_capture(
-                    db, scan, baseline_created=res.baseline_created,
+                    db,
+                    scan,
+                    baseline_created=res.baseline_created,
                 )
         log.info(
             "scan %s %s in %.1fs: %d live hosts, %d events%s",
-            scan_id, status, time.monotonic() - started, len(live), len(event_ids),
+            scan_id,
+            status,
+            time.monotonic() - started,
+            len(live),
+            len(event_ids),
             " (baseline created)" if res.baseline_created else "",
         )
-        run_watches(scan_id=scan_id)
+        watch_ids = run_watches(scan_id=scan_id)
         try:
             from .webhooks import deliver_event_ids
-            deliver_event_ids(event_ids)
+
+            deliver_event_ids(event_ids + watch_ids)
         except Exception:
             log.exception("scan %s: webhook delivery failed", scan_id)
         if auto_capture_id is not None:
@@ -427,16 +446,33 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
 
     except ScanCancelled:
         log.info("scan %s cancelled", scan_id)
-        _update(scan_id, status=SCAN_CANCELLED, finished_at=utcnow(), stage=None,
-                notes="Cancelled by user. No state changes were applied.")
+        _update(
+            scan_id,
+            status=SCAN_CANCELLED,
+            finished_at=utcnow(),
+            stage=None,
+            notes="Cancelled by user. No state changes were applied.",
+        )
         return SCAN_CANCELLED
     except (ScanStageError, TargetError) as exc:
         log.error("scan %s failed: %s", scan_id, exc)
-        _update(scan_id, status=SCAN_FAILED, finished_at=utcnow(), stage=None, error=str(exc),
-                notes="Scan failed. The previous known state was preserved.")
+        _update(
+            scan_id,
+            status=SCAN_FAILED,
+            finished_at=utcnow(),
+            stage=None,
+            error=str(exc),
+            notes="Scan failed. The previous known state was preserved.",
+        )
         return SCAN_FAILED
     except Exception:
         log.exception("scan %s crashed", scan_id)
-        _update(scan_id, status=SCAN_FAILED, finished_at=utcnow(), stage=None, error=INTERNAL_ERROR,
-                notes="Scan failed. The previous known state was preserved.")
+        _update(
+            scan_id,
+            status=SCAN_FAILED,
+            finished_at=utcnow(),
+            stage=None,
+            error=INTERNAL_ERROR,
+            notes="Scan failed. The previous known state was preserved.",
+        )
         return SCAN_FAILED

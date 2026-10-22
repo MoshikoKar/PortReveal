@@ -5,6 +5,7 @@ scanner, throwaway SQLite database). Marked `e2e` and excluded from the default 
 with `npm run test:e2e`, which builds the frontend first. Skips when frontend/dist or Playwright's
 Chromium is missing.
 """
+
 from __future__ import annotations
 
 import os
@@ -72,7 +73,10 @@ def live_app(tmp_path_factory) -> Iterator[dict]:
     log = (work / "app.log").open("wb")
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=BACKEND, env=env, stdout=log, stderr=subprocess.STDOUT,
+        cwd=BACKEND,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     base = f"http://127.0.0.1:{port}"
     try:
@@ -94,8 +98,7 @@ def browser():
         try:
             b = p.chromium.launch(headless=True)
         except Exception as exc:  # browser binary not installed for this user
-            pytest.skip(f"Playwright Chromium unavailable ({exc.__class__.__name__}); "
-                        "run: python -m playwright install chromium")
+            pytest.skip(f"Playwright Chromium unavailable ({exc.__class__.__name__}); run: python -m playwright install chromium")
         yield b
         b.close()
 
@@ -122,10 +125,14 @@ def _seed_below_floor_finding(database_url: str, cve_id: str = "CVE-2024-99901")
         if port_row is None:
             raise RuntimeError("e2e seed expected at least one device port from the mock scan")
         if db.get(Vulnerability, cve_id) is None:
-            db.add(Vulnerability(
-                cve_id=cve_id, cvss_base=5.0, kev=False,
-                summary="e2e below-floor finding for vulnerabilities search",
-            ))
+            db.add(
+                Vulnerability(
+                    cve_id=cve_id,
+                    cvss_base=5.0,
+                    kev=False,
+                    summary="e2e below-floor finding for vulnerabilities search",
+                )
+            )
             db.flush()
         existing = db.scalars(
             select(DevicePortVuln).where(
@@ -134,10 +141,14 @@ def _seed_below_floor_finding(database_url: str, cve_id: str = "CVE-2024-99901")
             )
         ).first()
         if existing is None:
-            db.add(DevicePortVuln(
-                device_port_id=port_row.id, cve_id=cve_id,
-                state=VULN_STATE_CONFIRMED, matched_at=utcnow(),
-            ))
+            db.add(
+                DevicePortVuln(
+                    device_port_id=port_row.id,
+                    cve_id=cve_id,
+                    state=VULN_STATE_CONFIRMED,
+                    matched_at=utcnow(),
+                )
+            )
         db.commit()
     engine.dispose()
 
@@ -391,4 +402,78 @@ def test_vulnerabilities_search_debounce_respects_clear_all_and_facet(live_app, 
         assert qs.get("q") == ["openssh"], page.url
     finally:
         page.close()
+    assert errors == []
+
+
+def test_notifications_tabs_and_webhook_crud(live_app, browser):
+    """Open each Notifications inner tab; add, test, edit, and delete a webhook."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from playwright.sync_api import expect
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    httpd = HTTPServer(("127.0.0.1", 0), Handler)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    hook_url = f"http://127.0.0.1:{port}/hook"
+
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        page.get_by_role("link", name="Settings", exact=True).click()
+        page.get_by_role("navigation").get_by_role("link", name="Notifications", exact=True).click()
+        expect(page).to_have_url(f"{base}/settings/notifications/general", timeout=15_000)
+        expect(page.get_by_role("heading", name="Channels")).to_be_visible()
+
+        nav = page.get_by_role("navigation", name="Notification settings")
+        for link_name, section, heading in (
+            ("Email", "email", "Email digest"),
+            ("Webhooks", "webhooks", "Webhooks"),
+            ("CVE Watchlist", "cve-watchlist", "CVE watchlist alerts"),
+        ):
+            nav.get_by_role("link", name=link_name, exact=True).click()
+            expect(page).to_have_url(f"{base}/settings/notifications/{section}")
+            expect(page.get_by_role("heading", name=heading)).to_be_visible(timeout=10_000)
+
+        # Back to Webhooks for CRUD
+        nav.get_by_role("link", name="Webhooks", exact=True).click()
+        page.get_by_role("button", name="Add webhook").click()
+        page.get_by_label("Name", exact=True).fill("e2e-hook")
+        page.get_by_label("URL", exact=True).fill(hook_url)
+        page.get_by_role("button", name="Save").click()
+        expect(page.get_by_text("e2e-hook", exact=True)).to_be_visible(timeout=10_000)
+        # Secret reveal banner (generated on create)
+        expect(page.get_by_text("Copy it now", exact=False)).to_be_visible(timeout=5_000)
+        page.get_by_role("button", name="Done").click()
+
+        page.get_by_role("button", name="Send test").click()
+        expect(page.get_by_text("Test: OK", exact=False)).to_be_visible(timeout=10_000)
+
+        page.get_by_role("button", name="Edit").click()
+        page.get_by_label("Name", exact=True).fill("e2e-hook-renamed")
+        page.get_by_role("button", name="Save").click()
+        expect(page.get_by_text("e2e-hook-renamed", exact=True)).to_be_visible(timeout=10_000)
+
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.get_by_role("button", name="Delete").click()
+        expect(page.get_by_text("No webhooks yet.")).to_be_visible(timeout=10_000)
+    finally:
+        page.close()
+        httpd.shutdown()
     assert errors == []

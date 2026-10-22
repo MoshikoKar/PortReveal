@@ -3,6 +3,7 @@
 The schedule is re-read from the database on every tick, so changes in the UI
 apply immediately without restarting. Times are server-local (set TZ in Docker).
 """
+
 from __future__ import annotations
 
 import logging
@@ -64,8 +65,7 @@ def _due_today(cfg: ScheduleSettings, now: datetime) -> datetime:
     return _at(now, cfg.time)
 
 
-def next_presence_run(cfg: PresenceSettings, now: datetime | None = None,
-                      done_today: list[str] | None = None) -> datetime | None:
+def next_presence_run(cfg: PresenceSettings, now: datetime | None = None, done_today: list[str] | None = None) -> datetime | None:
     if not cfg.enabled or not cfg.days or not cfg.times:
         return None
     now = now or datetime.now().astimezone()
@@ -120,8 +120,7 @@ def enqueue_presence_scans(db) -> list[int]:
         if network_has_active_scan(db, net.id):
             log.info("presence scan for %s skipped: a scan is already queued/running", net.name)
             continue
-        ids.append(create_scan(db, SCAN_DISCOVERY, trigger=TRIGGER_PRESENCE, network=net,
-                               requested_by="scheduler").id)
+        ids.append(create_scan(db, SCAN_DISCOVERY, trigger=TRIGGER_PRESENCE, network=net, requested_by="scheduler").id)
     return ids
 
 
@@ -136,19 +135,18 @@ def enqueue_scheduled_scans(db, cfg: ScheduleSettings | None = None) -> list[int
     return ids
 
 
-def enqueue_baseline_retries(db, now_utc: datetime | None = None,
-                             cfg: ScheduleSettings | None = None) -> list[int]:
+def enqueue_baseline_retries(db, now_utc: datetime | None = None, cfg: ScheduleSettings | None = None) -> list[int]:
     now_utc = now_utc or utcnow()
     cfg = cfg or get_section(db, ScheduleSettings)
     ids = []
-    for net in db.scalars(select(Network).where(Network.enabled.is_(True), Network.baseline_scan_id.is_(None))
-                          .order_by(Network.id)).all():
+    for net in db.scalars(
+        select(Network).where(Network.enabled.is_(True), Network.baseline_scan_id.is_(None)).order_by(Network.id)
+    ).all():
         if net.created_at and net.created_at > now_utc - NEW_NETWORK_GRACE:
             continue
         if network_has_active_scan(db, net.id):
             continue
-        last = db.scalar(select(func.max(Scan.created_at))
-                         .where(Scan.network_id == net.id, Scan.scan_type == SCAN_STANDARD))
+        last = db.scalar(select(func.max(Scan.created_at)).where(Scan.network_id == net.id, Scan.scan_type == SCAN_STANDARD))
         if last is not None and last > now_utc - BASELINE_RETRY_AFTER:
             continue
         queued = _enqueue_network_scans(db, net, discovery_before=cfg.discovery_before_standard)
@@ -165,6 +163,7 @@ def tick(now: datetime | None = None) -> None:
     retention_files: tuple[int, int] | None = None
     ret_counts: dict[str, int] = {}
     stale_captures: list[str] = []
+    webhook_ids: list[int] = []
     with session_scope() as db:
         state = dict(get_value(db, STATE_KEY, {}) or {})
         cfg = get_section(db, ScheduleSettings)
@@ -173,9 +172,13 @@ def tick(now: datetime | None = None) -> None:
 
         if "initialized" not in state:
             # First start: never "catch up" a schedule that passed before installation
-            state = {"initialized": today, "last_scan_date": today if now >= _due_today(cfg, now) else None,
-                     "last_retention_date": None, "presence_date": today,
-                     "presence_slots": [t for t in pcfg.times if now >= _at(now, t)]}
+            state = {
+                "initialized": today,
+                "last_scan_date": today if now >= _due_today(cfg, now) else None,
+                "last_retention_date": None,
+                "presence_date": today,
+                "presence_slots": [t for t in pcfg.times if now >= _at(now, t)],
+            }
             changed = True
         elif cfg.enabled and now.weekday() in cfg.days and state.get("last_scan_date") != today:
             due = _due_today(cfg, now)
@@ -206,9 +209,8 @@ def tick(now: datetime | None = None) -> None:
                 changed = True
             last_due = _at(now, pcfg.times[-1])
             last_settled = pcfg.times[-1] in slots or now >= last_due + PRESENCE_CATCH_UP_WINDOW
-            if (state.get("last_absence_eval_date") != today and now >= last_due and last_settled
-                    and not presence_scan_active(db)):
-                evaluate_absence(db, pcfg, now.date(), utcnow())
+            if state.get("last_absence_eval_date") != today and now >= last_due and last_settled and not presence_scan_active(db):
+                webhook_ids = evaluate_absence(db, pcfg, now.date(), utcnow())
                 state["last_absence_eval_date"] = today
                 changed = True
 
@@ -242,6 +244,13 @@ def tick(now: datetime | None = None) -> None:
 
         if changed:
             set_value(db, STATE_KEY, state)
+    if webhook_ids:
+        try:
+            from .webhooks import deliver_event_ids
+
+            deliver_event_ids(webhook_ids)
+        except Exception:
+            log.exception("presence absence webhook delivery failed")
     if retention_files is not None:
         # Deletes are committed above; capture-dir/raw-XML cleanup runs without holding the tick's session.
         ret_days, raw_days = retention_files

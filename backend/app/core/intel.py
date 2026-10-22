@@ -3,6 +3,7 @@
 Every entry point here is best-effort. Failures are logged and never change a scan's or a
 capture's status.
 """
+
 from __future__ import annotations
 
 import logging
@@ -31,39 +32,47 @@ REFRESH_CHUNK = 500
 ENRICH_WARN_THRESHOLD = 5
 
 
-def refresh_devices(db: Session, device_ids: Iterable[int], *, scan_id: int | None = None,
-                    report_ids: set[int] | None = None) -> int:
-    """Recompute tags, type and exposure score for these devices. Returns the tag events created.
+def refresh_devices(
+    db: Session, device_ids: Iterable[int], *, scan_id: int | None = None, report_ids: set[int] | None = None
+) -> list[int]:
+    """Recompute tags, type and exposure score for these devices. Returns tag event ids created.
 
     With `report_ids`, only those devices may emit tag events (the rest are re-tagged silently)."""
     ids = sorted(set(device_ids))
     if not ids:
-        return 0
+        return []
     now = utcnow()
     nets: set[int] = set()
     for i in range(0, len(ids), REFRESH_CHUNK):
-        nets.update(db.scalars(select(Device.network_id).where(Device.id.in_(ids[i:i + REFRESH_CHUNK]),
-                                                              Device.network_id.isnot(None)).distinct()))
+        nets.update(
+            db.scalars(
+                select(Device.network_id)
+                .where(Device.id.in_(ids[i : i + REFRESH_CHUNK]), Device.network_id.isnot(None))
+                .distinct()
+            )
+        )
     unique = unique_services(db, nets)
-    events = 0
+    event_ids: list[int] = []
     for i in range(0, len(ids), REFRESH_CHUNK):
-        chunk = ids[i:i + REFRESH_CHUNK]
+        chunk = ids[i : i + REFRESH_CHUNK]
         # Drop PortHttp that still claims ESXi/Proxmox after the port's product says otherwise
         # (stale capture), so classification is not stuck on hypervisor until a re-capture.
         clear_stale_hypervisor_http(db, chunk)
         facts = load_facts(db, chunk)
-        events += len(apply_tags(db, facts, now=now, scan_id=scan_id, report_ids=report_ids))
+        tag_events = apply_tags(db, facts, now=now, scan_id=scan_id, report_ids=report_ids)
         apply_scores(db, facts, unique, now=now)
         apply_ip_assignment(db, facts, now=now)
         # Flush first: apply_scores may have just inserted this pass's DeviceProfile rows, and
         # apply_risk_scores re-queries DeviceProfile by device_id -- it must see them to avoid
         # inserting a second row for the same device (device_profiles.device_id is unique).
+        # Also assigns ids to newly created tag events for webhook delivery.
         db.flush()
+        event_ids.extend(ev.id for ev in tag_events if ev.id is not None)
         # Re-scores risk/combined from whatever device_port_vulns already holds (no CPE matching,
         # no network): combined_score depends on exposure_score, which just changed above.
         apply_risk_scores(db, [f.device.id for f in facts], now=now)
         db.flush()
-    return events
+    return event_ids
 
 
 def _enrich_open_services(db: Session, device_ids: list[int], *, scan_id: int | None = None) -> None:
@@ -90,16 +99,24 @@ def _enrich_open_services(db: Session, device_ids: list[int], *, scan_id: int | 
                     failures[probe] += 1
                     metrics.observe_enrich_failure(probe)
                     log.debug("%s enrich failed for device %s", probe, did, exc_info=True)
-        ports = db.scalars(select(DevicePort).where(
-            DevicePort.device_id == did, DevicePort.is_open.is_(True),
-        )).all()
+        ports = db.scalars(
+            select(DevicePort).where(
+                DevicePort.device_id == did,
+                DevicePort.is_open.is_(True),
+            )
+        ).all()
         sync_nmap_banners(db, ports, device=dev, scan_id=None, now=utcnow())
         for p in ports:
             sync_nmap_cpes(db, p)
     for probe, n in failures.items():
         if n >= ENRICH_WARN_THRESHOLD:
-            log.warning("scan %s: %s enrichment failed for %d of %d devices (enable DEBUG for details)",
-                        scan_id, probe.upper(), n, len(devices))
+            log.warning(
+                "scan %s: %s enrichment failed for %d of %d devices (enable DEBUG for details)",
+                scan_id,
+                probe.upper(),
+                n,
+                len(devices),
+            )
     if live:
         try:
             _enrich_local_names(db, devices)
@@ -132,8 +149,11 @@ def _enrich_local_names(db: Session, devices: dict[int, Device]) -> None:
     netbios_macs: dict[str, str] = {}
     found = collect_local_names(
         [d.current_ip for d in devices.values() if d.current_ip],
-        mdns=cfg.mdns, ssdp=cfg.ssdp, netbios=cfg.netbios,
-        timeout=cfg.timeout_seconds, netbios_macs=netbios_macs,
+        mdns=cfg.mdns,
+        ssdp=cfg.ssdp,
+        netbios=cfg.netbios,
+        timeout=cfg.timeout_seconds,
+        netbios_macs=netbios_macs,
     )
     apply_netbios_macs(db, devices.values(), netbios_macs)
     now = utcnow()
@@ -182,7 +202,7 @@ def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> tuple[int, 
 
     Returns (extra event count, extra event ids) for tags plus geo mismatches. Tag changes are
     reported only for devices with a reported change in `changed`; geo events follow their own
-    baseline-silent gate.
+    baseline-silent gate. Both tag and geo ids are returned for webhook delivery.
     """
     try:
         with db.begin_nested():
@@ -194,16 +214,18 @@ def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> tuple[int, 
             geo_ids: list[int] = []
             try:
                 from .geo import check_devices_geo
+
                 geo_ids = [e.id for e in check_devices_geo(db, ids, scan_id=scan.id)]
             except Exception:
                 log.exception("scan %s: geo check failed", scan.id)
             report = {e.device.id for e in changed if e.device is not None and e.device.id is not None}
-            events = refresh_devices(db, ids, scan_id=scan.id, report_ids=report)
+            tag_ids = refresh_devices(db, ids, scan_id=scan.id, report_ids=report)
             try:
                 _enqueue_vuln_job_after_scan(db, scan, ids)
             except Exception:
                 log.exception("scan %s: could not enqueue vulnerability check job", scan.id)
-            return events + len(geo_ids), geo_ids
+            extra_ids = tag_ids + geo_ids
+            return len(extra_ids), extra_ids
     except Exception:
         log.exception("scan %s: tagging / exposure scoring failed", scan.id)
         return 0, []
@@ -222,23 +244,34 @@ def _enqueue_vuln_job_after_scan(db: Session, scan: Scan, device_ids: list[int])
     enqueue_vuln_job(db, trigger=VULN_JOB_TRIGGER_AFTER_SCAN, scan_id=scan.id, device_ids=device_ids)
 
 
-def run_watches(*, scan_id: int | None = None) -> None:
+def run_watches(*, scan_id: int | None = None) -> list[int]:
+    """Evaluate saved searches; return ids of alert events created (for webhook delivery)."""
     try:
         with session_scope() as db:
-            n = evaluate_all(db, scan_id=scan_id)
-        if n:
-            log.info("saved searches raised %d alert(s)", n)
+            event_ids = evaluate_all(db, scan_id=scan_id)
+        if event_ids:
+            log.info("saved searches raised %d alert(s)", len(event_ids))
+        return event_ids
     except Exception:
         log.exception("saved search evaluation failed")
+        return []
 
 
 def after_web_capture(capture_id: int) -> None:
     """Copy HTTP metadata into the inventory, then re-tag / re-score the hosts and run watches."""
     from .web_capture.inventory_sync import sync_port_http
 
+    event_ids: list[int] = []
     try:
         with session_scope() as db:
-            refresh_devices(db, sync_port_http(db, capture_id))
+            event_ids = list(refresh_devices(db, sync_port_http(db, capture_id)))
     except Exception:
         log.exception("web capture %s: inventory sync failed", capture_id)
-    run_watches()
+    event_ids.extend(run_watches())
+    if event_ids:
+        try:
+            from .webhooks import deliver_event_ids
+
+            deliver_event_ids(event_ids)
+        except Exception:
+            log.exception("web capture %s: webhook delivery failed", capture_id)
