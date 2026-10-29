@@ -27,7 +27,7 @@ def test_domain_add_scan_inventory_lookup_and_change(live_app, browser):  # noqa
 
         # Add domain (nav item -> dialog)
         page.get_by_role("link", name="Domains").first.click()
-        expect(page.get_by_role("heading", name="Domains", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_role("heading", name="Domains", exact=True, level=1)).to_be_visible(timeout=15_000)
         page.get_by_role("button", name="Add domain").click()
         page.get_by_test_id("domain-name").fill("example.com")
         page.get_by_label("Wordlist brute force (dnsx)").select_option("custom")

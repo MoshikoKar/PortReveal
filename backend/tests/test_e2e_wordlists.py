@@ -100,11 +100,11 @@ def test_wordlist_url_import_to_local_server_is_refused(live_app, browser):  # n
         page.goto(f"{base}/settings/web-capture")
         page.get_by_role("button", name="Import from URL").click()
 
-        page.get_by_label("URL").fill(f"http://127.0.0.1:{port}/paths.txt")
+        page.get_by_role("dialog").locator("input[type=url]").fill(f"http://127.0.0.1:{port}/paths.txt")
         page.get_by_role("button", name="Import", exact=True).click()
         expect(page.get_by_text("Only https:// URLs are allowed.")).to_be_visible(timeout=5_000)
 
-        page.get_by_label("URL").fill(f"https://127.0.0.1:{port}/paths.txt")
+        page.get_by_role("dialog").locator("input[type=url]").fill(f"https://127.0.0.1:{port}/paths.txt")
         page.get_by_role("button", name="Import", exact=True).click()
         expect(page.get_by_text("blocked address", exact=False)).to_be_visible(timeout=15_000)
         assert hits == []  # refused before any connection to the local server

@@ -515,6 +515,23 @@ def test_import_from_url_and_reimport_reports_change(client, db, fake_net):
     assert {"wordlist.import", "wordlist.reimport"} <= set(audit_actions(db))
 
 
+def test_url_query_is_redacted_in_audit_and_api(client, db, fake_net):
+    fake_net.routes[("lists.example.test", "/subs.txt")] = ok(b"www\nvpn\n")
+    url = "https://lists.example.test/subs.txt?token=s3cr3t&sig=abc#frag"
+    r = client.post("/api/wordlists/import", json={"url": url, "kind": "subdomains"}, headers=csrf(client))
+    assert r.status_code == 201, r.text
+    w = r.json()["wordlist"]
+    assert w["source_url"] == "https://lists.example.test/subs.txt?…"
+    assert client.get("/api/wordlists").json()["items"][0]["source_url"] == "https://lists.example.test/subs.txt?…"
+    assert client.post(f"/api/wordlists/{w['id']}/reimport", headers=csrf(client)).status_code == 200
+    details = " ".join(a.details or "" for a in db.scalars(select(AuditLog)))
+    assert "s3cr3t" not in details and "sig=" not in details and "#frag" not in details
+    assert "subs.txt?\\u2026" in details or "subs.txt?…" in details  # audit JSON may escape the ellipsis
+    # The stored URL keeps its query so Re-import fetches the same resource.
+    assert db.get(Wordlist, w["id"]).source_url == url
+    assert wl.redact_url("https://lists.example.test/a.txt") == "https://lists.example.test/a.txt"
+
+
 def test_reimport_only_for_url_lists(client):
     w = upload(client, b"admin\n").json()["wordlist"]
     assert client.post(f"/api/wordlists/{w['id']}/reimport", headers=csrf(client)).status_code == 409

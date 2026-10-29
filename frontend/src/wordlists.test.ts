@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Wordlist, WordlistImportResult, WordlistLibrary, WordlistLimits } from './types';
 import {
   acceptedExtensions, deleteConfirmText, discoveryOptions, domainsFromError, doneState, effectiveSelection, errorState,
-  fileError, formatBytes, inUseByDomainsText, nameError, shortSha, summaryText, urlError,
+  fileError, formatBytes, inUseByDomainsText, nameError, shortSha, skipReasons, skipReasonsText, summaryText, urlError,
 } from './wordlists';
 import { ApiError } from './api';
 
@@ -86,7 +86,7 @@ describe('import states and summaries', () => {
   });
 
   it('summarizes accepted / skipped with the first reasons', () => {
-    expect(summaryText(result().summary)).toBe('Accepted 1,200 / skipped 4 (duplicate 2, path traversal 1, URL scheme 1)');
+    expect(summaryText(result().summary)).toBe('Accepted 1,200 / skipped 4');
     expect(summaryText({ accepted: 3, skipped: 0, reasons: {}, samples: [] })).toBe('Accepted 3 / skipped 0');
   });
 
@@ -94,8 +94,9 @@ describe('import states and summaries', () => {
     const s = doneState('Uploaded', result());
     expect(s).toEqual({
       status: 'done',
-      text: 'Uploaded “Common paths”. Accepted 1,200 / skipped 4 (duplicate 2, path traversal 1, URL scheme 1).',
+      text: 'Uploaded “Common paths”. Accepted 1,200 / skipped 4.',
       samples: ['line 7: path traversal'],
+      reasons: [['duplicate', 2], ['path traversal', 1], ['URL scheme', 1]],
     });
     expect(doneState('Imported', result()).status).toBe('done');
   });
@@ -167,5 +168,19 @@ describe('wordlist used by domains', () => {
     const otherConflict = new ApiError(409, 'a wordlist named x already exists', undefined, 'r2', 'conflict');
     expect(domainsFromError(otherConflict)).toBeNull();
     expect(domainsFromError(new Error('network down'))).toBeNull();
+  });
+});
+
+describe('skip reasons', () => {
+  it('lists every reason grouped with its count, adding up to skipped', () => {
+    const summary = {
+      accepted: 10, skipped: 13, samples: [],
+      reasons: { 'path traversal': 3, 'control character': 2, 'URL scheme': 3, duplicate: 4, 'line too long': 1 },
+    };
+    const reasons = skipReasons(summary);
+    expect(reasons.map(([k]) => k)).toEqual(['duplicate', 'path traversal', 'URL scheme', 'control character', 'line too long']);
+    expect(reasons.reduce((n, [, v]) => n + v, 0)).toBe(summary.skipped);
+    expect(skipReasonsText(reasons.slice(1, 3))).toBe('path traversal: 3, URL scheme: 3');
+    expect(skipReasons({ accepted: 1, skipped: 0, reasons: {}, samples: [] })).toEqual([]);
   });
 });

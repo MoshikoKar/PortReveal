@@ -6,7 +6,7 @@ import { HttpBadge, LazyShot, Lightbox, endpointUrl, isRtspPage, shotNote, thumb
 import { Card, ErrorBox } from '../components/ui';
 import type { Network, WebCapture, WebPreviewCard, WebPreviewPage } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
-import { type PreviewStatus, type WebFilters, filtersFromParams, previewQuery, withFilters } from '../webGallery';
+import { type PreviewStatus, type WebFilters, filterUpdater, filtersFromParams, previewQuery } from '../webGallery';
 
 const STATUS_CHIPS: { id: PreviewStatus | null; label: string }[] = [
   { id: null, label: 'All' },
@@ -102,8 +102,10 @@ export default function WebHosts() {
   const seq = useRef(0);
   const query = JSON.stringify(previewQuery(filters, 1));
 
-  // From the URL at call time (not this render's copy): the debounced search must not undo a filter clicked meanwhile.
-  const update = (patch: Partial<WebFilters>, replace = false) => setSp((cur) => withFilters(cur, patch), { replace });
+  // Latest params at commit time (ref, not a captured copy): the debounced search must not undo a filter clicked meanwhile.
+  const spRef = useRef(sp);
+  spRef.current = sp;
+  const update = filterUpdater(() => spRef.current, setSp);
 
   // Search box -> URL after a short pause; Back/links -> search box.
   useEffect(() => { setQInput(filters.q); }, [filters.q]);

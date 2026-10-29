@@ -136,6 +136,10 @@ def domain_out(db: Session, d: Domain) -> dict:
         "wordlist_mode": d.wordlist_mode,
         "wordlist_id": d.wordlist_id,
         "wordlist_name": wl.name if wl else None,
+        # Entries in the selected list vs Settings > Domain discovery > Max wordlist entries (scans use the first N).
+        "wordlist_entries": (wl.entries if wl else 0) if d.wordlist_mode == WORDLIST_MODE_LIBRARY
+        else len(d.custom_words or []) if d.wordlist_mode == WORDLIST_MODE_CUSTOM else 0,
+        "wordlist_limit": get_section(db, DomainDiscoverySettings).max_wordlist_entries,
         "custom_words": list(d.custom_words or []),
         "passive_enabled": d.passive_enabled,
         "axfr_enabled": d.axfr_enabled,
@@ -177,6 +181,8 @@ def subdomain_out(s: Subdomain, device_uuid: str | None = None) -> dict:
         "unverified": bool(s.unverified),  # the latest scan could not check it: state kept as is
         "in_progress": bool(s.in_progress),  # written by a running scan, not classified yet
         "missed_scans": s.missed_scans or 0,
+        # When a scan last verified the name (None: never, e.g. only discovered by an unfinished scan).
+        "last_verified_at": s.last_seen if s.last_scan_id is not None else None,
         "first_seen": s.first_seen,
         "last_seen": s.last_seen,
     }

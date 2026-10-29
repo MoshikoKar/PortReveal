@@ -52,6 +52,18 @@ export function withFilters(sp: URLSearchParams, patch: Partial<WebFilters>): UR
   return next;
 }
 
+/**
+ * Filter updater that patches the params current at commit time (read through `current()`), not the
+ * copy a closure captured: react-router's `setSearchParams(prev => ...)` passes the params of the render
+ * that created the setter, so a debounced search would undo a filter clicked while it was pending.
+ */
+export function filterUpdater(
+  current: () => URLSearchParams,
+  set: (next: URLSearchParams, opts: { replace: boolean }) => void,
+): (patch: Partial<WebFilters>, replace?: boolean) => void {
+  return (patch, replace = false) => set(withFilters(current(), patch), { replace });
+}
+
 /** Query for GET /api/web-previews. */
 export function previewQuery(f: WebFilters, page: number, pageSize = WEB_PREVIEWS_PAGE_SIZE): Record<string, string | number> {
   const q: Record<string, string | number> = { page, page_size: pageSize };

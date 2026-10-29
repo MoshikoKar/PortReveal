@@ -19,7 +19,7 @@ from app.db import session_scope, utcnow
 from app.migrate import alembic_config
 from app.models import Device, Domain, DomainScan, Event, RecipientGroup, Subdomain, Wordlist
 from app.scanner.types import ScanContext
-from app.settings_store import DomainDiscoverySettings, get_section
+from app.settings_store import DomainDiscoverySettings, get_section, put_section
 from tests.helpers import make_network
 from tests.test_domains import (  # noqa: F401  (client is a pytest fixture)
     PUBLIC_NS,
@@ -320,3 +320,19 @@ def test_cancel_mid_phase_keeps_results_as_partial(db, monkeypatch):
     assert {"h0.example.com", "h1.example.com", "h2.example.com"} <= kept  # resolved before the cancel
     assert subs["h5.example.com"].unverified and not subs["h5.example.com"].in_progress  # found, not yet checked
     assert not db.scalar(select(Event.id).where(Event.domain_scan_id == job_id, Event.event_type == "subdomain_gone"))
+
+
+def test_wordlist_truncation_is_reported(client, db, monkeypatch):  # noqa: F811
+    fake_tools(monkeypatch)
+    with session_scope() as s:
+        cfg = get_section(s, DomainDiscoverySettings)
+        cfg.max_wordlist_entries = 50
+        put_section(s, cfg)
+    d = make_domain(db, passive_enabled=False, wordlist_mode="custom", custom_words=[f"w{i}" for i in range(130)])
+    job = db.get(DomainScan, run_scan_now(d.id, FakeDns()))
+    phases = {p["key"]: p for p in job.phases}
+    for key in ("wordlist_internal", "wordlist_public"):
+        assert phases[key]["status"] == "done" and phases[key]["total"] == 50
+        assert phases[key]["reason"] == "wordlist truncated: 50 of 130 entries used (Max wordlist entries)"
+    dom = client.get(f"/api/domains/{d.id}").json()
+    assert (dom["wordlist_entries"], dom["wordlist_limit"]) == (130, 50)

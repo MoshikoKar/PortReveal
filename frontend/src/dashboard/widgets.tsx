@@ -104,7 +104,11 @@ function BaselineCell({ n, onStarted }: { n: Network; onStarted: () => void }) {
   const { isAdmin } = useApp();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  if (n.baseline_at) return <span className="cell-ellipsis" title={fmtTime(n.baseline_at)}>{fmtTime(n.baseline_at)}</span>;
+  if (n.baseline_at) {
+    // Date and time when the cell has room, the date alone in a narrow card (container query in styles.css).
+    const at = fmtTime(n.baseline_at);
+    return <span className="dash-when" title={at}><span className="dash-long">{at}</span><span className="dash-short">{at.slice(0, 10)}</span></span>;
+  }
   const start = async (e: MouseEvent) => {
     e.stopPropagation();
     setBusy(true);
@@ -470,14 +474,14 @@ function NetworksWidget({ data, edit, measuring, reload }: WidgetRenderProps) {
   return (
     <WidgetChrome title="Networks" edit={edit} flush>
       <table ref={tableRef} className="dash-table">
-        <thead><tr><th className="dash-main dash-split">Network</th><th>Scope</th><th title="Active / known hosts">Hosts</th><th className="dash-shrink">Baseline</th></tr></thead>
+        <thead><tr><th className="dash-main dash-split net-name">Network</th><th className="dash-fit">Scope</th><th className="dash-fit" title="Active / known hosts">Hosts</th><th className="dash-shrink net-baseline">Baseline</th></tr></thead>
         <tbody>
           {rows.map((n) => (
             <tr key={n.id} className="clickable" onClick={() => !edit && nav(`/devices?network_id=${n.id}`)}>
-              <td className="dash-main dash-split" title={n.name}>{n.name}</td>
-              <td className="mono">{n.cidr}</td>
-              <td title={`${n.active_count} active / ${n.device_count} known`}>{n.active_count} / {n.device_count}</td>
-              <td className="dash-shrink"><BaselineCell n={n} onStarted={reload} /></td>
+              <td className="dash-main dash-split net-name" title={n.name}>{n.name}</td>
+              <td className="mono dash-fit">{n.cidr}</td>
+              <td className="dash-fit" title={`${n.active_count} active / ${n.device_count} known`}>{n.active_count} / {n.device_count}</td>
+              <td className="dash-shrink net-baseline"><BaselineCell n={n} onStarted={reload} /></td>
             </tr>
           ))}
         </tbody>

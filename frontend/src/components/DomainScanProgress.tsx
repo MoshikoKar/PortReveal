@@ -1,6 +1,6 @@
-import { currentPhase, formatEta, formatPercent, formatRate, phaseCounter, stepperItems } from '../domains';
+import { currentPhase, formatEta, formatPercent, formatRate, phaseCounter, progressWidth, stepperItems } from '../domains';
 import type { DomainScanJob } from '../types';
-import { Card, Progress } from './ui';
+import { Card } from './ui';
 
 /** Running domain scan: phase stepper, overall percent and the current phase's counters. */
 export function DomainScanProgress({ scan, onCancel, cancelling }: {
@@ -14,7 +14,7 @@ export function DomainScanProgress({ scan, onCancel, cancelling }: {
       title={`Domain scan #${scan.id} · ${scan.status === 'queued' ? 'queued' : cur?.label ?? scan.stage ?? 'starting'}`}
       actions={onCancel && <button className="btn warn sm" disabled={cancelling} onClick={onCancel}>{cancelling ? 'Cancelling…' : 'Cancel scan'}</button>}
     >
-      <div className="stack" style={{ gap: 10 }} data-testid="domain-scan-progress">
+      <div className="stack domain-scan-progress" style={{ gap: 10 }} data-testid="domain-scan-progress">
         {scan.status === 'queued' && <div className="muted small">Waiting for a free slot (network scans go first).</div>}
         <ol className="phase-steps" aria-label="Scan phases">
           {stepperItems(scan.phases).map((s) => (
@@ -25,7 +25,7 @@ export function DomainScanProgress({ scan, onCancel, cancelling }: {
           ))}
         </ol>
         <div className="row" style={{ gap: 10, alignItems: 'center' }}>
-          <span style={{ flex: 1 }}><Progress value={scan.progress} /></span>
+          <div className="progress" style={{ flex: 1 }}><div style={{ width: progressWidth(scan.progress) }} /></div>
           <strong className="small" style={{ minWidth: 44, textAlign: 'right' }}>{formatPercent(scan.progress)}</strong>
         </div>
         {cur && counters.length > 0 && <div className="small muted" data-testid="phase-counters">{counters.join(' · ')}</div>}

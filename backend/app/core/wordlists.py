@@ -550,10 +550,12 @@ def fetch_url(url: str, limits: Limits | None = None, *,
 
 
 def redact_url(url: str) -> str:
-    """The URL without user:password, for logs and audit (refused URLs may carry credentials)."""
+    """The URL as shown in the audit log and the API: scheme, host and path only. User:password is
+    dropped and a query string (tokens, signatures) becomes "?…"; the fragment is dropped."""
     try:
         parts = urlsplit(url)
-        return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1]))
+        return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1], query="…" if parts.query else "",
+                                         fragment=""))
     except ValueError:
         return "<invalid URL>"
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   activeFilterCount, checkLookupInput, currentPhase, domainBody, draftFromDomain, emptyDraft, formatDuration, formatEta,
-  formatPercent, formatRate, hostingLabel, keyPayload, keyPlaceholder, lookupView, patchParams, phaseCounter,
+  formatPercent, formatRate, hostingLabel, progressWidth, keyPayload, keyPlaceholder, lookupView, patchParams, phaseCounter,
   phaseSummaryTip, problemPhases, SCAN_POLL_MS, scanPollMs, splitList, stepperItems, subdomainQuery, wildcardTip,
+  ROW_STATUS, sourcesText, subdomainStatus, subdomainStatusTip, wordlistTruncationNote,
 } from './domains';
 import { eventColumns } from './eventColumns';
 import type { ChangeEvent, Domain, DomainScanPhase, LookupResult } from './types';
@@ -67,6 +68,7 @@ describe('lookup UI states', () => {
     expect(lookupView({ status: 'done', result: result({ in_inventory: true }) }).canAdd).toBe(false);
     const nx = lookupView({ status: 'done', result: result({ ips: [], exposure: 'unresolved' }) });
     expect(nx.canPortScan).toBe(false);
+    expect(nx.canAdd).toBe(false); // nothing to add: the name does not resolve
     expect(nx.message).toMatch(/does not resolve/);
   });
 });
@@ -190,5 +192,57 @@ describe('running scan progress', () => {
     expect(SCAN_POLL_MS).toBeLessThanOrEqual(3000);
     for (const status of ['completed', 'partial', 'failed', 'cancelled'] as const) expect(scanPollMs({ status })).toBeUndefined();
     expect(scanPollMs(null)).toBeUndefined();
+  });
+});
+
+describe('wordlist truncation', () => {
+  it('names the setting when scans use only the first entries', () => {
+    expect(wordlistTruncationNote(60000, 20000)).toBe(
+      'truncated: 20,000 of 60,000 entries used (Settings → Domain discovery → Max wordlist entries)');
+    expect(wordlistTruncationNote(20000, 20000)).toBeNull();
+    expect(wordlistTruncationNote(5, 20000)).toBeNull();
+  });
+});
+
+describe('progress bar', () => {
+  it('has exactly the width of the percent label', () => {
+    for (const f of [0, 0.034, 0.0999, 0.1, 0.617, 0.995, 1, 1.4, null]) {
+      expect(progressWidth(f)).toBe(formatPercent(f));
+    }
+  });
+});
+
+describe('inventory row status (one badge per row)', () => {
+  const row = (over: Partial<{ status: 'active' | 'gone'; exposure: 'external' | 'internal' | 'both' | 'unresolved';
+    unverified: boolean; in_progress: boolean; last_verified_at: string | null }> = {}) => ({
+    status: 'active' as const, exposure: 'external' as const, unverified: false, in_progress: false,
+    last_verified_at: '2026-10-01T08:00:00Z', ...over,
+  });
+  const fmt = (iso: string) => iso.slice(0, 10);
+
+  it('never calls an unresolved name Active', () => {
+    expect(subdomainStatus(row({ exposure: 'unresolved' }))).toBe('unresolved');
+    expect(subdomainStatus(row({ exposure: 'unresolved', unverified: true }))).toBe('unverified');
+    expect(subdomainStatus(row())).toBe('active');
+    expect(subdomainStatus(row({ exposure: 'both' }))).toBe('active');
+  });
+
+  it('maps every state to exactly one label', () => {
+    expect(subdomainStatus(row({ status: 'gone', unverified: true }))).toBe('gone');
+    expect(subdomainStatus(row({ in_progress: true, unverified: true }))).toBe('in_progress');
+    expect(subdomainStatus(row({ unverified: true }))).toBe('unverified');
+    expect(Object.values(ROW_STATUS).map((s) => s.label)).toEqual(['Active', 'Unverified', 'Unresolved', 'Gone', 'In progress']);
+    expect(ROW_STATUS.unverified.badge).toBe('medium'); // amber
+  });
+
+  it('says when an unverified name was last verified', () => {
+    expect(subdomainStatusTip(row({ unverified: true }), fmt)).toBe('Not verified in last scan - last verified 2026-10-01');
+    expect(subdomainStatusTip(row({ unverified: true, last_verified_at: null }), fmt)).toBe('Not verified in last scan - last verified never');
+  });
+
+  it('shows at most two sources inline', () => {
+    expect(sourcesText([])).toBe('-');
+    expect(sourcesText(['axfr', 'passive'])).toBe('AXFR, Passive');
+    expect(sourcesText(['axfr', 'manual', 'passive', 'wordlist'])).toBe('AXFR, Manual +2');
   });
 });

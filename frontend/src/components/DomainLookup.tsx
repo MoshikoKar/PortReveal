@@ -103,7 +103,7 @@ export function DomainLookup({ domains, onChanged }: { domains: string[]; onChan
           </div>
           <div className="row wrap" style={{ gap: 8 }}>
             <button className="btn sm" disabled={!view.canAdd || acting} onClick={() => act('add')}
-              title={r.in_inventory ? 'Already in the inventory' : undefined}>{r.in_inventory ? 'In inventory' : 'Add to inventory'}</button>
+              title={r.in_inventory ? 'Already in the inventory' : !r.ips.length ? "Name doesn't resolve" : undefined}>{r.in_inventory ? 'In inventory' : 'Add to inventory'}</button>
             <button className="btn sm" disabled={!view.canPortScan || acting} onClick={() => act('scan')}
               title="Queue a port scan of these addresses (scan profiles and exclusions apply)">Port scan now</button>
           </div>

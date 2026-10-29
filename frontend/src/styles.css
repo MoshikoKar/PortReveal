@@ -282,6 +282,17 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .dash-baseline > * { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dash-baseline .badge { display: block; flex-shrink: 100; height: 18px; line-height: 16px; padding: 0 6px; font-size: 11px; }
 .dash-baseline .btn.sm { display: block; min-width: 40px; padding: 2px 8px; font-size: 12px; }
+/* Short dashboard columns that take exactly their content width (Networks: scope, hosts). */
+.dash-table .dash-fit { width: 1%; }
+/* Networks card: the name and the baseline share what scope + hosts leave (baseline needs the date). */
+.dash-table .dash-main.net-name, .dash-table .dash-shrink.net-baseline { width: 50%; }
+.dash-table .net-name, .dash-table .net-baseline, .dash-table .dash-fit { padding-left: 8px; padding-right: 8px; }
+.dash-when { display: block; container-type: inline-size; overflow: hidden; text-overflow: ellipsis; }
+.dash-when .dash-short { display: none; }
+@container (max-width: 118px) {
+  .dash-when .dash-long { display: none; }
+  .dash-when .dash-short { display: inline; }
+}
 
 /* Alert feed (narrow card): two lines per alert - when + what, then device and finding details. */
 .feed.alert-feed > li { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
@@ -471,6 +482,10 @@ input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px;
 th > input[type='checkbox'], td > input[type='checkbox'] { width: var(--table-check); height: var(--table-check); margin: 0; }
 label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-2); }
 label.field .hint { color: var(--muted); font-size: 11.5px; }
+/* Settings > Domain discovery: provider key fields on one grid (equal widths, labels aligned at the top). */
+.key-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-3) var(--space-4); align-items: start; }
+.key-grid > .field { min-width: 0; }
+.key-grid > .field input { width: 100%; box-sizing: border-box; }
 label.check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px 18px; }
 
@@ -580,6 +595,12 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .event-table .event-change { width: 65%; max-width: 0; min-width: 120px; }
 .event-table.compact .event-device { min-width: 64px; }
 .event-table.compact .event-change { min-width: 80px; }
+/* Dashboard Recent changes: Time / Event / Port take only what they need (the event badge is capped,
+   full label in the title); Device and Change share the rest. */
+.event-table.compact th, .event-table.compact td { padding-left: 6px; padding-right: 6px; }
+.event-table.compact .event-time, .event-table.compact .event-port { width: 1%; }
+.event-table.compact .event-type { width: 1%; max-width: 104px; }
+.event-table.compact .event-type .badge { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; line-height: 22px; }
 .event-device-cell { display: flex; flex-direction: column; justify-content: center; min-width: 0; min-height: 36px; }
 .event-device-cell .small { line-height: 1.3; }
 .event-table.compact .event-device-cell { min-height: 32px; }
@@ -626,6 +647,22 @@ td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 .domain-table th, .domain-table td { white-space: nowrap; }
 .domain-table .domain-col-name { width: 30%; max-width: 0; min-width: 160px; }
 .domain-table .domain-col-fluid { width: 18%; max-width: 0; min-width: 110px; }
+/* Subdomain inventory: one line per row, never wider than the card. Short columns (exposure, sources,
+   wildcard, seen, status) take their content width; Name gets the most of the rest, Records / IPs /
+   Hosting share what remains. Shrinkable cells truncate with the full value in the title
+   (max-width: 0 drops their min-content width so the auto layout can shrink them). */
+.subdomain-table th, .subdomain-table td { white-space: nowrap; padding-left: 8px; padding-right: 8px; }
+.subdomain-table .sd-fit { width: 1%; }
+.subdomain-table .sd-name { width: 40%; max-width: 0; min-width: 100px; }
+.subdomain-table .sd-flex { width: 10%; max-width: 0; min-width: 48px; }
+.subdomain-table .sd-ips { width: 16%; }
+.subdomain-table .sd-hosting { width: 12%; }
+
+/* Scan history summary: up to two lines, then an ellipsis (full text in the title). */
+.cell-clamp-2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: normal; overflow-wrap: anywhere; }
+/* The bar shows the same value as the percent label beside it: no long easing that lags behind. */
+.domain-scan-progress .progress > div { transition: width 0.25s linear; }
+
 /* Running domain scan: compact phase stepper (wraps on narrow screens). */
 .phase-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .phase-step { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }

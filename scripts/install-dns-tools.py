@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Install the pinned subfinder / dnsx releases for Domain scans (Linux setup path and Docker build).
 
 Reads scripts/tools-manifest.json, downloads the asset for this OS/arch, verifies its sha256 BEFORE
@@ -14,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -68,7 +68,8 @@ def download(url: str) -> bytes:
     if not url.startswith("https://"):
         raise ValueError("refusing a non-https download URL")
     req = urllib.request.Request(url, headers={"User-Agent": "PortReveal-setup"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 (https only, pinned URL)
+    # https only (checked above), pinned URL from the manifest.
+    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
         data = resp.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise ValueError("download larger than expected")
@@ -87,7 +88,7 @@ def install(name: str, spec: dict, key: str, dest: Path) -> bool:
     log(f"downloading {name} {spec['version']} ({key})")
     try:
         data = download(asset["url"])
-    except Exception as exc:  # network / proxy problems are reported, never fatal by default
+    except (OSError, ValueError, http.client.HTTPException) as exc:  # reported, never fatal by default
         log(f"{name}: download failed: {exc}", "ERROR")
         return False
     digest = hashlib.sha256(data).hexdigest()

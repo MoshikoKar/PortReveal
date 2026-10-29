@@ -7,7 +7,8 @@ import type { Wordlist, WordlistImportResult, WordlistKind, WordlistLibrary } fr
 import { fmtTime, useApi, useInFlight } from '../../util';
 import {
   acceptedExtensions, deleteConfirmText, domainsFromError, doneState, errorState, errorText, fileError, formatBytes,
-  inUseByDomainsText, nameError, NAME_MAX, shortSha, urlError, type DomainRef, type ImportState,
+  INLINE_REASONS, inUseByDomainsText, nameError, NAME_MAX, shortSha, skipReasonsText, urlError, type DomainRef,
+  type ImportState,
 } from '../../wordlists';
 
 function DomainLinks({ domains }: { domains: DomainRef[] }) {
@@ -176,6 +177,17 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
           <div className="alert ok spread" role="status" data-testid="wordlist-status">
             <div className="stack" style={{ gap: 4 }}>
               <span data-testid="wordlist-summary">{state.text}</span>
+              {state.reasons.length > 0 && state.reasons.length <= INLINE_REASONS && (
+                <span className="small" data-testid="wordlist-reasons">Skipped: {skipReasonsText(state.reasons)}</span>
+              )}
+              {state.reasons.length > INLINE_REASONS && (
+                <details className="small" data-testid="wordlist-reasons">
+                  <summary>Skipped by reason ({state.reasons.length} reasons)</summary>
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {state.reasons.map(([k, v]) => <li key={k}>{k}: {v.toLocaleString('en-US')}</li>)}
+                  </ul>
+                </details>
+              )}
               {state.samples.length > 0 && <span className="small">First skipped: {state.samples.join('; ')}</span>}
             </div>
             <button type="button" className="btn ghost sm" onClick={() => setState({ status: 'idle' })} aria-label="Dismiss" title="Dismiss">✕</button>

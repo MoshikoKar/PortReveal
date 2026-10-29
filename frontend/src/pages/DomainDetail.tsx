@@ -7,9 +7,10 @@ import { DomainScanProgress } from '../components/DomainScanProgress';
 import { Card, Empty, ErrorBox, Kpi, Loading, Pager, ScanStatusBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import {
-  EXPOSURE_BADGE, EXPOSURE_LABELS, EXPOSURE_TIPS, FLAG_BADGE, FLAG_LABELS, FLAG_TIPS, SOURCE_LABELS, SOURCE_TIPS,
+  EXPOSURE_BADGE, EXPOSURE_LABELS, EXPOSURE_TIPS, FLAG_BADGE, FLAG_LABELS, FLAG_SHORT, FLAG_TIPS, ROW_STATUS, SOURCE_LABELS,
+  SOURCE_TIPS, sourcesText, subdomainStatus, subdomainStatusTip,
   type DomainDraft, type SubdomainFilterKey, activeFilterCount, draftFromDomain, hostingLabel, patchParams,
-  phaseSummaryTip, problemPhases, scanPollMs, subdomainQuery, wildcardTip,
+  phaseSummaryTip, problemPhases, scanPollMs, subdomainQuery, wildcardTip, wordlistTruncationNote,
 } from '../domains';
 import type { Domain, DomainScanJob, Exposure, Paged, Subdomain, SubdomainFlag, SubdomainSource } from '../types';
 import { duration, fmtTime, relTime, useApi, useInFlight } from '../util';
@@ -41,40 +42,35 @@ function HostingCell({ s }: { s: Subdomain }) {
   );
 }
 
-function SubdomainRow({ s, domain }: { s: Subdomain; domain: Domain }) {
+function SubdomainRow({ s, domain, showWildcard, hostingFlex }: {
+  s: Subdomain; domain: Domain; showWildcard: boolean; hostingFlex: boolean;
+}) {
+  const st = ROW_STATUS[subdomainStatus(s)];
   const authorized = s.flags.includes('internal_authorized');
   return (
     <tr className={s.status === 'gone' ? 'dim' : undefined}>
-      <td className="domain-col-name"><span className="cell-ellipsis mono" title={s.name}>{s.name}</span></td>
-      <td className="nowrap">
+      <td className="sd-name"><span className="cell-ellipsis mono" title={s.name}>{s.name}</span></td>
+      <td className="sd-fit">
         <span className={`badge ${EXPOSURE_BADGE[s.exposure]}`} title={EXPOSURE_TIPS[s.exposure]}>
           {authorized && s.exposure === 'internal' ? 'Internal (authorized)' : EXPOSURE_LABELS[s.exposure]}
         </span>
         {s.flags.filter((f) => f !== 'internal_authorized' || s.exposure !== 'internal').map((f) => (
-          <span key={f} className={`badge ${FLAG_BADGE[f]}`} title={FLAG_TIPS[f]} style={{ marginLeft: 4 }}>{FLAG_LABELS[f]}</span>
+          <span key={f} className={`badge ${FLAG_BADGE[f]}`} title={`${FLAG_LABELS[f]}: ${FLAG_TIPS[f]}`} style={{ marginLeft: 4 }}>{FLAG_SHORT[f]}</span>
         ))}
       </td>
-      <td className="nowrap small" title={[
+      <td className="small sd-flex"><span className="cell-ellipsis" title={[
         s.records.internal && `internal: ${[...s.records.internal.a, ...s.records.internal.aaaa, ...s.records.internal.cname].join(', ') || '-'}`,
         s.records.public && `public: ${[...s.records.public.a, ...s.records.public.aaaa, ...s.records.public.cname].join(', ') || '-'}`,
-      ].filter(Boolean).join('\n')}>{s.records_summary}</td>
-      <td className="domain-col-fluid"><span className="cell-ellipsis mono small" title={s.ips.join('\n')}>{s.ips.join(', ') || '-'}</span></td>
-      <td className="domain-col-fluid small"><HostingCell s={s} /></td>
-      <td className="nowrap">
-        {s.sources.map((src) => <span key={src} className="chip" title={SOURCE_TIPS[src]}>{SOURCE_LABELS[src]}</span>)}
+      ].filter(Boolean).join('\n')}>{s.records_summary}</span></td>
+      <td className="sd-flex sd-ips"><span className="cell-ellipsis mono small" title={s.ips.join('\n')}>{s.ips.join(', ') || '-'}</span></td>
+      <td className={`small ${hostingFlex ? 'sd-flex sd-hosting' : 'sd-fit'}`}><HostingCell s={s} /></td>
+      <td className="small sd-fit" title={s.sources.map((src) => `${SOURCE_LABELS[src]}: ${SOURCE_TIPS[src]}`).join('\n')}>
+        {sourcesText(s.sources)}
       </td>
-      <td>{s.wildcard ? <span className="badge medium" title={wildcardTip(domain.name, domain.wildcard)}>Wildcard</span> : null}</td>
-      <td className="nowrap small" title={fmtTime(s.first_seen)}>{relTime(s.first_seen)}</td>
-      <td className="nowrap small" title={fmtTime(s.last_seen)}>{relTime(s.last_seen)}</td>
-      <td className="nowrap">
-        <span className={`badge ${s.status === 'active' ? 'ok' : 'outline'}`}>{s.status}</span>
-        {s.in_progress && <span className="badge accent" style={{ marginLeft: 4 }} title="Written by the running scan; classification is not final yet">scan in progress</span>}
-        {s.unverified && !s.in_progress && (
-          <span className="badge medium" style={{ marginLeft: 4 }} title="The last scan could not check this name (resolver error, timeout or stopped early). Its previous state is kept; last seen is when it was really seen.">
-            unverified in last scan
-          </span>
-        )}
-      </td>
+      {showWildcard && <td className="sd-fit">{s.wildcard ? <span className="badge medium" title={wildcardTip(domain.name, domain.wildcard)}>Wildcard</span> : null}</td>}
+      <td className="small sd-fit" title={fmtTime(s.first_seen)}>{relTime(s.first_seen)}</td>
+      <td className="small sd-fit" title={fmtTime(s.last_seen)}>{relTime(s.last_seen)}</td>
+      <td className="sd-fit"><span className={`badge ${st.badge}`} title={subdomainStatusTip(s, fmtTime)} data-testid="subdomain-status">{st.label}</span></td>
     </tr>
   );
 }
@@ -121,6 +117,10 @@ export default function DomainDetail() {
   const last = d.last_scan;
   const active = !!last && (last.status === 'queued' || last.status === 'running');
   const sort = sp.get('sort') ?? 'name';
+  // The Wildcard column only when a listed row is wildcard (the "Wildcard only" filter stays); Hosting
+  // shrinks to a compact "-" column when no listed row has hosting data.
+  const showWildcard = !!subs.data?.items.some((s) => s.wildcard);
+  const hostingFlex = !!subs.data?.items.some((s) => s.hosting.length);
   const sortTh = (key: string, label: string, className?: string) => (
     <SortTh className={className} active={sort.replace('-', '') === key} desc={sort.startsWith('-')}
       onSort={() => set({ sort: sort === key ? `-${key}` : key })}>{label}</SortTh>
@@ -156,6 +156,11 @@ export default function DomainDetail() {
           <h1 className="mono">{d.name}</h1>
           <p>
             {d.passive_enabled ? 'Passive' : 'No passive'} · {d.wordlist_mode === 'none' ? 'no wordlist' : d.wordlist_mode === 'library' ? `wordlist ${d.wordlist_name ?? '(missing)'}` : `${d.custom_words.length} typed subdomains`}
+            {d.wordlist_mode !== 'none' && wordlistTruncationNote(d.wordlist_entries, d.wordlist_limit) && (
+              <span className="badge medium" style={{ marginLeft: 6 }} data-testid="wordlist-truncated">
+                {wordlistTruncationNote(d.wordlist_entries, d.wordlist_limit)}
+              </span>
+            )}
             {' · '}{d.axfr_enabled ? `AXFR from ${d.axfr_servers.join(', ') || 'internal resolvers'}` : 'no AXFR'}
             {' · '}internal {d.internal_resolvers.join(', ') || 'system resolver'} · public {d.public_resolvers.join(', ')}
           </p>
@@ -176,7 +181,7 @@ export default function DomainDetail() {
         </div>
       )}
       {active && last && <DomainScanProgress scan={last} />}
-      <div className="grid kpis">
+      <div className="grid kpis five">
         <Kpi label="Subdomains" value={d.counts.active} onClick={() => set({ exposure: undefined, status: undefined })} />
         {(['external', 'internal', 'both'] as Exposure[]).map((e) => (
           <Kpi key={e} label={EXPOSURE_LABELS[e]} value={d.counts[e]} active={sp.get('exposure') === e}
@@ -214,22 +219,22 @@ export default function DomainDetail() {
           <Empty>{d.last_scan ? 'No subdomains match these filters.' : 'No scan yet. Run a scan to build the inventory.'}</Empty>
         ) : (
           <div className="table-wrap">
-            <table className="domain-table" data-testid="subdomain-table">
+            <table className="domain-table subdomain-table" data-testid="subdomain-table">
               <thead>
                 <tr>
-                  {sortTh('name', 'Name', 'domain-col-name')}
-                  {sortTh('exposure', 'Exposure')}
-                  <th>Records</th>
-                  <th className="domain-col-fluid">IPs</th>
-                  <th className="domain-col-fluid">Hosting</th>
-                  <th>Sources</th>
-                  <th>Wildcard</th>
-                  {sortTh('first_seen', 'First seen')}
-                  {sortTh('last_seen', 'Last seen')}
-                  {sortTh('status', 'Status')}
+                  {sortTh('name', 'Name', 'sd-name')}
+                  {sortTh('exposure', 'Exposure', 'sd-fit')}
+                  <th className="sd-flex">Records</th>
+                  <th className="sd-flex sd-ips">IPs</th>
+                  <th className={hostingFlex ? 'sd-flex sd-hosting' : 'sd-fit'}>Hosting</th>
+                  <th className="sd-fit">Sources</th>
+                  {showWildcard && <th className="sd-fit">Wildcard</th>}
+                  {sortTh('first_seen', 'First seen', 'sd-fit')}
+                  {sortTh('last_seen', 'Last seen', 'sd-fit')}
+                  {sortTh('status', 'Status', 'sd-fit')}
                 </tr>
               </thead>
-              <tbody>{subs.data.items.map((s) => <SubdomainRow key={s.id} s={s} domain={d} />)}</tbody>
+              <tbody>{subs.data.items.map((s) => <SubdomainRow key={s.id} s={s} domain={d} showWildcard={showWildcard} hostingFlex={hostingFlex} />)}</tbody>
             </table>
           </div>
         )}
@@ -257,7 +262,7 @@ export default function DomainDetail() {
                     <td className="nowrap small" title={fmtTime(j.started_at ?? j.created_at)}>{relTime(j.started_at ?? j.created_at)}</td>
                     <td className="nowrap small" title={phaseSummaryTip(j.phases) || undefined}>{j.started_at ? duration(j.started_at, j.finished_at) : '-'}</td>
                     <td className="domain-col-fluid small">
-                      <span className="cell-ellipsis" title={[scanSummary(j), j.notes].filter(Boolean).join('\n')}>{scanSummary(j)}</span>
+                      <span className="cell-clamp-2" title={[scanSummary(j), j.notes].filter(Boolean).join('\n')}>{scanSummary(j)}</span>
                     </td>
                     <td className="small">{j.port_scan_id ? <Link to="/scans">#{j.port_scan_id}</Link> : <span className="muted">-</span>}</td>
                   </tr>

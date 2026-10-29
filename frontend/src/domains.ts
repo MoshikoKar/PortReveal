@@ -1,7 +1,7 @@
 // Domain scans: labels, filter <-> URL mapping, lookup states and settings-key payloads (pure helpers).
 import type {
   Domain, DomainPhaseStatus, DomainSchedule, DomainScanJob, DomainScanPhase, DomainWordlistMode, Exposure, HostingEntry,
-  LookupResult, MaskedKey, SubdomainFlag, SubdomainSource,
+  LookupResult, MaskedKey, Subdomain, SubdomainFlag, SubdomainSource,
 } from './types';
 
 export const EXPOSURE_LABELS: Record<Exposure, string> = {
@@ -36,11 +36,67 @@ export const FLAG_TIPS: Record<SubdomainFlag, string> = {
   internal_name_exposed: 'In the zone transfer and visible publicly while it resolves to internal ranges',
   private_ip_public: 'The public answer contains a private address or one inside a configured network',
 };
+/** Inventory cell text: up to two sources, then "+N" (the full list is in the cell's title). */
+export function sourcesText(sources: SubdomainSource[]): string {
+  if (!sources.length) return '-';
+  const shown = sources.slice(0, 2).map((s) => SOURCE_LABELS[s]).join(', ');
+  return sources.length > 2 ? `${shown} +${sources.length - 2}` : shown;
+}
+
+/** Compact flag labels for the inventory table (full label in the title). */
+export const FLAG_SHORT: Record<SubdomainFlag, string> = {
+  internal_authorized: 'Authorized', internal_name_exposed: 'Exposed', private_ip_public: 'Private IP',
+};
 export const FLAG_BADGE: Record<SubdomainFlag, string> = {
   internal_authorized: 'outline', internal_name_exposed: 'high', private_ip_public: 'high',
 };
 
 export const DEFAULT_PUBLIC_RESOLVERS = ['1.1.1.1', '8.8.8.8'];
+
+// --- one status per inventory row ----------------------------------------------------------------------------
+export type RowStatus = 'active' | 'unverified' | 'unresolved' | 'gone' | 'in_progress';
+export const ROW_STATUS: Record<RowStatus, { label: string; badge: string }> = {
+  active: { label: 'Active', badge: 'ok' },
+  unverified: { label: 'Unverified', badge: 'medium' },
+  unresolved: { label: 'Unresolved', badge: 'outline' },
+  gone: { label: 'Gone', badge: 'outline' },
+  in_progress: { label: 'In progress', badge: 'accent' },
+};
+
+/**
+ * The single status shown for a row. "Active" means the name resolved in the last scan that verified it:
+ * a name the last scan could not check is "Unverified", one that resolves nowhere is "Unresolved" (never
+ * "Active"), a running scan's unclassified name is "In progress".
+ */
+export function subdomainStatus(s: Pick<Subdomain, 'status' | 'exposure' | 'unverified' | 'in_progress'>): RowStatus {
+  if (s.status === 'gone') return 'gone';
+  if (s.in_progress) return 'in_progress';
+  if (s.unverified) return 'unverified';
+  if (s.exposure === 'unresolved') return 'unresolved';
+  return 'active';
+}
+
+export function subdomainStatusTip(s: Pick<Subdomain, 'status' | 'exposure' | 'unverified' | 'in_progress' | 'last_verified_at'>,
+  fmt: (iso: string) => string): string {
+  switch (subdomainStatus(s)) {
+    case 'unverified':
+      return `Not verified in last scan - last verified ${s.last_verified_at ? fmt(s.last_verified_at) : 'never'}`;
+    case 'unresolved':
+      return 'Resolves on neither the internal nor the public resolvers (kept because a zone transfer or an operator lists it)';
+    case 'gone':
+      return 'Missed by two consecutive complete scans';
+    case 'in_progress':
+      return 'Found by the running scan; not classified yet';
+    default:
+      return s.last_verified_at ? `Resolved in the last scan (${fmt(s.last_verified_at)})` : 'Resolved in the last scan';
+  }
+}
+
+/** Shown next to the selected wordlist when scans only use its first `limit` entries. */
+export function wordlistTruncationNote(entries: number, limit: number): string | null {
+  if (!limit || entries <= limit) return null;
+  return `truncated: ${limit.toLocaleString('en-US')} of ${entries.toLocaleString('en-US')} entries used (Settings → Domain discovery → Max wordlist entries)`;
+}
 
 export function wildcardTip(domain: string, wildcard: { internal: string[]; public: string[] } | null | undefined): string {
   const views = (['internal', 'public'] as const)
@@ -125,7 +181,7 @@ export function lookupView(state: LookupState): LookupView {
     case 'done': {
       const r = state.result;
       const message = r.ips.length ? null : `${r.hostname} does not resolve on the internal or the public resolvers.`;
-      return { busy: false, message, error: false, canAdd: !r.in_inventory, canPortScan: r.ips.length > 0 };
+      return { busy: false, message, error: false, canAdd: !r.in_inventory && r.ips.length > 0, canPortScan: r.ips.length > 0 };
     }
   }
 }
@@ -204,10 +260,19 @@ export function scanPollMs(scan: Pick<DomainScanJob, 'status'> | null | undefine
   return scan && (scan.status === 'queued' || scan.status === 'running') ? SCAN_POLL_MS : undefined;
 }
 
-export function formatPercent(fraction: number | null | undefined): string {
+/** The percent shown (label and bar alike): floored to 0.1 below 10%, to whole percents above. */
+function shownPercent(fraction: number | null | undefined): number {
   const pct = Math.max(0, Math.min(1, fraction ?? 0)) * 100;
-  return `${pct < 10 && pct > 0 ? pct.toFixed(1) : Math.floor(pct)}%`;
+  return pct < 10 ? Math.floor(pct * 10) / 10 : Math.floor(pct);
 }
+
+export function formatPercent(fraction: number | null | undefined): string {
+  const pct = shownPercent(fraction);
+  return `${pct < 10 && pct > 0 ? pct.toFixed(1) : pct}%`;
+}
+
+/** CSS width of the progress bar: exactly the percent in the label next to it. */
+export const progressWidth = (fraction: number | null | undefined) => `${shownPercent(fraction)}%`;
 
 /** "45 s", "3 min", "1 h 20 min"; null/negative -> '-'. */
 export function formatDuration(seconds: number | null | undefined): string {

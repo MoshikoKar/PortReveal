@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { filtersFromParams, observeWhenVisible, previewQuery, withFilters } from './webGallery';
+import { filterUpdater, filtersFromParams, observeWhenVisible, previewQuery, withFilters } from './webGallery';
 
 /** Fake IntersectionObserver: tests decide which observed elements are on screen. */
 class FakeObserver {
@@ -91,5 +91,33 @@ describe('gallery filters in the URL', () => {
     });
     expect(previewQuery(filtersFromParams(new URLSearchParams()), 1)).toEqual({ page: 1, page_size: 36, status: 'ok' });
     expect(previewQuery(filtersFromParams(new URLSearchParams('status=all')), 1)).toEqual({ page: 1, page_size: 36 });
+  });
+});
+
+describe('filterUpdater (debounced search)', () => {
+  it('commits q onto the params current at commit time, never reverting a filter clicked meanwhile', () => {
+    vi.useFakeTimers();
+    try {
+      let url = new URLSearchParams('status=error');
+      const ref = { current: url };
+      const set = (next: URLSearchParams) => { url = next; ref.current = next; };
+      const update = filterUpdater(() => ref.current, set);
+      // The user types: the search commit is debounced (as WebHosts does)...
+      setTimeout(() => update({ q: 'camera' }, true), 300);
+      // ...and clicks "All" before it fires.
+      update({ status: null });
+      expect(url.toString()).toBe('status=all');
+      vi.advanceTimersByTime(300);
+      expect(url.get('status')).toBe('all');
+      expect(url.get('q')).toBe('camera');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('only touches the patched keys', () => {
+    let url = new URLSearchParams('network=2&port=443&scheme=https&status=all&archived=1');
+    filterUpdater(() => url, (next) => { url = next; })({ q: 'nas' });
+    expect(filtersFromParams(url)).toEqual({ q: 'nas', network: 2, port: 443, scheme: 'https', status: null, archived: true });
   });
 });

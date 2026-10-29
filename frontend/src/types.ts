@@ -1164,6 +1164,9 @@ export interface Domain {
   wordlist_mode: DomainWordlistMode;
   wordlist_id: number | null;
   wordlist_name: string | null;
+  /** Entries in the selected list, and Settings > Domain discovery > Max wordlist entries (scans use the first N). */
+  wordlist_entries: number;
+  wordlist_limit: number;
   custom_words: string[];
   passive_enabled: boolean;
   axfr_enabled: boolean;
@@ -1211,6 +1214,8 @@ export interface Subdomain {
   /** Written by a running scan, classification not final yet. */
   in_progress: boolean;
   missed_scans: number;
+  /** When a scan last verified the name; null = never verified. */
+  last_verified_at: string | null;
   first_seen: string;
   last_seen: string;
 }

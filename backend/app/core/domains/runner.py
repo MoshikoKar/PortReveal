@@ -73,6 +73,7 @@ class Plan:
     domain: str
     passive: bool
     words: list[str]
+    words_total: int  # entries in the selected list; more than len(words) when max_wordlist_entries cut it
     axfr_enabled: bool
     axfr_servers: list[str]
     internal_resolvers: list[str]  # empty = system resolver
@@ -134,13 +135,15 @@ def _finish(scan_id: int, status: str, *, error: str | None = None, notes: list[
 
 
 # --- plan ---------------------------------------------------------------------------------------
-def _read_words(db, domain: Domain, limit: int) -> list[str]:
+def _read_words(db, domain: Domain, limit: int) -> tuple[list[str], int]:
+    """(the first `limit` entries, how many entries the list has)."""
     if domain.wordlist_mode == WORDLIST_MODE_CUSTOM:
-        return list(domain.custom_words or [])[:limit]
+        words = list(domain.custom_words or [])
+        return words[:limit], len(words)
     if domain.wordlist_mode == WORDLIST_MODE_LIBRARY and domain.wordlist_id:
         w = db.get(Wordlist, domain.wordlist_id)
         if w is None:
-            return []
+            return [], 0
         from ..wordlists import WordlistError, stored_path
 
         words: list[str] = []
@@ -154,8 +157,15 @@ def _read_words(db, domain: Domain, limit: int) -> list[str]:
                             break
         except (OSError, WordlistError):
             log.warning("domain scan: wordlist %s could not be read", w.id)
-        return words
-    return []
+        return words, max(w.entries or 0, len(words))
+    return [], 0
+
+
+def truncation_note(used: int, total: int) -> str | None:
+    """Phase reason when max_wordlist_entries cut the list (Settings > Domain discovery)."""
+    if total <= used:
+        return None
+    return f"wordlist truncated: {used:,} of {total:,} entries used (Max wordlist entries)"
 
 
 def _snap(name: str, exposure: str, records: dict | None, ips: list | None, wildcard: bool,
@@ -182,9 +192,10 @@ def build_plan(db, job: DomainScan, domain: Domain, cfg: DomainDiscoverySettings
         prev = {s.name: _snap(s.name, s.exposure, s.records, s.ips, s.wildcard, s.flags)
                 for s in rows if s.status == SUBDOMAIN_ACTIVE and s.last_scan_id is not None}
         prev_open = [k for k, v in ((prev_job.axfr or {}).get("public") or {}).items() if v.get("status") == "open"]
+    words, words_total = _read_words(db, domain, cfg.max_wordlist_entries)
     return Plan(
         scan_id=job.id, domain_id=domain.id, domain=domain.name, passive=bool(domain.passive_enabled),
-        words=_read_words(db, domain, cfg.max_wordlist_entries), axfr_enabled=bool(domain.axfr_enabled),
+        words=words, words_total=words_total, axfr_enabled=bool(domain.axfr_enabled),
         axfr_servers=list(domain.axfr_servers or []), internal_resolvers=list(domain.internal_resolvers or []),
         public_resolvers=list(domain.public_resolvers or []) or list(DEFAULT_PUBLIC_RESOLVERS),
         known=known, known_ips=known_ips, prev=prev,
@@ -347,7 +358,7 @@ def _wordlist_phase(key: str, view: str, cands: list[str], resolvers: list[str] 
             pg.finish(key, FAILED, reason)
             out.make_partial(f"Wordlist ({view} resolvers) {reason}")
             return
-    pg.finish(key)
+    pg.finish(key, reason=truncation_note(len(plan.words), plan.words_total))
 
 
 def execute(plan: Plan, cfg: DomainDiscoverySettings, ctx: ScanContext, dns, out: Outcome, pg: Progress) -> None:

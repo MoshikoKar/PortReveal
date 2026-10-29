@@ -79,7 +79,8 @@ def _out(w: Wordlist, selected: int | None, domains: list[dict] | None = None) -
         "name": w.name,
         "kind": w.kind,
         "source": w.source,
-        "source_url": w.source_url,
+        # Redacted for display; the stored URL (with its query) is kept for Re-import.
+        "source_url": redact_url(w.source_url) if w.source_url else None,
         "original_filename": w.original_filename,
         "entries": w.entries,
         "skipped": w.skipped,
@@ -220,7 +221,8 @@ def import_wordlist(body: ImportIn, request: Request, db: Session = Depends(get_
     w = _create(db, user, name=list_name, kind=kind, source=SOURCE_URL, storage=storage, result=result,
                 source_url=url, original_filename=url_filename(url)[:255] or None)
     audit(db, user.username, "wordlist.import", w.name,
-          {"id": w.id, "kind": kind, "url": url, "sha256": result.sha256, **result.summary()}, client_ip(request))
+          {"id": w.id, "kind": kind, "url": redact_url(url)[:300], "sha256": result.sha256, **result.summary()},
+          client_ip(request))
     db.commit()
     return {"wordlist": _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id)), "summary": result.summary()}
 
@@ -238,7 +240,7 @@ def reimport_wordlist(wordlist_id: int, request: Request, db: Session = Depends(
     w.storage_name, w.entries, w.skipped = storage, result.accepted, result.skipped
     w.size_bytes, w.sha256, w.updated_at = result.size_bytes, result.sha256, utcnow()
     audit(db, user.username, "wordlist.reimport", w.name,
-          {"id": w.id, "url": url, "previous_entries": previous, "entries": result.accepted,
+          {"id": w.id, "url": redact_url(url)[:300], "previous_entries": previous, "entries": result.accepted,
            "sha256": result.sha256, "changed": old_sha != result.sha256}, client_ip(request))
     db.commit()
     remove_stored(old_storage)

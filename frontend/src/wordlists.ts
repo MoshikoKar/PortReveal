@@ -9,7 +9,7 @@ const TEXT_EXTS = ['.txt', '.lst', '.list', '.dic'];
 export type ImportState =
   | { status: 'idle' }
   | { status: 'busy'; text: string }
-  | { status: 'done'; text: string; samples: string[] }
+  | { status: 'done'; text: string; samples: string[]; reasons: [string, number][] }
   | { status: 'error'; text: string };
 
 export function nameError(name: string): string | null {
@@ -60,10 +60,19 @@ export const shortSha = (sha: string) => sha.slice(0, 12);
 
 /** "Accepted 120 / skipped 3 (duplicate 2, path traversal 1)". */
 export function summaryText(s: WordlistImportSummary): string {
-  const base = `Accepted ${s.accepted.toLocaleString('en-US')} / skipped ${s.skipped.toLocaleString('en-US')}`;
-  const reasons = Object.entries(s.reasons).slice(0, 3).map(([k, v]) => `${k} ${v}`);
-  return reasons.length ? `${base} (${reasons.join(', ')})` : base;
+  return `Accepted ${s.accepted.toLocaleString('en-US')} / skipped ${s.skipped.toLocaleString('en-US')}`;
 }
+
+/** Every skip reason with its count, most frequent first (the counts add up to `skipped`). */
+export function skipReasons(s: WordlistImportSummary): [string, number][] {
+  return Object.entries(s.reasons).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+export const skipReasonsText = (reasons: [string, number][]) =>
+  reasons.map(([k, v]) => `${k}: ${v.toLocaleString('en-US')}`).join(', ');
+
+/** Up to this many reasons are listed inline; more go into a collapsible list. */
+export const INLINE_REASONS = 4;
 
 export function doneState(verb: 'Uploaded' | 'Imported' | 'Re-imported', r: WordlistImportResult): ImportState {
   let text = `${verb} “${r.wordlist.name}”. ${summaryText(r.summary)}.`;
@@ -73,7 +82,7 @@ export function doneState(verb: 'Uploaded' | 'Imported' | 'Re-imported', r: Word
       ? ' Source unchanged.'
       : ` Entries ${r.previous_entries.toLocaleString('en-US')} → ${r.wordlist.entries.toLocaleString('en-US')} (${delta >= 0 ? '+' : ''}${delta.toLocaleString('en-US')}).`;
   }
-  return { status: 'done', text, samples: r.summary.samples };
+  return { status: 'done', text, samples: r.summary.samples, reasons: skipReasons(r.summary) };
 }
 
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));

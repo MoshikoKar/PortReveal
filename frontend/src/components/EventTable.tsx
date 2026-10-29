@@ -2,7 +2,7 @@ import { Fragment, type ReactNode, type Ref } from 'react';
 import { Link } from 'react-router-dom';
 import { eventColumns, type ChangeParts } from '../eventColumns';
 import type { ChangeEvent } from '../types';
-import { fmtShortTime, fmtTime } from '../util';
+import { EVENT_LABELS, fmtShortTime, fmtTime } from '../util';
 import { SeverityBadge } from './ui';
 
 function ChangeCell({ c, title }: { c: ChangeParts; title: string }) {
@@ -50,7 +50,7 @@ export function EventTable({ events, compact, tableRef }: {
     <table ref={tableRef} className={`event-table${compact ? ' dash-table compact' : ''}`}>
       <thead>
         <tr>
-          <th>Time</th><th>Event</th><th className="event-device">Device</th><th>Port</th>
+          <th className="event-time">Time</th><th className="event-type">Event</th><th className="event-device">Device</th><th className="event-port">Port</th>
           <th className="event-change">Change</th>{!compact && <th className="right">Scan</th>}
         </tr>
       </thead>
@@ -59,8 +59,8 @@ export function EventTable({ events, compact, tableRef }: {
           const col = eventColumns(e);
           return (
             <tr key={e.id}>
-              <td className="muted" title={fmtTime(e.created_at, true)}>{compact ? fmtShortTime(e.created_at) : fmtTime(e.created_at)}</td>
-              <td><SeverityBadge ev={e} /></td>
+              <td className="muted event-time" title={fmtTime(e.created_at, true)}>{compact ? fmtShortTime(e.created_at) : fmtTime(e.created_at)}</td>
+              <td className="event-type" title={EVENT_LABELS[e.event_type] ?? e.event_type}><SeverityBadge ev={e} /></td>
               <td className="event-device">
                 <div className="event-device-cell">
                   <span className="cell-ellipsis" title={e.device_label ?? undefined}>
@@ -70,7 +70,7 @@ export function EventTable({ events, compact, tableRef }: {
                   {col.ip && <span className="cell-ellipsis mono small muted" title={col.ip}>{col.ip}</span>}
                 </div>
               </td>
-              <td>{col.port ? <span className="chip new">{col.port}</span> : <span className="muted">-</span>}</td>
+              <td className="event-port">{col.port ? <span className="chip new">{col.port}</span> : <span className="muted">-</span>}</td>
               <td className="event-change">
                 <div className="event-change-cell">
                   <ChangeCell c={col.change} title={col.changeText} />

@@ -60,7 +60,7 @@ ERROR_TITLE_RE = re.compile(
 # say something useful like "HAL Management Console" when the console is not actually there).
 # Also bare "Not Found" from a rendered SPA router with no real app behind it.
 SOFT_404_TEXT_RE = re.compile(
-    r"^(?:404\s*[---:]?\s*)?(?:not\s+found|file or directory not found|page not found|page missing)\.?$"
+    r"^(?:404\s*[\-:]?\s*)?(?:not\s+found|file or directory not found|page not found|page missing)\.?$"
     r"|^404\s*$",
     re.I,
 )

@@ -793,7 +793,7 @@ export function DomainDiscoveryForm({ onDirtyChange }: { onDirtyChange?: (dirty:
           Optional API keys for subfinder's passive sources. Everything works without them. Keys are stored encrypted,
           never shown again and only written to a temporary file while subfinder runs.
         </div>
-        <div className="row wrap">
+        <div className="key-grid">
           {KEY_FIELDS.map(([name, label]) => (
             <label key={name} className="field">{label}
               <input type="password" autoComplete="new-password" value={edited[name] ?? ''} disabled={cleared[name]}
