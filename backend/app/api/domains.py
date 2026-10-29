@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import String, cast, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..auth.deps import client_ip, current_user, require_admin
 from ..core.audit import audit
@@ -22,6 +22,7 @@ from ..core.domains.manager import domain_has_active_scan, domain_scan_manager, 
 from ..core.domains.runner import DEFAULT_PUBLIC_RESOLVERS, queue_port_scan
 from ..core.domains.tools import tool_status
 from ..core.domains.validate import DomainError, normalize_domain, normalize_resolvers, normalize_words
+from ..core.exposure import level as score_level
 from ..core.manager import manager
 from ..core.mockdata import device_visible, event_visible
 from ..core.wordlists import KIND_SUBDOMAINS
@@ -44,14 +45,17 @@ from ..models import (
     Domain,
     DomainScan,
     Event,
+    ServiceBanner,
     Subdomain,
     SubdomainObservation,
     User,
+    Vulnerability,
     WebPage,
     Wordlist,
 )
 from ..settings_store import DomainDiscoverySettings, _hhmm, get_section
-from .common import FULL_REPLACE, UNPAGED_LIST, Paging, Row, event_out, like_pattern, paged
+from .common import FULL_REPLACE, UNPAGED_LIST, Paging, Row, event_out, like_pattern, paged, port_out
+from .web_captures import web_page_out
 
 router = APIRouter(prefix="/api", tags=["domains"])
 
@@ -142,7 +146,7 @@ def subdomain_counts(db: Session, domain_id: int) -> dict:
     }
 
 
-def domain_out(db: Session, d: Domain) -> dict:
+def domain_out(db: Session, d: Domain, risk: dict | None = None) -> dict:
     wl = db.get(Wordlist, d.wordlist_id) if d.wordlist_id else None
     last = _last_scan(db, d.id)
     finished = _last_finished(db, d.id)
@@ -169,6 +173,7 @@ def domain_out(db: Session, d: Domain) -> dict:
         "updated_at": d.updated_at,
         "created_by": d.created_by,
         "counts": subdomain_counts(db, d.id),
+        "risk": risk if risk is not None else domain_risk(db, [d.id])[d.id],
         "wildcard": (finished.wildcard if finished else None) or {"internal": [], "public": []},
         "zone_transfer_open": [k for k, v in (((finished.axfr if finished else None) or {}).get("public") or {}).items()
                                if v.get("status") == "open"],
@@ -189,6 +194,103 @@ def devices_by_ip(db: Session, ips) -> dict[str, Device]:
     return out
 
 
+SEVERITY_RANK = ("low", "medium", "high", "critical")  # NVD baseSeverity, lowercased; worst last
+
+
+def _worse(a: str | None, b: str | None) -> str | None:
+    b = (b or "").lower() or None
+    rank = {s: i for i, s in enumerate(SEVERITY_RANK)}
+    return b if rank.get(b, -1) > rank.get(a, -1) else a
+
+
+def _linked_devices(db: Session, rows) -> dict[int, list[Device]]:
+    """Devices behind each subdomain row (needs .id, .ips, .device_id): inventory devices on its
+    addresses, plus the device a scan linked it to. Two queries for any number of rows."""
+    devs = devices_by_ip(db, [ip for r in rows for ip in (r.ips or [])])
+    by_id = {dev.id: dev for dev in devs.values()}
+    extra = {r.device_id for r in rows if r.device_id and r.device_id not in by_id}
+    if extra:
+        by_id.update({dev.id: dev for dev in db.scalars(select(Device).where(Device.id.in_(extra)))})
+    out: dict[int, list[Device]] = {}
+    for r in rows:
+        found = {devs[ip].id: devs[ip] for ip in (r.ips or []) if ip in devs}
+        dev = by_id.get(r.device_id) if r.device_id else None
+        if dev is not None and dev.current_ip:
+            found.setdefault(dev.id, dev)
+        out[r.id] = sorted(found.values(), key=lambda x: x.current_ip)
+    return out
+
+
+def subdomain_aggregates(db: Session, rows) -> tuple[dict[int, dict], dict[int, list[Device]]]:
+    """Scores / open ports / vulnerabilities / web preview per subdomain row (needs .id, .name, .ips,
+    .device_id), from the linked devices' existing scan data. A fixed number of queries for any number
+    of rows. Everything is None when no device is linked; risk / combined also when none is risk-scored."""
+    linked = _linked_devices(db, rows)
+    dev_ids = sorted({dev.id for devs in linked.values() for dev in devs})
+    ports: dict[int, int] = {}
+    vulns: dict[int, int] = {}
+    worst: dict[int, str | None] = {}
+    web: set[int] = set()
+    if dev_ids:
+        ports = dict(db.execute(
+            select(DevicePort.device_id, func.count(DevicePort.id))
+            .where(DevicePort.device_id.in_(dev_ids), DevicePort.is_open.is_(True)).group_by(DevicePort.device_id)).all())
+        for dev_id, sev, n in db.execute(
+            select(DevicePort.device_id, Vulnerability.severity, func.count(DevicePortVuln.id))
+            .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+            .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
+            .where(DevicePort.device_id.in_(dev_ids), DevicePortVuln.state != VULN_STATE_DISMISSED)
+            .group_by(DevicePort.device_id, Vulnerability.severity)).all():
+            vulns[dev_id] = vulns.get(dev_id, 0) + n
+            worst[dev_id] = _worse(worst.get(dev_id), sev)
+        web = set(db.scalars(select(WebPage.device_id).where(WebPage.device_id.in_(dev_ids)).distinct()))
+    names = sorted({r.name for r in rows})
+    host_web: dict[str, str | None] = {}
+    if names:
+        for host, uuid in db.execute(
+                select(WebPage.host_used, Device.uuid).join(Device, Device.id == WebPage.device_id, isouter=True)
+                .where(WebPage.host_used.in_(names)).distinct()).all():
+            host_web[host] = host_web.get(host) or uuid
+    out: dict[int, dict] = {}
+    for r in rows:
+        devs = linked[r.id]
+        scored = [dev for dev in devs if dev.risk_scored_at is not None]
+        sev = None
+        for dev in devs:
+            sev = _worse(sev, worst.get(dev.id))
+        web_dev = next((dev.uuid for dev in devs if dev.id in web), None)
+        out[r.id] = {
+            "linked_devices": len(devs),
+            "exposure_score": max((dev.exposure_score or 0 for dev in devs), default=None),
+            "risk_score": max((dev.risk_score or 0 for dev in scored), default=None),
+            "combined_score": max((dev.combined_score or 0 for dev in scored), default=None),
+            "open_ports_count": sum(ports.get(dev.id, 0) for dev in devs) if devs else None,
+            "vulns_count": sum(vulns.get(dev.id, 0) for dev in devs) if devs else None,
+            "worst_severity": sev,
+            "has_web_preview": web_dev is not None or r.name in host_web,
+            # Whose web preview page to open (/devices/{uuid}/web); None: only a host-name page without a device.
+            "web_device_uuid": web_dev or host_web.get(r.name),
+        }
+    return out, linked
+
+
+def domain_risk(db: Session, domain_ids: list[int]) -> dict[int, dict]:
+    """Per domain, over its active subdomains: highest combined score, high-risk names, names with open ports."""
+    out = {i: {"max_combined_score": None, "high_risk": 0, "with_open_ports": 0} for i in domain_ids}
+    if not domain_ids:
+        return out
+    rows = db.execute(select(Subdomain.id, Subdomain.domain_id, Subdomain.name, Subdomain.ips, Subdomain.device_id)
+                      .where(Subdomain.domain_id.in_(domain_ids), Subdomain.status == "active")).all()
+    aggs, _ = subdomain_aggregates(db, rows)
+    for r in rows:
+        a, o = aggs[r.id], out[r.domain_id]
+        if a["combined_score"] is not None:
+            o["max_combined_score"] = max(o["max_combined_score"] or 0, a["combined_score"])
+            o["high_risk"] += score_level(a["combined_score"]) == "high"
+        o["with_open_ports"] += bool(a["open_ports_count"])
+    return out
+
+
 def _live_hosting(hosting: list[dict], devs: dict[str, Device]) -> list[dict]:
     out = []
     for h in hosting:
@@ -197,9 +299,11 @@ def _live_hosting(hosting: list[dict], devs: dict[str, Device]) -> list[dict]:
     return out
 
 
-def subdomain_out(s: Subdomain, device_uuid: str | None = None, devs: dict[str, Device] | None = None) -> dict:
+def subdomain_out(s: Subdomain, device_uuid: str | None = None, devs: dict[str, Device] | None = None,
+                  agg: dict | None = None) -> dict:
     records = s.records or {}
     return {
+        **(agg or {}),
         "id": s.id,
         "domain_id": s.domain_id,
         "name": s.name,
@@ -363,7 +467,9 @@ def cancel_domain_scan(scan_id: int, request: Request, db: Session = Depends(get
 # --- domains CRUD -------------------------------------------------------------------------------
 @router.get("/domains", response_model=list[Row], description=UNPAGED_LIST)
 def list_domains(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    return [domain_out(db, d) for d in db.scalars(select(Domain).order_by(Domain.name)).all()]
+    rows = db.scalars(select(Domain).order_by(Domain.name)).all()
+    risk = domain_risk(db, [d.id for d in rows])
+    return [domain_out(db, d, risk[d.id]) for d in rows]
 
 
 @router.post("/domains", status_code=201)
@@ -440,6 +546,18 @@ _SORTS = {
     "last_seen": Subdomain.last_seen,
     "status": Subdomain.status,
 }
+# Sorted / filtered on the linked devices' aggregates (computed, not columns): see list_subdomains.
+_AGG_SORTS = ("combined_score", "exposure_score", "open_ports_count")
+
+
+def _agg_match(a: dict, score: str | None, has_ports: bool | None, has_web: bool | None) -> bool:
+    if score == "unscored" and a["combined_score"] is not None:
+        return False
+    if score and score != "unscored" and (a["combined_score"] is None or score_level(a["combined_score"]) != score):
+        return False
+    if has_ports is not None and bool(a["open_ports_count"]) != has_ports:
+        return False
+    return has_web is None or a["has_web_preview"] == has_web
 
 
 @router.get("/domains/{domain_id}/subdomains")
@@ -451,7 +569,10 @@ def list_subdomains(
     source: str | None = Query(None, pattern="^(passive|wordlist|axfr|manual)$"),
     flag: str | None = Query(None, pattern=f"^({'|'.join(SUBDOMAIN_FLAGS)})$"),
     wildcard: bool | None = None,
-    sort: str = Query("name", pattern="^-?(name|exposure|first_seen|last_seen|status)$"),
+    score: str | None = Query(None, pattern="^(high|medium|low|unscored)$"),  # combined score level
+    has_ports: bool | None = None,
+    has_web: bool | None = None,
+    sort: str = Query("name", pattern=f"^-?(name|exposure|first_seen|last_seen|status|{'|'.join(_AGG_SORTS)})$"),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
@@ -472,15 +593,33 @@ def list_subdomains(
     if q and q.strip():
         like = like_pattern(q.strip().lower())
         conds.append(or_(Subdomain.name.like(like, escape="\\"), cast(Subdomain.ips, String).like(like, escape="\\")))
-    col = _SORTS[sort.lstrip("-")]
-    order = col.desc() if sort.startswith("-") else col.asc()
-    total = db.scalar(select(func.count(Subdomain.id)).where(*conds)) or 0
-    rows = db.scalars(select(Subdomain).where(*conds).order_by(order, Subdomain.name)
-                      .offset(paging.offset).limit(paging.page_size)).all()
+    key = sort.lstrip("-")
+    desc = sort.startswith("-")
+    col = _SORTS.get(key, Subdomain.name)
+    order = col.desc() if desc and key in _SORTS else col.asc()
+    if score or has_ports is not None or has_web is not None or key in _AGG_SORTS:
+        # Aggregates come from the linked devices, so filter / sort the light rows of the whole (already
+        # SQL-filtered) inventory in memory - still a fixed number of queries - then load only the page.
+        light = db.execute(select(Subdomain.id, Subdomain.name, Subdomain.ips, Subdomain.device_id)
+                           .where(*conds).order_by(order, Subdomain.name)).all()
+        aggs, linked = subdomain_aggregates(db, light)
+        keep = [r for r in light if _agg_match(aggs[r.id], score, has_ports, has_web)]
+        if key in _AGG_SORTS:  # unscored rows last in both directions; name breaks ties (stable sort)
+            valued = sorted((r for r in keep if aggs[r.id][key] is not None), key=lambda r: aggs[r.id][key], reverse=desc)
+            keep = valued + [r for r in keep if aggs[r.id][key] is None]
+        total = len(keep)
+        page_ids = [r.id for r in keep[paging.offset:paging.offset + paging.page_size]]
+        loaded = {s.id: s for s in db.scalars(select(Subdomain).where(Subdomain.id.in_(page_ids)))} if page_ids else {}
+        rows = [loaded[i] for i in page_ids]
+    else:
+        total = db.scalar(select(func.count(Subdomain.id)).where(*conds)) or 0
+        rows = db.scalars(select(Subdomain).where(*conds).order_by(order, Subdomain.name)
+                          .offset(paging.offset).limit(paging.page_size)).all()
+        aggs, linked = subdomain_aggregates(db, rows)
     dev_ids = {s.device_id for s in rows if s.device_id}
     uuids = dict(db.execute(select(Device.id, Device.uuid).where(Device.id.in_(dev_ids))).all()) if dev_ids else {}
-    devs = devices_by_ip(db, [ip for s in rows for ip in (s.ips or [])])
-    return paged([subdomain_out(s, uuids.get(s.device_id), devs) for s in rows], total, paging)
+    devs = {dev.current_ip: dev for s in rows for dev in linked[s.id]}
+    return paged([subdomain_out(s, uuids.get(s.device_id), devs, aggs[s.id]) for s in rows], total, paging)
 
 
 @router.get("/domains/{domain_id}/subdomains/counts")
@@ -498,48 +637,105 @@ def _get_subdomain(db: Session, domain_id: int, subdomain_id: int) -> Subdomain:
 @router.get("/domains/{domain_id}/subdomains/{subdomain_id}")
 def get_subdomain(domain_id: int, subdomain_id: int, db: Session = Depends(get_db),
                   user: User = Depends(current_user)):
-    """One inventory row plus what the app already knows about it: devices on its addresses (open
-    ports, vulnerability count, captured web pages) and Web capture pages fetched under this name."""
+    """One inventory row plus what the app already knows about it from the linked devices' scans (no
+    new scan): max scores, every port (tagged with its device), vulnerabilities, and web pages captured
+    under this name or on the linked devices."""
     d = _get_domain(db, domain_id)
     s = _get_subdomain(db, d.id, subdomain_id)
-    devs = devices_by_ip(db, s.ips or [])
-    if s.device_id and all(dev.id != s.device_id for dev in devs.values()):
-        linked = db.get(Device, s.device_id)
-        if linked is not None and linked.current_ip:
-            devs.setdefault(linked.current_ip, linked)
-    dev_ids = [dev.id for dev in devs.values()]
-    ports: dict[int, list[dict]] = {i: [] for i in dev_ids}
-    vulns: dict[int, int] = {}
-    if dev_ids:
-        for p in db.scalars(select(DevicePort).where(DevicePort.device_id.in_(dev_ids), DevicePort.is_open.is_(True))
-                            .order_by(DevicePort.port)).all():
-            ports[p.device_id].append({"port": p.port, "protocol": p.protocol, "service": p.service,
-                                       "product": p.product, "version": p.version})
-        vulns = dict(db.execute(
-            select(DevicePort.device_id, func.count(DevicePortVuln.id))
-            .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
-            .where(DevicePort.device_id.in_(dev_ids), DevicePortVuln.state != VULN_STATE_DISMISSED)
-            .group_by(DevicePort.device_id)).all())
-    web = db.execute(
-        select(WebPage, Device.uuid).join(Device, Device.id == WebPage.device_id, isouter=True)
-        .where(WebPage.host_used == s.name).order_by(WebPage.captured_at.desc()).limit(10)).all()
+    aggs, linked = subdomain_aggregates(db, [s])
+    devs = linked[s.id]
+    dev_by_id = {dev.id: dev for dev in devs}
+    dev_ids = list(dev_by_id)
+    port_rows = db.scalars(select(DevicePort).options(selectinload(DevicePort.http))
+                           .where(DevicePort.device_id.in_(dev_ids))
+                           .order_by(DevicePort.port, DevicePort.protocol, DevicePort.device_id)).all() if dev_ids else []
+    banners: dict[int, str] = {}
+    if port_rows:
+        for port_id, raw in db.execute(select(ServiceBanner.device_port_id, ServiceBanner.raw_truncated)
+                                       .where(ServiceBanner.device_port_id.in_([p.id for p in port_rows]))
+                                       .order_by(ServiceBanner.seen_at.desc())).all():
+            banners.setdefault(port_id, raw[:500])
+    page_rows = db.scalars(select(WebPage).options(selectinload(WebPage.device))
+                           .where(or_(WebPage.host_used == s.name, WebPage.device_id.in_(dev_ids)))
+                           .order_by(WebPage.captured_at.desc(), WebPage.id.desc()).limit(200)).all()
+    pages: dict[tuple, WebPage] = {}
+    for p in page_rows:  # newest capture of each endpoint only
+        pages.setdefault((p.device_id, p.ip, p.port, p.scheme, p.host_used, p.url), p)
+    vuln_rows = db.execute(
+        select(DevicePortVuln, DevicePort, Vulnerability)
+        .join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
+        .join(Vulnerability, Vulnerability.cve_id == DevicePortVuln.cve_id)
+        .where(DevicePort.device_id.in_(dev_ids), DevicePortVuln.state != VULN_STATE_DISMISSED)).all() if dev_ids else []
+    by_sev = dict.fromkeys((*reversed(SEVERITY_RANK), "unknown"), 0)
+    per_dev_vulns: dict[int, int] = {}
+    for _dpv, port, vuln in vuln_rows:
+        sev = (vuln.severity or "").lower()
+        by_sev[sev if sev in by_sev else "unknown"] += 1
+        per_dev_vulns[port.device_id] = per_dev_vulns.get(port.device_id, 0) + 1
+    top = sorted(vuln_rows, key=lambda r: (r[2].kev is not True, -(r[2].cvss_base or 0), r[2].cve_id))[:10]
     last = db.get(DomainScan, s.last_scan_id) if s.last_scan_id else None
-    primary = next((dev for dev in devs.values() if dev.id == s.device_id), next(iter(devs.values()), None))
+    primary = dev_by_id.get(s.device_id) or (devs[0] if devs else None)
+
+    def port_web(p: DevicePort) -> dict:
+        own = [pg for pg in pages.values() if pg.device_port_id == p.id
+               or (pg.device_id == p.device_id and pg.port == p.port)]
+        named = next((pg for pg in pages.values() if pg.host_used == s.name and pg.port == p.port
+                      and pg.scheme in ("http", "https")), None)
+        scheme = p.http.scheme if p.http and p.http.scheme in ("http", "https") else next(
+            (pg.scheme for pg in own if pg.scheme in ("http", "https")), None)
+        default = (scheme == "https" and p.port == 443) or (scheme == "http" and p.port == 80)
+        url = named.url if named else f"{scheme}://{s.name}{'' if default else f':{p.port}'}/" if scheme else None
+        return {"has_preview": bool(own) or named is not None, "url": url if p.is_open else None}
+
     return {
-        **subdomain_out(s, primary.uuid if primary else None, devs),
+        **subdomain_out(s, primary.uuid if primary else None, {dev.current_ip: dev for dev in devs}, aggs[s.id]),
         "domain_name": d.name,
         "devices": [
-            {"uuid": dev.uuid, "label": device_label(dev), "ip": ip, "open_ports": ports[dev.id],
-             "vulnerabilities": int(vulns.get(dev.id, 0))}
-            for ip, dev in sorted(devs.items())
+            {"uuid": dev.uuid, "label": device_label(dev), "ip": dev.current_ip,
+             "exposure_score": dev.exposure_score or 0, "risk_score": dev.risk_score, "combined_score": dev.combined_score,
+             "risk_scored_at": dev.risk_scored_at, "last_port_scan_at": dev.last_port_scan_at,
+             "open_ports_count": sum(1 for p in port_rows if p.device_id == dev.id and p.is_open),
+             "vulnerabilities": per_dev_vulns.get(dev.id, 0)}
+            for dev in devs
         ],
-        "web_pages": [
-            {"url": p.url, "title": p.title, "http_status": p.http_status, "captured_at": p.captured_at,
-             "device_uuid": uuid}
-            for p, uuid in web
+        "ports": [
+            {**port_out(p), "device_uuid": dev_by_id[p.device_id].uuid, "device_label": device_label(dev_by_id[p.device_id]),
+             "ip": dev_by_id[p.device_id].current_ip, "banner": banners.get(p.id), **port_web(p)}
+            for p in port_rows
         ],
+        "web_pages": [web_page_out(p) for p in list(pages.values())[:24]],
+        "vulns": {
+            "total": len(vuln_rows),
+            "by_severity": by_sev,
+            "top": [
+                {"cve_id": v.cve_id, "severity": (v.severity or "").lower() or None, "cvss_base": v.cvss_base,
+                 "kev": v.kev, "state": dpv.state, "port": port.port, "protocol": port.protocol,
+                 "product": port.product, "version": port.version, "device_uuid": dev_by_id[port.device_id].uuid}
+                for dpv, port, v in top
+            ],
+        },
         "last_scan": {"id": last.id, "finished_at": last.finished_at, "port_scan_id": last.port_scan_id} if last else None,
     }
+
+
+@router.post("/domains/{domain_id}/subdomains/{subdomain_id}/port-scan")
+def subdomain_port_scan(domain_id: int, subdomain_id: int, request: Request, db: Session = Depends(get_db),
+                        user: User = Depends(require_admin)):
+    """Port scan the name's current addresses in the normal scan queue (same rules as the lookup's port scan)."""
+    s = _get_subdomain(db, _get_domain(db, domain_id).id, subdomain_id)
+    ips = list(s.ips or [])
+    if not ips:
+        raise HTTPException(409, f"{s.name} does not resolve; nothing to scan")
+    cfg = get_section(db, DomainDiscoverySettings)
+    scan_id, targets, reason = queue_port_scan(db, ips, load_context(db, ips), cfg.port_scan_type,
+                                               requested_by=user.username, criteria=f"Subdomain {s.name}")
+    if scan_id is None:
+        raise HTTPException(409, f"No port scan queued: {reason}")
+    audit(db, user.username, "domain.subdomain_port_scan", s.name, {"scan_id": scan_id, "targets": targets},
+          client_ip(request))
+    db.commit()
+    manager.wake()
+    return {"scan_id": scan_id, "targets": targets}
 
 
 @router.get("/domains/{domain_id}/subdomains/{subdomain_id}/history")

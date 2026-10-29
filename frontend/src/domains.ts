@@ -1,7 +1,7 @@
 // Domain scans: labels, filter <-> URL mapping, lookup states and settings-key payloads (pure helpers).
 import type {
   Domain, DomainPhaseStatus, DomainSchedule, DomainScanJob, DomainScanPhase, DomainWordlistMode, Exposure, HostingEntry,
-  LookupResult, MaskedKey, Subdomain, SubdomainFlag, SubdomainSource,
+  LookupResult, MaskedKey, Subdomain, SubdomainFlag, SubdomainHistoryRow, SubdomainSource, VulnSeverity,
 } from './types';
 
 export const EXPOSURE_LABELS: Record<Exposure, string> = {
@@ -49,15 +49,21 @@ export const FLAG_BADGE: Record<SubdomainFlag, string> = {
   internal_authorized: 'outline', internal_name_exposed: 'high', private_ip_public: 'high', internal_ip_public: 'high',
 };
 
-export interface Finding { key: SubdomainFlag | 'wildcard'; label: string; badge: string; tip: string }
+export interface Finding { key: SubdomainFlag | 'wildcard'; label: string; short: string; badge: string; tip: string }
+
+/** Inventory cell labels (one line, fixed width); the full label and tip go in the cell's title. */
+export const FINDING_SHORT: Record<Finding['key'], string> = {
+  internal_authorized: 'AXFR only', internal_name_exposed: 'Name exposed', private_ip_public: 'Private IP',
+  internal_ip_public: 'Internal IP', wildcard: 'Wildcard',
+};
 
 const FINDING_ORDER: Finding['key'][] = ['internal_name_exposed', 'private_ip_public', 'internal_ip_public', 'wildcard', 'internal_authorized'];
 
 /** Finding badges of one row, most severe first (Findings column, detail page). */
 export function subdomainFindings(s: Pick<Subdomain, 'flags' | 'wildcard'>, wildcardTipText = 'Answer matches the wildcard; the name may not really exist.'): Finding[] {
   return FINDING_ORDER.filter((k) => (k === 'wildcard' ? s.wildcard : s.flags.includes(k))).map((k) => (k === 'wildcard'
-    ? { key: k, label: 'Wildcard', badge: 'medium', tip: wildcardTipText }
-    : { key: k, label: FLAG_LABELS[k], badge: FLAG_BADGE[k], tip: FLAG_TIPS[k] }));
+    ? { key: k, label: 'Wildcard', short: FINDING_SHORT[k], badge: 'medium', tip: wildcardTipText }
+    : { key: k, label: FLAG_LABELS[k], short: FINDING_SHORT[k], badge: FLAG_BADGE[k], tip: FLAG_TIPS[k] }));
 }
 
 /** IPs cell: the first address plus "+N" (the full list goes in the title). */
@@ -72,15 +78,19 @@ export function hostingShort(h: HostingEntry): string {
   return h.as_org || (h.asn ? `AS${h.asn}` : 'external');
 }
 
-/** Inventory columns in display order; `sort` = server-side sort key. */
-export const SUBDOMAIN_COLUMNS: { key: string; label: string; className: string; sort?: string }[] = [
+/** Inventory columns in display order; `sort` = server-side sort key, `title` = header tooltip. */
+export const SUBDOMAIN_COLUMNS: { key: string; label: string; className: string; sort?: string; title?: string }[] = [
   { key: 'name', label: 'Name', className: 'sd-name', sort: 'name' },
-  { key: 'exposure', label: 'Exposure', className: 'sd-fit sd-exposure', sort: 'exposure' },
-  { key: 'findings', label: 'Findings', className: 'sd-fit' },
-  { key: 'ips', label: 'IPs', className: 'sd-flex sd-ips' },
-  { key: 'records', label: 'Records', className: 'sd-flex' },
+  { key: 'exposure', label: 'Exposure', className: 'sd-fit sd-exposure', sort: 'exposure', title: 'Where the name resolves (DNS)' },
+  { key: 'findings', label: 'Findings', className: 'sd-fit sd-findings-col' },
+  { key: 'exposure_score', label: 'Exp.', className: 'sd-fit sd-score', sort: 'exposure_score', title: 'Exposure score: highest of the linked devices' },
+  { key: 'risk_score', label: 'Risk', className: 'sd-fit sd-score', title: 'Vulnerability-based risk score: highest of the linked devices' },
+  { key: 'combined_score', label: 'Combined', className: 'sd-fit sd-score', sort: 'combined_score', title: 'Combined score: highest of the linked devices' },
+  { key: 'ports', label: 'Ports', className: 'sd-fit', sort: 'open_ports_count', title: 'Open ports on the linked devices; web icon when a page was captured' },
+  { key: 'ips', label: 'IPs', className: 'sd-fit sd-ips' },
+  { key: 'records', label: 'Records', className: 'sd-flex sd-records' },
   { key: 'hosting', label: 'Hosting', className: 'sd-flex sd-hosting' },
-  { key: 'sources', label: 'Sources', className: 'sd-fit' },
+  { key: 'sources', label: 'Sources', className: 'sd-flex sd-sources' },
   { key: 'last_seen', label: 'Last seen', className: 'sd-fit', sort: 'last_seen' },
   { key: 'status', label: 'Status', className: 'sd-fit', sort: 'status' },
 ];
@@ -156,7 +166,9 @@ export function hostingLabel(h: HostingEntry): string {
 }
 
 // --- inventory filters (URL search params <-> API params) -----------------------------------------
-export const SUBDOMAIN_FILTER_KEYS = ['q', 'exposure', 'status', 'source', 'flag', 'wildcard', 'sort', 'page', 'page_size'] as const;
+export const SUBDOMAIN_FILTER_KEYS = [
+  'q', 'exposure', 'status', 'source', 'flag', 'wildcard', 'score', 'has_ports', 'has_web', 'sort', 'page', 'page_size',
+] as const;
 export type SubdomainFilterKey = (typeof SUBDOMAIN_FILTER_KEYS)[number];
 
 /** `pageSize` is the default; a valid ?page_size= in the URL wins. */
@@ -169,6 +181,9 @@ export function subdomainQuery(sp: URLSearchParams, pageSize: number = DEFAULT_P
     source: val('source'),
     flag: val('flag'),
     wildcard: val('wildcard') === '1' ? true : undefined,
+    score: val('score'),
+    has_ports: val('has_ports') === '1' ? true : undefined,
+    has_web: val('has_web') === '1' ? true : undefined,
     sort: val('sort') ?? 'name',
     page: Number(sp.get('page') || 1),
     page_size: sp.has('page_size') ? pageSizeParam(sp) : pageSize,
@@ -187,8 +202,44 @@ export function patchParams(sp: URLSearchParams, patch: Partial<Record<Subdomain
 }
 
 export function activeFilterCount(sp: URLSearchParams): number {
-  return (['q', 'exposure', 'source', 'flag', 'wildcard'] as const).filter((k) => sp.get(k)).length
+  return (['q', 'exposure', 'source', 'flag', 'wildcard', 'score', 'has_ports', 'has_web'] as const).filter((k) => sp.get(k)).length
     + (sp.get('status') && sp.get('status') !== 'active' ? 1 : 0);
+}
+
+// --- linked-device exposure (scores / ports / vulnerabilities) ------------------------------------------------
+export const SCORE_FILTER_LABELS = { high: 'High', medium: 'Medium', low: 'Low', unscored: 'Unscored' } as const;
+
+/** Badge class per CVE severity (existing palette: critical shares "high"). */
+export const SEVERITY_BADGE: Record<VulnSeverity, string> = { critical: 'high', high: 'high', medium: 'medium', low: 'low' };
+export const SEVERITY_ORDER: VulnSeverity[] = ['critical', 'high', 'medium', 'low'];
+
+/** Ports cell text: null = no linked device (not scanned yet). */
+export function openPortsText(n: number | null | undefined): string {
+  return n == null ? '-' : `${n} open`;
+}
+
+/** Where a web icon / "Open web preview" goes: the device's web preview, else the subdomain page's Web card. */
+export function webPreviewHref(s: Pick<Subdomain, 'has_web_preview' | 'web_device_uuid' | 'domain_id' | 'id'>): string | null {
+  if (!s.has_web_preview) return null;
+  return s.web_device_uuid ? `/devices/${s.web_device_uuid}/web` : `/domains/${s.domain_id}/subdomains/${s.id}#web`;
+}
+
+/** Vulnerabilities list link for the linked devices (the list filters one device at a time). */
+export function vulnsHref(deviceUuid: string): string {
+  return `/vulnerabilities?device_uuid=${encodeURIComponent(deviceUuid)}`;
+}
+
+/** Records history: only scans whose answer differs from the previous (older) kept row; `unchanged` counts
+ *  the identical scans folded into each shown row (rows arrive newest first). */
+export function collapseHistory(rows: SubdomainHistoryRow[]): { row: SubdomainHistoryRow; unchanged: number }[] {
+  const sig = (r: SubdomainHistoryRow) => JSON.stringify([r.exposure, r.records.internal ?? null, r.records.public ?? null, r.wildcard, [...r.flags].sort()]);
+  const out: { row: SubdomainHistoryRow; unchanged: number }[] = [];
+  for (const r of [...rows].reverse()) {
+    const prev = out[out.length - 1];
+    if (prev && sig(prev.row) === sig(r)) prev.unchanged += 1;
+    else out.push({ row: r, unchanged: 0 });
+  }
+  return out.reverse();
 }
 
 // --- manual lookup ------------------------------------------------------------------------------------------

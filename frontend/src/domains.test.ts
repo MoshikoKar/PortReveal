@@ -20,7 +20,7 @@ describe('subdomain table filters', () => {
   it('maps URL params to the API query with defaults', () => {
     expect(subdomainQuery(new URLSearchParams(''), 100)).toEqual({
       q: undefined, exposure: undefined, status: 'active', source: undefined, flag: undefined, wildcard: undefined,
-      sort: 'name', page: 1, page_size: 100,
+      score: undefined, has_ports: undefined, has_web: undefined, sort: 'name', page: 1, page_size: 100,
     });
     const q = subdomainQuery(new URLSearchParams('q=vpn&exposure=external&source=passive&wildcard=1&sort=-last_seen&page=3&status=all'), 50);
     expect(q).toMatchObject({ q: 'vpn', exposure: 'external', source: 'passive', wildcard: true, sort: '-last_seen', page: 3, status: 'all' });
@@ -37,6 +37,13 @@ describe('subdomain table filters', () => {
   it('counts active filters (default status does not count)', () => {
     expect(activeFilterCount(new URLSearchParams('status=active'))).toBe(0);
     expect(activeFilterCount(new URLSearchParams('q=a&flag=internal_name_exposed&status=gone'))).toBe(3);
+    expect(activeFilterCount(new URLSearchParams('score=high&has_ports=1&has_web=1'))).toBe(3);
+  });
+
+  it('maps the score / ports / web filters and aggregate sorts', () => {
+    expect(subdomainQuery(new URLSearchParams('score=unscored&has_ports=1&has_web=1&sort=-combined_score'))).toMatchObject(
+      { score: 'unscored', has_ports: true, has_web: true, sort: '-combined_score' });
+    expect(subdomainQuery(new URLSearchParams('has_ports=0'))).toMatchObject({ has_ports: undefined });
   });
 
   it('labels hosting and wildcard tooltips', () => {
@@ -251,8 +258,9 @@ describe('inventory row status (one badge per row)', () => {
 describe('subdomain inventory columns', () => {
   it('renders the columns in the agreed order (first seen lives on the detail page)', () => {
     expect(SUBDOMAIN_COLUMNS.map((c) => c.label)).toEqual(
-      ['Name', 'Exposure', 'Findings', 'IPs', 'Records', 'Hosting', 'Sources', 'Last seen', 'Status']);
-    expect(SUBDOMAIN_COLUMNS.filter((c) => c.sort).map((c) => c.sort)).toEqual(['name', 'exposure', 'last_seen', 'status']);
+      ['Name', 'Exposure', 'Findings', 'Exp.', 'Risk', 'Combined', 'Ports', 'IPs', 'Records', 'Hosting', 'Sources', 'Last seen', 'Status']);
+    expect(SUBDOMAIN_COLUMNS.filter((c) => c.sort).map((c) => c.sort)).toEqual(
+      ['name', 'exposure', 'exposure_score', 'combined_score', 'open_ports_count', 'last_seen', 'status']);
   });
 
   it('splits the private-IP finding from the configured-network one, most severe first', () => {

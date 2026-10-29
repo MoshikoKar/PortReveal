@@ -48,10 +48,15 @@ _PRIVATE_NETS = (
 
 
 def is_private_ip(ip: str) -> bool:
+    """RFC1918 / CGNAT / ULA, plus loopback, link-local, unspecified and multicast (none is reachable as a
+    public service, so a public answer holding one leaks internal addressing). An IPv4-mapped IPv6 address
+    (::ffff:10.0.0.1) is judged by its IPv4 part."""
     try:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
     if addr.is_loopback or addr.is_link_local or addr.is_unspecified or addr.is_multicast:
         return True
     return any(addr in net for net in _PRIVATE_NETS)

@@ -193,7 +193,11 @@ inventory, per-scan snapshot and diff → port scan of new addresses.
 Hosting per address: inside a configured network (linked to its device), a private range you do
 not manage, or external (ASN / provider from the local DB-IP database when present). Click a name
 in the inventory for its detail page (current and per-scan DNS, addresses with open ports /
-vulnerabilities, web captures, change events). Device pages list domain names that resolve to
+vulnerabilities, web captures, change events). Each name also shows the exposure / risk / combined
+scores, open ports, vulnerabilities and web pages of the inventory devices on its addresses (from
+their existing scans; "Not scanned yet" with **Port scan now** when none is linked), filterable and
+sortable in the inventory; the domain list shows each domain's top combined score, high-risk names
+and names with open ports. Device pages list domain names that resolve to
 that host. **Lookup** resolves one host name inside a configured domain right now (also hosts
 outside your networks), with **Add to inventory** and **Port scan now**; audit-logged.
 

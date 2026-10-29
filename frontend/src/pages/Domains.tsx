@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { del, post } from '../api';
 import { DomainDialog } from '../components/DomainDialog';
 import { DomainLookup } from '../components/DomainLookup';
+import { ScoreCell } from '../components/SubdomainIntel';
 import { Card, Empty, ErrorBox, ScanStatusBadge, SkeletonRows } from '../components/ui';
 import { useApp } from '../context';
 import { type DomainDraft, draftFromDomain, emptyDraft } from '../domains';
@@ -76,11 +77,11 @@ export default function Domains() {
       {isAdmin && data && data.length > 0 && <DomainLookup domains={data.map((d) => d.name)} onChanged={reload} />}
       <Card title="Domains" flush>
         <ErrorBox error={error || actionError} />
-        {loading && !data ? <SkeletonRows cols={8} /> : !data?.length ? (
+        {loading && !data ? <SkeletonRows cols={11} /> : !data?.length ? (
           <Empty>No domains yet.{isAdmin ? ' Add one to start the subdomain inventory.' : ''}</Empty>
         ) : (
           <div className="table-wrap">
-            <table className="domain-table">
+            <table className="domain-table domains-list-table">
               <thead>
                 <tr>
                   <th className="domain-col-name">Domain</th>
@@ -89,6 +90,9 @@ export default function Domains() {
                   <th className="right" title="Resolves internally only">Internal</th>
                   <th className="right" title="Split DNS: resolves on both">Both</th>
                   <th className="right">Wildcard</th>
+                  <th title="Highest combined score among the active subdomains (from their linked devices)">Top risk</th>
+                  <th className="right" title="Active subdomains with a high combined score">High risk</th>
+                  <th className="right" title="Active subdomains whose linked devices have open ports">With ports</th>
                   <th>Last scan</th>
                   <th>Schedule</th>
                   {isAdmin && <th />}
@@ -114,6 +118,13 @@ export default function Domains() {
                       <td className="right">{d.counts.internal.toLocaleString()}</td>
                       <td className="right">{d.counts.both.toLocaleString()}</td>
                       <td className="right">{d.counts.wildcard ? d.counts.wildcard.toLocaleString() : <span className="muted">-</span>}</td>
+                      <td data-testid="domain-top-risk"><ScoreCell score={d.risk.max_combined_score} kind="combined" /></td>
+                      <td className="right">
+                        {d.risk.high_risk ? <Link className="badge high" to={`/domains/${d.id}?score=high`} onClick={(e) => e.stopPropagation()}>{d.risk.high_risk.toLocaleString()}</Link> : <span className="muted">0</span>}
+                      </td>
+                      <td className="right">
+                        {d.risk.with_open_ports ? <Link to={`/domains/${d.id}?has_ports=1&sort=-open_ports_count`} onClick={(e) => e.stopPropagation()}>{d.risk.with_open_ports.toLocaleString()}</Link> : <span className="muted">0</span>}
+                      </td>
                       <td className="nowrap">
                         {last ? <><ScanStatusBadge status={last.status} /> <span className="muted small" title={fmtTime(last.finished_at ?? last.created_at)}>{relTime(last.finished_at ?? last.created_at)}</span></>
                           : <span className="muted">never</span>}

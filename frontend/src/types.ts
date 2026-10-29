@@ -1180,6 +1180,8 @@ export interface Domain {
   counts: { active: number; wildcard: number } & Record<Exposure, number>;
   wildcard: { internal: string[]; public: string[] };
   zone_transfer_open: string[];
+  /** Over active subdomains, from the linked devices' scores and ports. */
+  risk: { max_combined_score: number | null; high_risk: number; with_open_ports: number };
   last_scan: DomainScanJob | null;
 }
 
@@ -1218,6 +1220,59 @@ export interface Subdomain {
   last_verified_at: string | null;
   first_seen: string;
   last_seen: string;
+  /** Aggregated from the linked inventory devices (by IP); null when none is linked / scored. */
+  linked_devices: number;
+  exposure_score: number | null;
+  risk_score: number | null;
+  combined_score: number | null;
+  open_ports_count: number | null;
+  vulns_count: number | null;
+  worst_severity: VulnSeverity | null;
+  has_web_preview: boolean;
+  /** Device whose web preview (/devices/:uuid/web) shows this name's pages. */
+  web_device_uuid: string | null;
+}
+
+export type VulnSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export interface SubdomainDevice {
+  uuid: string;
+  label: string;
+  ip: string;
+  exposure_score: number;
+  risk_score: number | null;
+  combined_score: number | null;
+  risk_scored_at: string | null;
+  last_port_scan_at: string | null;
+  open_ports_count: number;
+  vulnerabilities: number;
+}
+
+export interface SubdomainPort {
+  protocol: string;
+  port: number;
+  is_open: boolean;
+  service: string | null;
+  product: string | null;
+  version: string | null;
+  closed_at: string | null;
+  device_uuid: string;
+  device_label: string;
+  ip: string;
+  banner: string | null;
+  /** A captured page exists for this port (open the device's web preview). */
+  has_preview: boolean;
+  /** Known URL under the subdomain name (opens in a new tab). */
+  url: string | null;
+}
+
+export interface SubdomainVulns {
+  total: number;
+  by_severity: Record<VulnSeverity | 'unknown', number>;
+  top: {
+    cve_id: string; severity: VulnSeverity | null; cvss_base: number | null; kev: boolean; state: string;
+    port: number; protocol: string; product: string | null; version: string | null; device_uuid: string;
+  }[];
 }
 
 export type SubdomainCounts = Domain['counts'];
@@ -1225,14 +1280,10 @@ export type SubdomainCounts = Domain['counts'];
 /** GET /domains/:id/subdomains/:sid - the row plus linked inventory devices and Web capture pages. */
 export interface SubdomainDetail extends Subdomain {
   domain_name: string;
-  devices: {
-    uuid: string;
-    label: string;
-    ip: string;
-    open_ports: { port: number; protocol: string; service: string | null; product: string | null; version: string | null }[];
-    vulnerabilities: number;
-  }[];
-  web_pages: { url: string; title: string | null; http_status: number | null; captured_at: string; device_uuid: string | null }[];
+  devices: SubdomainDevice[];
+  ports: SubdomainPort[];
+  web_pages: WebPage[];
+  vulns: SubdomainVulns;
   last_scan: { id: number; finished_at: string | null; port_scan_id: number | null } | null;
 }
 

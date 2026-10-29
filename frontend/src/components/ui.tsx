@@ -44,22 +44,41 @@ const DEVICE_STATUS: Record<DeviceStatus, [string, string]> = {
   unknown: ['medium', 'Unconfirmed'],
   not_detected: ['high', 'Not detected'],
 };
+// List rows (compact): shorter labels, the full one stays in the badge title.
+const DEVICE_STATUS_SHORT: Record<DeviceStatus, string> = { active: 'Active', unknown: 'Unconf.', not_detected: 'Not seen' };
 
 const DEVICE_STATUS_TIP: Partial<Record<DeviceStatus, string>> = {
   unknown: 'Missed by the latest scan; not yet confirmed gone',
   not_detected: 'Missed by consecutive complete scans of its IP. Offline, or not answering probes from the scanner (firewall, NAT), or a stale record.',
 };
 
-export function DeviceStatusBadge({ status, failed, scannerHost, supersededBy }: {
-  status: DeviceStatus; failed?: boolean; scannerHost?: boolean; supersededBy?: { label: string } | null;
+/** `compact` (list rows): the status badge plus one "+N" marker whose title lists the extra flags, so
+ *  the cell keeps one short line. */
+export function DeviceStatusBadge({ status, failed, scannerHost, supersededBy, compact }: {
+  status: DeviceStatus; failed?: boolean; scannerHost?: boolean; supersededBy?: { label: string } | null; compact?: boolean;
 }) {
-  const [cls, label] = DEVICE_STATUS[status] ?? ['', status];
+  const [cls, full] = DEVICE_STATUS[status] ?? ['', status];
+  const label = compact ? DEVICE_STATUS_SHORT[status] ?? full : full;
+  const tip = DEVICE_STATUS_TIP[status];
   const statusBadge = (
-    <span className={`badge ${cls}`} title={DEVICE_STATUS_TIP[status]}>
+    <span className={`badge ${cls}`} title={compact && label !== full ? [full, tip].filter(Boolean).join(': ') : tip}>
       <span className="dot" />{label}
     </span>
   );
   if (!failed && !scannerHost && !supersededBy) return statusBadge;
+  if (compact) {
+    const extras = [
+      supersededBy && `Superseded: stale record, ${supersededBy.label} is now active at this IP`,
+      scannerHost && 'Scanner host: the machine PortReveal scans from',
+      failed && 'Scan failed: the last port/service scan of this host failed or timed out',
+    ].filter(Boolean) as string[];
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, lineHeight: 1 }}>
+        {statusBadge}
+        <span className={`badge ${failed ? 'medium' : 'outline'}`} title={extras.join('\n')}>+{extras.length}</span>
+      </span>
+    );
+  }
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, lineHeight: 1 }}>
       {statusBadge}
@@ -453,7 +472,9 @@ export function PortChips({ ports, max = 8 }: { ports: ChipPort[]; max?: number 
       {ports.slice(0, max).map((p) => (
         <span className="chip" key={`${p.protocol}${p.port}`} title={chipTitle(p)}>{p.port}</span>
       ))}
-      {ports.length > max && <span className="muted small">+{ports.length - max}</span>}
+      {ports.length > max && (
+        <span className="muted small" title={ports.slice(max).map((p) => `${p.protocol}/${p.port}${p.service ? ` ${p.service}` : ''}`).join('\n')}>+{ports.length - max}</span>
+      )}
     </span>
   );
 }

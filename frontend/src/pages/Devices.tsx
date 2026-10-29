@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, NO_NAME_TIP, NO_NAME_VPN_TIP, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, NO_NAME_TIP, NO_NAME_VPN_TIP, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -105,13 +105,13 @@ export default function Devices() {
     const same = params.sort === col;
     update({ sort: col, order: same && params.order === 'asc' ? 'desc' : 'asc' });
   };
-  const sortTh = (col: string, label: string) => (
-    <SortTh active={params.sort === col} desc={params.order === 'desc'} onSort={() => sortBy(col)}>{label}</SortTh>
+  const sortTh = (col: string, label: string, className?: string) => (
+    <SortTh className={className} active={params.sort === col} desc={params.order === 'desc'} onSort={() => sortBy(col)}>{label}</SortTh>
   );
   const items = data?.items ?? [];
   // Port chips stay on one line: optional columns take width from Open ports, so show fewer chips
   // (the rest as "+N"; Services lists them all) instead of letting the row grow taller.
-  const portChipMax = 6 - (showOs ? 2 : 0) - (showRtt ? 1 : 0);
+  const portChipMax = Math.max(1, 3 - (showOs ? 1 : 0) - (showRtt ? 1 : 0));
   const total = data?.total ?? 0;
   const allSelected = items.length > 0 && items.every((d) => selected.has(d.uuid));
   const moreThanPage = total > items.length;
@@ -261,17 +261,17 @@ export default function Devices() {
                     </th>
                   )}
                   {sortTh('status', 'Status')}
-                  {sortTh('ip', 'IP address')}
-                  {sortTh('hostname', 'Hostname')}
-                  <th>Services</th>
-                  <th>Vendor</th>
+                  {sortTh('ip', 'IP')}
+                  {sortTh('hostname', 'Hostname', 'dev-fluid')}
+                  <th title="Open-port services (expand the row)">Svc</th>
+                  <th className="dev-fluid">Vendor</th>
                   {sortTh('open_ports', 'Open ports')}
-                  {showOs && sortTh('os', 'OS')}
+                  {showOs && sortTh('os', 'OS', 'dev-fluid')}
                   {showRtt && <th title="Last measured round-trip time">RTT</th>}
-                  <th>Network</th>
-                  <th title="Exposure score">Exposure</th>
-                  <th title="Vulnerability-based risk score">Risk</th>
-                  <th title="Risk boosted by exposure">Combined</th>
+                  <th className="dev-fluid">Network</th>
+                  <th className="dev-score" title="Exposure score">Exp.</th>
+                  <th className="dev-score" title="Vulnerability-based risk score">Risk</th>
+                  <th className="dev-score" title="Combined score: risk boosted by exposure">Comb.</th>
                   {sortTh('last_seen', 'Last seen')}
                   {sortTh('first_seen', 'First seen')}
                 </tr>
@@ -283,20 +283,24 @@ export default function Devices() {
                   <Fragment key={d.uuid}>
                   <tr className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
-                    <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} scannerHost={d.scanner_host} supersededBy={d.superseded_by} /></td>
-                    <td className="mono nowrap">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></td>
+                    <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} scannerHost={d.scanner_host} supersededBy={d.superseded_by} compact /></td>
+                    {/* Only a dynamic address gets a (short) badge; static / unknown go in the title, so the column stays narrow. */}
+                    <td className="mono nowrap dev-fit" title={d.ip_assignment ? `${d.current_ip} - ${d.ip_assignment} IP` : undefined}>
+                      {d.current_ip}{d.ip_assignment === 'dynamic' && <> <span className="badge medium" title="Dynamic: this device has recently used more than one IP (DHCP-style)">dyn</span></>}
+                    </td>
                     <td className="dev-fluid dev-host" title={d.hostname ?? d.discovery_name ?? undefined}>
                       <span className="cell-ellipsis">
                         {d.hostname ?? d.discovery_name ?? <span className="muted" title={vpn ? NO_NAME_VPN_TIP : NO_NAME_TIP}>-</span>}
                         {!d.hostname && d.discovery_name && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
                       </span>
                     </td>
-                    <td className="nowrap">
+                    <td className="nowrap dev-fit">
                       {d.open_ports.length > 0 && (
                         <button type="button" className={`btn sm toggle${expanded.has(d.uuid) ? ' on' : ''}`}
+                          title={expanded.has(d.uuid) ? 'Hide services' : 'Show services'} aria-label={expanded.has(d.uuid) ? 'Hide services' : 'Services'}
                           onClick={(e) => { e.stopPropagation(); setExpanded((prev) => { const n = new Set(prev); if (n.has(d.uuid)) n.delete(d.uuid); else n.add(d.uuid); return n; }); }}
                           aria-expanded={expanded.has(d.uuid)}>
-                          {expanded.has(d.uuid) ? 'Hide services' : 'Services'}
+                          {expanded.has(d.uuid) ? '▾' : '▸'}
                         </button>
                       )}
                     </td>
@@ -304,7 +308,7 @@ export default function Devices() {
                     <td className="small dev-fluid dev-vendor" title={d.vendor ?? undefined}>
                       {d.vendor ? <span className="cell-ellipsis">{d.vendor}</span> : <span className="muted">-</span>}
                     </td>
-                    <td className="nowrap"><PortChips ports={d.open_ports} max={portChipMax} /></td>
+                    <td className="nowrap dev-fit"><PortChips ports={d.open_ports} max={portChipMax} /></td>
                     {showOs && (
                       <td className="small nowrap fluid-ellipsis" title={d.os_name ? `${d.os_name}${d.os_accuracy != null ? ` (${d.os_accuracy}% confidence)` : ''}` : undefined}>
                         {d.os_name ? (
@@ -316,16 +320,18 @@ export default function Devices() {
                       </td>
                     )}
                     {showRtt && (
-                      <td className="mono small nowrap">{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">-</span>}</td>
+                      <td className="mono small nowrap" title={d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : undefined}>
+                        {d.last_rtt_ms != null ? `${d.last_rtt_ms >= 100 ? d.last_rtt_ms.toFixed(0) : d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">-</span>}
+                      </td>
                     )}
                     <td className="small dev-fluid dev-network" title={d.network_name ?? undefined}>
                       {d.network_name ? <span className="cell-ellipsis">{d.network_name}</span> : <span className="muted">-</span>}
                     </td>
-                    <td>{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">-</span>}</td>
-                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">-</span>}</td>
-                    <td>{d.risk_scored_at != null ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">-</span>}</td>
+                    <td className="dev-score">{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">-</span>}</td>
+                    <td className="dev-score">{d.risk_scored_at != null ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">-</span>}</td>
+                    <td className="dev-score">{d.risk_scored_at != null ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">-</span>}</td>
                     <td className="nowrap" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>
-                    <td className="nowrap muted small">{fmtTime(d.first_seen)}</td>
+                    <td className="nowrap muted small" title={fmtTime(d.first_seen)}>{relTime(d.first_seen)}</td>
                   </tr>
                   {expanded.has(d.uuid) && (
                     <tr className="dim">

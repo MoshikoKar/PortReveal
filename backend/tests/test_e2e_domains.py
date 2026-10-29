@@ -45,7 +45,7 @@ def test_domain_add_scan_inventory_lookup_and_change(live_app, browser):  # noqa
         expect(www).to_contain_text("Both")
         expect(www).to_contain_text("Passive")
         dev = table.locator("tr").filter(has_text="dev.example.com")
-        expect(dev).to_contain_text("Internal (authorized)")
+        expect(dev).to_contain_text("AXFR only")  # short finding label; full label in the title
         expect(dev).to_contain_text("AXFR")
 
         # Filters: exposure select narrows the table
@@ -139,6 +139,76 @@ def test_subdomain_detail_links_to_device(live_app, browser):  # noqa: F811
         names = page.get_by_test_id("device-domain-names")
         expect(names).to_contain_text("www.example.net", timeout=15_000)
         expect(names.get_by_role("link", name="www.example.net")).to_be_visible()
+        assert not errors, errors
+    finally:
+        page.close()
+
+
+def _seed_exposed_subdomain(database_url: str) -> int:
+    """A domain with one name whose address belongs to a scored inventory device with an open web port and
+    a captured page (no screenshot needed: the ports table's Open column links to the web preview)."""
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from app.db import utcnow
+    from app.models import Device, DevicePort, Domain, Subdomain, WebCapture, WebPage
+
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    with Session(engine) as db:
+        existing = db.scalar(select(Domain).where(Domain.name == "example.org"))
+        if existing is not None:
+            return existing.id
+        d = Domain(name="example.org", enabled=True, wordlist_mode="none", passive_enabled=True, axfr_enabled=False,
+                   internal_resolvers=[], public_resolvers=["192.0.2.53"], created_by="e2e")
+        dev = Device(current_ip="198.51.100.40", hostname="app01.example.org", exposure_score=72, risk_score=40,
+                     combined_score=64, risk_scored_at=utcnow(), last_port_scan_at=utcnow())
+        cap = WebCapture(targets="198.51.100.40", status="completed", requested_by="e2e")
+        db.add_all([d, dev, cap])
+        db.flush()
+        db.add(DevicePort(device_id=dev.id, protocol="tcp", port=443, is_open=True, service="https", product="nginx"))
+        db.add(WebPage(capture_id=cap.id, device_id=dev.id, ip=dev.current_ip, port=443, scheme="https",
+                       host_used="app.example.org", kind="home", url="https://app.example.org/", http_status=200,
+                       title="Example app", screenshot_status="skipped"))
+        db.add(Subdomain(domain_id=d.id, name="app.example.org", exposure="external", sources=["passive"],
+                         ips=[dev.current_ip], hosting=[], records={}, flags=[], status="active",
+                         first_seen=utcnow(), last_seen=utcnow()))
+        db.commit()
+        domain_id = d.id
+    engine.dispose()
+    return domain_id
+
+
+def test_inventory_scores_ports_and_web_open_link(live_app, browser):  # noqa: F811
+    """Domains inventory shows the linked device's scores; the subdomain page lists its ports with score
+    badges, and the port's "Open" link goes to the device's web preview."""
+    import re
+
+    from playwright.sync_api import expect
+
+    domain_id = _seed_exposed_subdomain(live_app["database_url"])
+    base = live_app["base"]
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    try:
+        _sign_in(page, base)
+        page.goto(f"{base}/domains/{domain_id}")
+        table = page.get_by_test_id("subdomain-table")
+        row = table.locator("tr").filter(has_text="app.example.org")
+        expect(row.get_by_test_id("subdomain-combined-score")).to_have_text("64", timeout=15_000)
+        expect(row.get_by_test_id("subdomain-ports")).to_contain_text("1 open")
+        # No horizontal overflow at 1280 with the score columns on
+        assert page.evaluate("() => [...document.querySelectorAll('.table-wrap')].every(w => w.scrollWidth <= w.clientWidth)")
+
+        row.get_by_role("link", name="app.example.org").click()
+        expect(page).to_have_url(re.compile(rf"/domains/{domain_id}/subdomains/\d+$"), timeout=15_000)
+        expect(page.get_by_test_id("subdomain-score-exposure")).to_have_text("72")
+        expect(page.get_by_test_id("subdomain-score-combined")).to_have_text("64")
+        ports = page.get_by_test_id("subdomain-ports")
+        expect(ports).to_contain_text("443")
+        expect(ports).to_contain_text("nginx")
+        ports.get_by_test_id("port-open").get_by_role("link", name="Preview").click()
+        expect(page).to_have_url(re.compile(r"/devices/[0-9a-f-]{36}/web$"), timeout=15_000)
         assert not errors, errors
     finally:
         page.close()

@@ -75,6 +75,9 @@ h1 { font-size: 20px; }
 h2 { font-size: 15px; }
 h3 { font-size: 13px; color: var(--text-2); }
 code, .mono { font-family: var(--mono); font-size: 12.5px; }
+/* A mono name inside a page title keeps the title size (only the face changes). */
+h1 .mono { font-size: inherit; }
+h1.page-title-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .nowrap { white-space: nowrap; }
@@ -293,6 +296,18 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   .dash-when .dash-long { display: none; }
   .dash-when .dash-short { display: inline; }
 }
+/* All baselines dated: Baseline takes its content width (never truncated) and the name the rest; the
+   time is shown only when the card is wide enough to leave the name real room (full value in the title). */
+.dash-net { container-type: inline-size; }
+.dash-net.dated .dash-table .net-baseline { width: 1%; max-width: none; overflow: visible; }
+.dash-net.dated .dash-table .net-name { width: 100%; }
+.dash-net.dated .dash-when { container-type: normal; overflow: visible; }
+.dash-net.dated .dash-when .dash-long { display: none; }
+.dash-net.dated .dash-when .dash-short { display: inline; }
+@container (min-width: 400px) {
+  .dash-net.dated .dash-when .dash-long { display: inline; }
+  .dash-net.dated .dash-when .dash-short { display: none; }
+}
 
 /* Alert feed (narrow card): two lines per alert - when + what, then device and finding details. */
 .feed.alert-feed > li { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
@@ -421,7 +436,8 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 
 
 /* ---------- tables ---------- */
-.table-wrap { overflow-x: auto; }
+/* Hard rule: tables never scroll sideways - columns truncate (full value in the title) instead. */
+.table-wrap { overflow-x: hidden; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; line-height: 1.4; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 table.compact th, table.compact td { padding: 4px 10px; line-height: 1.3; }
@@ -643,10 +659,19 @@ table.heatmap col.heatmap-label { width: 180px; }
 /* Devices list: one line per row and no horizontal scroll. Hostname / Vendor / Network share the
    width left by the fixed columns and truncate (full text in the title); max-width: 0 lets the auto
    table layout shrink them below their content width. */
+/* Compact one-line rows (~38px) that fit 1280 with the optional OS / RTT columns on. */
+.devices-table th, .devices-table td { padding: 4px 8px; white-space: nowrap; }
+.devices-table td { height: 38px; }
+.devices-table td.dev-fit { width: 1%; }
+/* Fluid columns' headers truncate too, so a header label never sets the column's minimum width. */
+.devices-table th.dev-fluid { max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.devices-table th.dev-fluid .th-sort { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.devices-table th.dev-score, .devices-table td.dev-score { padding-left: 4px; padding-right: 4px; text-align: center; }
 .devices-table td.dev-fluid { max-width: 0; }
-.devices-table td.dev-host { width: 20%; min-width: 90px; }
-.devices-table td.dev-vendor { width: 10%; min-width: 60px; }
-.devices-table td.dev-network { width: 8%; min-width: 60px; }
+.devices-table td.dev-host { width: 20%; min-width: 48px; }
+.devices-table td.dev-vendor { width: 10%; min-width: 36px; }
+.devices-table td.dev-network { width: 8%; min-width: 36px; }
+.devices-table td.fluid-ellipsis { min-width: 40px; }
 /* Fluid column: takes the table's leftover width and truncates instead of forcing a horizontal scroll
    (max-width: 0 drops the cell's min-content width so the auto table layout can shrink it). */
 td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
@@ -655,6 +680,10 @@ td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 .domain-table th, .domain-table td { white-space: nowrap; }
 .domain-table .domain-col-name { width: 30%; max-width: 0; min-width: 160px; }
 .domain-table .domain-col-fluid { width: 18%; max-width: 0; min-width: 110px; }
+/* Domains list: compact one-line rows so the risk columns fit at 1280. */
+.domains-list-table th, .domains-list-table td { padding: 4px 6px; }
+.domains-list-table td { height: 38px; }
+.domains-list-table .domain-col-name { min-width: 120px; }
 /* Subdomain inventory: one line per row (same height on every row), never wider than the card. Short
    columns (exposure, findings, sources, last seen, status) take their content width; Name gets the most
    of the rest, IPs / Records / Hosting share what remains. Shrinkable cells truncate with the full value
@@ -663,14 +692,35 @@ td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 .subdomain-table td { height: 38px; }
 .subdomain-table .sd-fit { width: 1%; }
 .subdomain-table .sd-name { width: 34%; max-width: 0; min-width: 100px; }
-.subdomain-table .sd-flex { width: 10%; max-width: 0; min-width: 48px; }
-.subdomain-table .sd-ips { width: 14%; }
-.subdomain-table .sd-hosting { width: 12%; }
+.subdomain-table .sd-flex { width: 10%; max-width: 0; min-width: 44px; }
+.subdomain-table .sd-hosting { width: 10%; }
+.subdomain-table .sd-sources { width: 6%; }
+/* Full IPv4 always visible (fit-content up to a short IPv6); longer IPv6 truncates, "+N" stays. */
+.subdomain-table .sd-ips { max-width: 150px; }
 .subdomain-table .sd-exposure { text-align: center; }
-.subdomain-table .sd-exposure .badge { width: 84px; }
+.subdomain-table .sd-exposure .badge { width: 72px; }
+.subdomain-table .sd-score { text-align: center; }
+.subdomain-table .sd-findings-col .badge { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.sd-ports-cell { display: inline-flex; align-items: center; gap: 6px; }
+/* Below ~1300px of table width (viewports up to ~1580px) Records and Sources drop out so Name, IPs and
+   Hosting stay readable; both are in the name's title and on the subdomain page. */
+.subdomain-table-wrap { container-type: inline-size; }
+@container (max-width: 1300px) {
+  .subdomain-table .sd-records, .subdomain-table .sd-sources { display: none; }
+}
 .sd-ips-cell { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .sd-ips-cell > .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sd-findings { display: inline-flex; align-items: center; gap: 4px; }
+/* Subdomain page tables: one line per row; .domain-col-fluid cells share the width and truncate. */
+.fit-table th, .fit-table td { white-space: nowrap; }
+.fit-table td { height: 38px; }
+/* Fixed columns take their content width; the fluid ones share the rest. */
+.fit-table th:not(.domain-col-fluid), .fit-table td:not(.domain-col-fluid) { width: 1%; }
+.fit-table .domain-col-fluid { width: auto; max-width: 0; min-width: 48px; }
+.sd-ports-table .domain-col-fluid { width: 14%; }
+/* Web pages: the URL takes the remaining width; the other columns keep their content width. */
+.sd-web-table th.sd-web-url, .sd-web-table td.sd-web-url { width: 100%; max-width: 0; min-width: 120px; }
+.sd-web-table .domain-col-fluid { width: 30%; min-width: 80px; }
 
 /* Scan history summary: up to two lines, then an ellipsis (full text in the title). */
 .cell-clamp-2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: normal; overflow-wrap: anywhere; }

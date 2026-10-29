@@ -105,7 +105,8 @@ function BaselineCell({ n, onStarted }: { n: Network; onStarted: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (n.baseline_at) {
-    // Date and time when the cell has room, the date alone in a narrow card (container query in styles.css).
+    // Date and time when the card has room, the date alone in a narrow card (container query on .dash-net in
+    // styles.css); the full value is always in the title.
     const at = fmtTime(n.baseline_at);
     return <span className="dash-when" title={at}><span className="dash-long">{at}</span><span className="dash-short">{at.slice(0, 10)}</span></span>;
   }
@@ -464,6 +465,7 @@ function NetworksWidget({ data, edit, measuring, reload }: WidgetRenderProps) {
   const tableRef = useRef<HTMLTableElement>(null);
   const fit = useFittingRows(tableRef, data.networks.length, 'tbody tr', measuring);
   const rows = fit == null ? data.networks : data.networks.slice(0, fit);
+  const pending = rows.some((n) => !n.baseline_at);
   if (data.networks.length === 0) {
     return (
       <WidgetChrome title="Networks" edit={edit}>
@@ -473,6 +475,9 @@ function NetworksWidget({ data, edit, measuring, reload }: WidgetRenderProps) {
   }
   return (
     <WidgetChrome title="Networks" edit={edit} flush>
+      {/* Every baseline is a date: that column takes its content width and the name gets the rest. A pending
+          row (badge + Run button) needs the shrinking split instead. */}
+      <div className={`dash-net${pending ? '' : ' dated'}`}>
       <table ref={tableRef} className="dash-table">
         <thead><tr><th className="dash-main dash-split net-name">Network</th><th className="dash-fit">Scope</th><th className="dash-fit" title="Active / known hosts">Hosts</th><th className="dash-shrink net-baseline">Baseline</th></tr></thead>
         <tbody>
@@ -486,6 +491,7 @@ function NetworksWidget({ data, edit, measuring, reload }: WidgetRenderProps) {
           ))}
         </tbody>
       </table>
+      </div>
     </WidgetChrome>
   );
 }

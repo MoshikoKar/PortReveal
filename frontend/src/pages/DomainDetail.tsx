@@ -4,11 +4,12 @@ import { post } from '../api';
 import { DomainDialog } from '../components/DomainDialog';
 import { DomainLookup } from '../components/DomainLookup';
 import { DomainScanProgress } from '../components/DomainScanProgress';
+import { PortsCell, ScoreCell } from '../components/SubdomainIntel';
 import { Card, Empty, ErrorBox, Kpi, Loading, Pager, ScanStatusBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import {
-  EXPOSURE_BADGE, EXPOSURE_LABELS, EXPOSURE_TIPS, FLAG_LABELS, PAGE_SIZES, ROW_STATUS, SOURCE_LABELS, SOURCE_TIPS,
-  SUBDOMAIN_COLUMNS, sourcesText, subdomainStatus, subdomainStatusTip,
+  EXPOSURE_BADGE, EXPOSURE_LABELS, EXPOSURE_TIPS, FLAG_LABELS, PAGE_SIZES, ROW_STATUS, SCORE_FILTER_LABELS, SOURCE_LABELS,
+  SOURCE_TIPS, SUBDOMAIN_COLUMNS, sourcesText, subdomainStatus, subdomainStatusTip,
   type DomainDraft, type SubdomainFilterKey, activeFilterCount, draftFromDomain, hostingLabel, hostingShort, ipsCell,
   pageSizeParam, patchParams, phaseSummaryTip, problemPhases, scanPollMs, subdomainFindings, subdomainQuery, wildcardTip,
   wordlistTruncationNote,
@@ -59,27 +60,33 @@ function SubdomainRow({ s, domain }: { s: Subdomain; domain: Domain }) {
   return (
     <tr className={s.status === 'gone' ? 'dim' : undefined}>
       <td className="sd-name">
-        <Link className="cell-ellipsis mono" title={s.name} to={`/domains/${domain.id}/subdomains/${s.id}`}>{s.name}</Link>
+        {/* Records and Sources drop out of narrow tables (styles.css): the name's title carries them too. */}
+        <Link className="cell-ellipsis mono" title={`${s.name}\nRecords: ${s.records_summary}\nSources: ${sourcesText(s.sources)}`}
+          to={`/domains/${domain.id}/subdomains/${s.id}`}>{s.name}</Link>
       </td>
       <td className="sd-fit sd-exposure">
         <span className={`badge ${EXPOSURE_BADGE[s.exposure]}`} title={EXPOSURE_TIPS[s.exposure]}>{EXPOSURE_LABELS[s.exposure]}</span>
       </td>
-      <td className="sd-fit" data-testid="subdomain-findings">
+      <td className="sd-fit sd-findings-col" data-testid="subdomain-findings">
         {findings.length ? (
           <span className="sd-findings" title={findings.map((f) => `${f.label}: ${f.tip}`).join('\n')}>
-            <span className={`badge ${findings[0].badge}`}>{findings[0].label}</span>
+            <span className={`badge ${findings[0].badge}`}>{findings[0].short}</span>
             {findings.length > 1 && <span className="muted small">+{findings.length - 1}</span>}
           </span>
         ) : <span className="muted">-</span>}
       </td>
-      <td className="sd-flex sd-ips"><IpsCell s={s} /></td>
-      <td className="small sd-flex"><span className="cell-ellipsis" title={[
+      <td className="sd-fit sd-score" data-testid="subdomain-exposure-score"><ScoreCell score={s.exposure_score} kind="exposure" /></td>
+      <td className="sd-fit sd-score"><ScoreCell score={s.risk_score} kind="risk" /></td>
+      <td className="sd-fit sd-score" data-testid="subdomain-combined-score"><ScoreCell score={s.combined_score} kind="combined" /></td>
+      <td className="sd-fit small" data-testid="subdomain-ports"><PortsCell s={s} /></td>
+      <td className="sd-fit sd-ips"><IpsCell s={s} /></td>
+      <td className="small sd-flex sd-records"><span className="cell-ellipsis" title={[
         s.records.internal && `internal: ${[...s.records.internal.a, ...s.records.internal.aaaa, ...s.records.internal.cname].join(', ') || '-'}`,
         s.records.public && `public: ${[...s.records.public.a, ...s.records.public.aaaa, ...s.records.public.cname].join(', ') || '-'}`,
       ].filter(Boolean).join('\n')}>{s.records_summary}</span></td>
       <td className="small sd-flex sd-hosting"><HostingCell s={s} /></td>
-      <td className="small sd-fit" title={s.sources.map((src) => `${SOURCE_LABELS[src]}: ${SOURCE_TIPS[src]}`).join('\n')}>
-        {sourcesText(s.sources)}
+      <td className="small sd-flex sd-sources">
+        <span className="cell-ellipsis" title={s.sources.map((src) => `${SOURCE_LABELS[src]}: ${SOURCE_TIPS[src]}`).join('\n')}>{sourcesText(s.sources)}</span>
       </td>
       <td className="small sd-fit" title={fmtTime(s.last_seen)}>{relTime(s.last_seen)}</td>
       <td className="sd-fit"><span className={`badge ${st.badge}`} title={subdomainStatusTip(s, fmtTime)} data-testid="subdomain-status">{st.label}</span></td>
@@ -134,9 +141,13 @@ export default function DomainDetail() {
   const active = !!last && (last.status === 'queued' || last.status === 'running');
   const sort = sp.get('sort') ?? 'name';
   const c = counts.data ?? d.counts;
-  const sortTh = (key: string, label: string, className?: string) => (
+  // Scores and counts start largest-first, like the Devices list.
+  const descFirst = ['combined_score', 'exposure_score', 'open_ports_count'];
+  const sortTh = (key: string, label: string, className?: string, title?: string) => (
     <SortTh className={className} active={sort.replace('-', '') === key} desc={sort.startsWith('-')}
-      onSort={() => set({ sort: sort === key ? `-${key}` : key })}>{label}</SortTh>
+      onSort={() => set({ sort: sort === key ? `-${key}` : sort === `-${key}` || !descFirst.includes(key) ? key : `-${key}` })}>
+      <span title={title}>{label}</span>
+    </SortTh>
   );
 
   const scanNow = () => track('scan', async () => {
@@ -166,7 +177,7 @@ export default function DomainDetail() {
       <div className="page-head">
         <div>
           <div className="small muted"><Link to="/domains">Domains</Link></div>
-          <h1 className="mono">{d.name}</h1>
+          <h1 className="page-title-ellipsis"><span className="mono" title={d.name}>{d.name}</span></h1>
           <p>
             {d.passive_enabled ? 'Passive' : 'No passive'} · {d.wordlist_mode === 'none' ? 'no wordlist' : d.wordlist_mode === 'library' ? `wordlist ${d.wordlist_name ?? '(missing)'}` : `${d.custom_words.length} typed subdomains`}
             {d.wordlist_mode !== 'none' && wordlistTruncationNote(d.wordlist_entries, d.wordlist_limit) && (
@@ -223,6 +234,12 @@ export default function DomainDetail() {
           <select value={sp.get('status') ?? 'active'} onChange={(e) => set({ status: e.target.value === 'active' ? undefined : e.target.value })} aria-label="Status">
             <option value="active">Active</option><option value="gone">Gone</option><option value="all">All</option>
           </select>
+          <select value={sp.get('score') ?? ''} onChange={(e) => set({ score: e.target.value || undefined })} aria-label="Combined score">
+            <option value="">All scores</option>
+            {(Object.keys(SCORE_FILTER_LABELS) as (keyof typeof SCORE_FILTER_LABELS)[]).map((k) => <option key={k} value={k}>{SCORE_FILTER_LABELS[k]}</option>)}
+          </select>
+          <label className="check small"><input type="checkbox" checked={sp.get('has_ports') === '1'} onChange={(e) => set({ has_ports: e.target.checked ? '1' : undefined })} />Has open ports</label>
+          <label className="check small"><input type="checkbox" checked={sp.get('has_web') === '1'} onChange={(e) => set({ has_web: e.target.checked ? '1' : undefined })} />Has web preview</label>
           <label className="check small"><input type="checkbox" checked={sp.get('wildcard') === '1'} onChange={(e) => set({ wildcard: e.target.checked ? '1' : undefined })} />Wildcard only</label>
           {activeFilterCount(sp) > 0 && <button className="btn sm ghost" onClick={() => { setQInput(''); setSp(patchParams(new URLSearchParams(), { page_size: sp.get('page_size') ?? undefined })); }}>Clear</button>}
         </div>
@@ -231,13 +248,13 @@ export default function DomainDetail() {
         {subs.loading && !subs.data ? <SkeletonRows cols={SUBDOMAIN_COLUMNS.length} /> : !subs.data?.items.length ? (
           <Empty>{d.last_scan ? 'No subdomains match these filters.' : 'No scan yet. Run a scan to build the inventory.'}</Empty>
         ) : (
-          <div className="table-wrap">
+          <div className="table-wrap subdomain-table-wrap">
             <table className="domain-table subdomain-table" data-testid="subdomain-table">
               <thead>
                 <tr>
                   {SUBDOMAIN_COLUMNS.map((col) => (col.sort
-                    ? <Fragment key={col.key}>{sortTh(col.sort, col.label, col.className)}</Fragment>
-                    : <th key={col.key} className={col.className}>{col.label}</th>))}
+                    ? <Fragment key={col.key}>{sortTh(col.sort, col.label, col.className, col.title)}</Fragment>
+                    : <th key={col.key} className={col.className} title={col.title}>{col.label}</th>))}
                 </tr>
               </thead>
               <tbody>{subs.data.items.map((s) => <SubdomainRow key={s.id} s={s} domain={d} />)}</tbody>

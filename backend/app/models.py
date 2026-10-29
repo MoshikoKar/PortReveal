@@ -1304,6 +1304,7 @@ class WebPage(Base):
     __table_args__ = (
         Index("ix_web_pages_device_captured", "device_id", "captured_at"),
         Index("ix_web_pages_capture", "capture_id"),
+        Index("ix_web_pages_host_used", "host_used"),  # subdomain inventory: names with captured pages
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     uuid: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=new_uuid)

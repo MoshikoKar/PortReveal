@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from app.core.domains.classify import compute_flags, exposed_publicly
+import pytest
+
+from app.core.domains.classify import compute_flags, exposed_publicly, is_private_ip
 from app.db import utcnow
 from app.models import (
     Device,
@@ -122,10 +124,10 @@ def test_device_link_and_device_domain_names(client, db):  # noqa: F811
     detail = client.get(f"/api/domains/{d.id}/subdomains/{s.id}").json()
     assert detail["device_uuid"] == dev.uuid
     assert detail["hosting"][0]["device_uuid"] == dev.uuid  # linked live, though the scan stored none
-    assert detail["devices"] == [{"uuid": dev.uuid, "label": "web01.example.com", "ip": "192.0.2.10",
-                                  "open_ports": [{"port": 443, "protocol": "tcp", "service": "https",
-                                                  "product": None, "version": None}],
-                                  "vulnerabilities": 0}]
+    [linked] = detail["devices"]
+    assert (linked["uuid"], linked["label"], linked["ip"]) == (dev.uuid, "web01.example.com", "192.0.2.10")
+    assert linked["open_ports_count"] == 1 and linked["vulnerabilities"] == 0
+    assert [(p["port"], p["is_open"]) for p in detail["ports"]] == [(23, False), (443, True)]
     listed = client.get(f"/api/domains/{d.id}/subdomains").json()["items"]
     assert next(x for x in listed if x["id"] == s.id)["hosting"][0]["device_uuid"] == dev.uuid
 
@@ -150,3 +152,28 @@ def test_finding_split_private_vs_configured_network_public_ip():
     # AXFR name answered publicly with a configured-network address -> internal name exposed too
     assert compute_flags(["axfr", "passive"], "both", ["203.0.113.7"], ["203.0.113.7"], in_lab) == [
         "internal_ip_public", "internal_name_exposed"]
+
+
+@pytest.mark.parametrize("ip,private", [
+    ("::ffff:10.1.2.3", True),        # IPv4-mapped IPv6: judged by the IPv4 part
+    ("::ffff:192.168.0.10", True),
+    ("::ffff:127.0.0.1", True),
+    ("::ffff:198.51.100.7", False),
+    ("100.64.0.1", True),             # CGNAT
+    ("100.127.255.254", True),
+    ("100.128.0.1", False),           # just outside CGNAT
+    ("fd12:3456::1", True),           # ULA
+    ("fc00::1", True),
+    ("127.0.0.1", True),              # loopback
+    ("::1", True),
+    ("169.254.10.1", True),           # link-local / multicast stay private (not reachable as a public service)
+    ("fe80::1", True),
+    ("224.0.0.251", True),
+    ("198.51.100.7", False),          # public (documentation ranges stand in for public addresses)
+    ("2001:db8::1", False),
+    ("not-an-ip", False),
+])
+def test_private_ip_classification(ip, private):
+    assert is_private_ip(ip) is private
+    # The finding follows the same rule
+    assert (compute_flags(["passive"], "external", [], [ip], None) == ["private_ip_public"]) is private
