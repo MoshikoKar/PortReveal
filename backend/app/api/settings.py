@@ -31,6 +31,7 @@ from ..security import encrypt_secret
 from ..settings_store import (
     CdnAsnEntry,
     DiscoverySettings,
+    DomainDiscoverySettings,
     GeoSettings,
     LdapSettings,
     NotificationSettings,
@@ -185,6 +186,74 @@ def put_vuln_settings(body: VulnIn, request: Request, db: Session = Depends(get_
         if sync_due(db, cfg) and not sync_running():
             trigger_background_sync(cfg)
     return vuln_out(cfg)
+
+
+# --- domain discovery (domain scans) ------------------------------------------------------------
+_KEY_FIELDS = {"virustotal_key": "virustotal_key_enc", "securitytrails_key": "securitytrails_key_enc",
+               "shodan_key": "shodan_key_enc", "other_key": "other_key_enc"}
+
+
+def domain_discovery_out(cfg: DomainDiscoverySettings) -> dict:
+    from ..core.domains.providers import keys_out
+
+    data = cfg.model_dump(exclude=set(_KEY_FIELDS.values()))
+    data["keys"] = keys_out(cfg)
+    return data
+
+
+@router.get("/domain-discovery")
+def get_domain_discovery(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    return domain_discovery_out(get_section(db, DomainDiscoverySettings))
+
+
+class DomainDiscoveryIn(BaseModel):
+    """Keys: omit (null) to keep the stored key, "" to clear it, any other value to replace it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    concurrency: int = Field(1, ge=1, le=4)
+    dns_rate_per_second: int = Field(20, ge=1, le=500)
+    subfinder_timeout_minutes: int = Field(10, ge=1, le=120)
+    dnsx_timeout_minutes: int = Field(30, ge=1, le=240)
+    dns_timeout_seconds: float = Field(3.0, ge=0.5, le=30.0)
+    axfr_timeout_seconds: float = Field(15.0, ge=1.0, le=120.0)
+    max_wordlist_entries: int = Field(20_000, ge=1, le=1_000_000)
+    max_job_minutes: int = Field(120, ge=5, le=1440)
+    auto_port_scan: bool = True
+    port_scan_type: str = Field("standard", pattern="^(discovery|standard|full)$")
+    other_provider: str = Field("", max_length=40)
+    virustotal_key: str | None = Field(None, max_length=500)
+    securitytrails_key: str | None = Field(None, max_length=500)
+    shodan_key: str | None = Field(None, max_length=500)
+    other_key: str | None = Field(None, max_length=500)
+
+
+@router.put("/domain-discovery")
+def put_domain_discovery(body: DomainDiscoveryIn, request: Request, db: Session = Depends(get_db),
+                         user: User = Depends(require_admin)):
+    current = get_section(db, DomainDiscoverySettings)
+    data = body.model_dump(exclude=set(_KEY_FIELDS))
+    changed = []
+    for field, enc_field in _KEY_FIELDS.items():
+        value = getattr(body, field)
+        if value is None:
+            data[enc_field] = getattr(current, enc_field)
+        else:
+            data[enc_field] = encrypt_secret(value.strip())
+            changed.append(field)
+    try:
+        cfg = DomainDiscoverySettings.model_validate(data)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    put_section(db, cfg)
+    # Key values never reach the audit log: only which ones changed.
+    audit(db, user.username, "settings.domain_discovery", None,
+          {k: v for k, v in data.items() if k not in _KEY_FIELDS.values()} | {"keys_changed": changed}, _ip(request))
+    db.commit()
+    from ..core.domains.manager import domain_scan_manager
+
+    domain_scan_manager.wake()  # a raised concurrency limit applies right away
+    return domain_discovery_out(cfg)
 
 
 @router.get("/vuln/status")
@@ -571,7 +640,8 @@ def put_retention(body: RetentionSettings, request: Request, db: Session = Depen
 @router.post("/retention/run")
 def run_retention_now(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     ret = get_section(db, RetentionSettings)
-    counts = run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days, rtt_days=ret.rtt_sample_days)
+    counts = run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days, rtt_days=ret.rtt_sample_days,
+                           domain_days=ret.domain_scan_days)
     audit(db, user.username, "retention.run", None, counts, _ip(request))
     db.commit()
     return {"ok": True, "deleted": counts}

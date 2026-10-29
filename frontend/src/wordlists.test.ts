@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Wordlist, WordlistImportResult, WordlistLibrary, WordlistLimits } from './types';
 import {
-  acceptedExtensions, deleteConfirmText, discoveryOptions, doneState, effectiveSelection, errorState, fileError, formatBytes,
-  nameError, shortSha, summaryText, urlError,
+  acceptedExtensions, deleteConfirmText, discoveryOptions, domainsFromError, doneState, effectiveSelection, errorState,
+  fileError, formatBytes, inUseByDomainsText, nameError, shortSha, summaryText, urlError,
 } from './wordlists';
+import { ApiError } from './api';
 
 const limits: WordlistLimits = {
   max_upload_bytes: 10 * 1024 * 1024,
@@ -17,7 +18,7 @@ function wordlist(over: Partial<Wordlist> = {}): Wordlist {
   return {
     id: 1, name: 'Common paths', kind: 'paths', source: 'upload', source_url: null, original_filename: 'paths.txt',
     entries: 120, skipped: 3, size_bytes: 2048, sha256: 'a'.repeat(64), created_at: '2026-10-01T00:00:00Z',
-    updated_at: '2026-10-01T00:00:00Z', created_by: 'admin', in_use: false, ...over,
+    updated_at: '2026-10-01T00:00:00Z', created_by: 'admin', in_use: false, domains: [], ...over,
   };
 }
 
@@ -147,5 +148,24 @@ describe('table helpers', () => {
   it('warns about fallback when deleting the selected list', () => {
     expect(deleteConfirmText(wordlist({ in_use: true }))).toMatch(/fall back to the built-in list/);
     expect(deleteConfirmText(wordlist())).toBe('Delete the wordlist “Common paths”?');
+  });
+});
+
+describe('wordlist used by domains', () => {
+  const domains = [{ id: 1, name: 'example.com' }, { id: 2, name: 'example.org' }];
+
+  it('words the block like the API', () => {
+    expect(inUseByDomainsText(domains)).toBe('In use by 2 domain(s): example.com, example.org');
+    const many = Array.from({ length: 7 }, (_, i) => ({ id: i, name: `d${i}.example.com` }));
+    expect(inUseByDomainsText(many)).toBe('In use by 7 domain(s): d0.example.com, d1.example.com, d2.example.com, d3.example.com, d4.example.com +2');
+  });
+
+  it('reads the domains from a refused delete only', () => {
+    const refused = new ApiError(409, 'In use by 2 domain(s): example.com, example.org.', undefined, 'r1', 'wordlist_in_use');
+    refused.body = { code: 'wordlist_in_use', domains };
+    expect(domainsFromError(refused)).toEqual(domains);
+    const otherConflict = new ApiError(409, 'a wordlist named x already exists', undefined, 'r2', 'conflict');
+    expect(domainsFromError(otherConflict)).toBeNull();
+    expect(domainsFromError(new Error('network down'))).toBeNull();
   });
 });

@@ -1,13 +1,18 @@
 // Wordlist library (Settings > Web capture): upload, import from URL, re-import, rename, delete.
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { del, patch, post, postForm } from '../../api';
 import { Card, Empty, ErrorBox, Modal, SkeletonRows, useReportDirty } from '../../components/ui';
 import type { Wordlist, WordlistImportResult, WordlistKind, WordlistLibrary } from '../../types';
 import { fmtTime, useApi, useInFlight } from '../../util';
 import {
-  acceptedExtensions, deleteConfirmText, doneState, errorState, errorText, fileError, formatBytes, nameError, NAME_MAX,
-  shortSha, urlError, type ImportState,
+  acceptedExtensions, deleteConfirmText, domainsFromError, doneState, errorState, errorText, fileError, formatBytes,
+  inUseByDomainsText, nameError, NAME_MAX, shortSha, urlError, type DomainRef, type ImportState,
 } from '../../wordlists';
+
+function DomainLinks({ domains }: { domains: DomainRef[] }) {
+  return <>{domains.map((d, i) => <span key={d.id}>{i > 0 && ', '}<Link to={`/domains/${d.id}`}>{d.name}</Link></span>)}</>;
+}
 import { WebCaptureForm } from './Forms';
 
 /** Web capture tab: settings form (with the discovery wordlist select) and the wordlist library. */
@@ -39,6 +44,7 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [state, setState] = useState<ImportState>({ status: 'idle' });
+  const [blocked, setBlocked] = useState<{ name: string; domains: DomainRef[] } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const { pending, track } = useInFlight();
   const busy = state.status === 'busy';
@@ -112,14 +118,26 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
   });
 
   const remove = (w: Wordlist) => {
+    // Used by a domain: never deleted (no silent fallback); say which domains to change first.
+    if (w.domains?.length) {
+      setBlocked({ name: w.name, domains: w.domains });
+      return;
+    }
     if (!confirm(deleteConfirmText(w))) return;
+    setBlocked(null);
     void track(`wl-${w.id}`, async () => {
       try {
         await del(`/wordlists/${w.id}${w.in_use ? '?force=true' : ''}`);
         setState({ status: 'idle' });
         reload();
       } catch (e) {
-        setState(errorState(e));
+        const domains = domainsFromError(e);
+        if (domains) {
+          setBlocked({ name: w.name, domains });
+          reload();
+        } else {
+          setState(errorState(e));
+        }
       }
     });
   };
@@ -134,12 +152,23 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
   return (
     <Card title="Wordlists" flush actions={actions}>
       <div className="card-body muted small" style={{ borderBottom: '1px solid var(--border)' }}>
-        Paths tried for app discovery (and subdomain lists, stored for future use - no scan uses them yet).
+        Paths tried for app discovery (and subdomain lists, selectable per domain under Domains for wordlist brute force).
         Plain UTF-8 text, one entry per line, <code>#</code> comments ignored; {acceptedExtensions(limits).split(',').join(' ')}.
         {limits && <> Up to {formatBytes(limits.max_upload_bytes)} ({formatBytes(limits.max_decompressed_bytes)} uncompressed), {limits.max_entries.toLocaleString('en-US')} entries.</>}
         {' '}Invalid lines are skipped; URL imports run only when you click and refuse private or internal addresses.
       </div>
       <ErrorBox error={error} />
+      {blocked && (
+        <div className="card-body">
+          <div className="alert error spread" role="alert" data-testid="wordlist-blocked">
+            <span>
+              “{blocked.name}” cannot be deleted. In use by {blocked.domains.length} domain(s): <DomainLinks domains={blocked.domains} />.
+              {' '}Choose another wordlist for them first.
+            </span>
+            <button type="button" className="btn ghost sm" onClick={() => setBlocked(null)} aria-label="Dismiss" title="Dismiss">✕</button>
+          </div>
+        </div>
+      )}
       {state.status === 'busy' && <div className="card-body"><div className="alert" role="status" data-testid="wordlist-status">{state.text}</div></div>}
       {state.status === 'error' && <div className="card-body"><div className="alert error" role="alert" data-testid="wordlist-status">{state.text}</div></div>}
       {state.status === 'done' && (
@@ -171,6 +200,7 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
                   <td>
                     <strong>{w.name}</strong> {w.in_use && <span className="badge ok">in use</span>}
                     {w.skipped > 0 && <div className="muted small">{w.skipped.toLocaleString('en-US')} lines skipped</div>}
+                    {w.domains?.length > 0 && <div className="small muted" title={inUseByDomainsText(w.domains)}>Used by <DomainLinks domains={w.domains} /></div>}
                   </td>
                   <td>{KIND_LABEL[w.kind] ?? w.kind}</td>
                   <td className="small" title={w.source_url ?? w.original_filename ?? undefined}>{SOURCE_LABEL[w.source] ?? w.source}</td>

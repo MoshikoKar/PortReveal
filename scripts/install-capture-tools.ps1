@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Install optional web-capture host tools on Windows (Playwright Chromium, ffmpeg, FreeRDP).
+  Install optional host tools on Windows: web capture (Playwright Chromium, ffmpeg, FreeRDP) and
+  Domain scans (ProjectDiscovery subfinder, dnsx).
 
 .DESCRIPTION
   Idempotent helpers for Windows host production (Postgres may be in Docker; capture tools
@@ -21,6 +22,11 @@
 .PARAMETER SkipFreeRdp
   Do not install Scoop FreeRDP
 
+.PARAMETER SkipDnsTools
+  Do not install subfinder / dnsx (Domain scans). Order: already on PATH / SUBFINDER_PATH /
+  DNSX_PATH / data\tools\bin -> winget or Scoop when they publish the tool -> the pinned release
+  from scripts\tools-manifest.json (sha256-verified) into data\tools\bin.
+
 .PARAMETER Strict
   Exit 1 if any requested tool could not be made available
 #>
@@ -29,6 +35,7 @@ param(
     [switch] $SkipPlaywright,
     [switch] $SkipFfmpeg,
     [switch] $SkipFreeRdp,
+    [switch] $SkipDnsTools,
     [switch] $Strict
 )
 
@@ -223,14 +230,116 @@ function Ensure-FreeRdp {
     Write-Step "FreeRDP ready (wfreerdp shim)"
 }
 
+# ---------------------------------------------------------------- Domain scan tools (subfinder / dnsx)
+$ToolsBin = Join-Path $Root "data\tools\bin"
+
+function Find-DnsTool([string] $Name) {
+    $configured = [Environment]::GetEnvironmentVariable(("{0}_PATH" -f $Name.ToUpperInvariant()))
+    if ($configured -and ($configured -match '[\\/]') -and (Test-Path -LiteralPath $configured)) { return $configured }
+    $cmd = Get-Command $(if ($configured) { $configured } else { $Name }) -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $local = Join-Path $ToolsBin "$Name.exe"
+    if (Test-Path -LiteralPath $local) { return $local }
+    return $null
+}
+
+function Install-DnsToolFromPackageManager([string] $Name) {
+    # Use winget / Scoop only when they actually publish the tool (checked first, nothing is assumed).
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        $id = "ProjectDiscovery." + $Name.Substring(0, 1).ToUpperInvariant() + $Name.Substring(1)
+        & winget show -e --id $id --accept-source-agreements *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Step "Installing $Name via winget ($id)"
+            winget install -e --id $id --accept-package-agreements --accept-source-agreements
+            foreach ($links in @((Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Links"), "C:\Program Files\WinGet\Links")) {
+                [void](Add-UserPathDir $links)
+            }
+            if (Find-DnsTool $Name) { return $true }
+        }
+    }
+    $scoop = Get-ScoopCmd
+    if ($scoop) {
+        $null = & $scoop info $Name 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Step "Installing $Name via Scoop"
+            & $scoop install $Name
+            if (Find-DnsTool $Name) { return $true }
+        }
+    }
+    return $false
+}
+
+function Install-DnsToolFromManifest([string] $Name) {
+    $manifestPath = Join-Path $PSScriptRoot "tools-manifest.json"
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        Write-Step "tools-manifest.json missing - cannot install $Name" "WARN"
+        return $false
+    }
+    $spec = (Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).tools.$Name
+    # Windows on ARM runs the amd64 build under emulation; only windows-amd64 is pinned.
+    $asset = if ($spec) { $spec.assets.'windows-amd64' } else { $null }
+    if (-not $asset) {
+        Write-Step "No pinned Windows release for $Name in tools-manifest.json" "WARN"
+        return $false
+    }
+    $work = Join-Path ([IO.Path]::GetTempPath()) ("portreveal-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $work | Out-Null
+    try {
+        $zip = Join-Path $work "$Name.zip"
+        Write-Step "Downloading $Name $($spec.version) from the official ProjectDiscovery release"
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest -Uri $asset.url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+        if ($hash -ne ([string]$asset.sha256).ToLowerInvariant()) {
+            Write-Step "$Name sha256 mismatch (expected $($asset.sha256), got $hash) - NOT installed" "ERROR"
+            return $false
+        }
+        $extract = Join-Path $work "x"
+        Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+        $exe = Get-ChildItem -LiteralPath $extract -Recurse -Filter "$Name.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $exe) {
+            Write-Step "$Name.exe not found in the release archive" "ERROR"
+            return $false
+        }
+        New-Item -ItemType Directory -Force -Path $ToolsBin | Out-Null
+        Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $ToolsBin "$Name.exe") -Force
+        [void](Add-UserPathDir $ToolsBin)
+        Write-Step "$Name $($spec.version) installed in $ToolsBin"
+        return $true
+    } catch {
+        Write-Step "$Name download/install failed: $($_.Exception.Message)" "WARN"
+        return $false
+    } finally {
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Ensure-DnsTools {
+    foreach ($name in @("subfinder", "dnsx")) {
+        $have = Find-DnsTool $name
+        if ($have) {
+            Write-Step "$name already available ($have)"
+            continue
+        }
+        if (Install-DnsToolFromPackageManager $name) { continue }
+        if (Install-DnsToolFromManifest $name) { continue }
+        Write-Step "$name not installed - Domain scan $(if ($name -eq 'subfinder') { 'passive enumeration' } else { 'wordlist brute force' }) stays disabled" "WARN"
+        [void]$failed.Add($name)
+    }
+}
+
 Write-Step "Root: $Root"
 if (-not $SkipPlaywright) { Ensure-Playwright }
 if (-not $SkipFfmpeg) { Ensure-Ffmpeg }
 if (-not $SkipFreeRdp) { Ensure-FreeRdp }
+if (-not $SkipDnsTools) { Ensure-DnsTools }
 
-Write-Step ("Summary - ffmpeg={0} freerdp={1} playwright_skipped={2}" -f `
+Write-Step ("Summary - ffmpeg={0} freerdp={1} subfinder={2} dnsx={3} playwright_skipped={4}" -f `
     (Test-Cmd "ffmpeg"), `
     [bool](Test-FreeRdpClient), `
+    [bool](Find-DnsTool "subfinder"), `
+    [bool](Find-DnsTool "dnsx"), `
     [bool]$SkipPlaywright)
 
 if ($failed.Count -gt 0) {

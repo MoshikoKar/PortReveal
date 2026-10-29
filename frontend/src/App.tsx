@@ -13,6 +13,8 @@ const Changes = lazy(() => import('./pages/Changes'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const DeviceDetail = lazy(() => import('./pages/DeviceDetail'));
 const Devices = lazy(() => import('./pages/Devices'));
+const DomainDetail = lazy(() => import('./pages/DomainDetail'));
+const Domains = lazy(() => import('./pages/Domains'));
 const PortDetail = lazy(() => import('./pages/PortDetail'));
 const Ports = lazy(() => import('./pages/Ports'));
 const Reports = lazy(() => import('./pages/Reports'));
@@ -36,6 +38,8 @@ const APP_ROUTE_PATTERNS = [
   '/devices',
   '/devices/:uuid',
   '/devices/:uuid/web',
+  '/domains',
+  '/domains/:id',
   '/web',
   '/remote',
   '/changes',
@@ -190,6 +194,8 @@ export default function App() {
             <Route path="/devices" element={<Devices />} />
             <Route path="/devices/:uuid" element={<DeviceDetail />} />
             <Route path="/devices/:uuid/web" element={<WebPreview />} />
+            <Route path="/domains" element={<Domains />} />
+            <Route path="/domains/:id" element={<DomainDetail />} />
             <Route path="/web" element={<WebHosts />} />
             <Route path="/remote" element={<RemoteHosts />} />
             <Route path="/changes" element={<Changes />} />

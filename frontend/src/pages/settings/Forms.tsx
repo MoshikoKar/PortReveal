@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading, useReportDirty } from '../../components/ui';
-import type { CdnAsnEntry, DiscoverySettings, GeoSettings, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings, WordlistLibrary } from '../../types';
+import { keyPayload, keyPlaceholder } from '../../domains';
+import type { CdnAsnEntry, DiscoverySettings, DomainDiscoverySettings, GeoSettings, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings, WordlistLibrary } from '../../types';
 import { DAYS, fmtTime, relTime, useApi } from '../../util';
 import { discoveryOptions, effectiveSelection } from '../../wordlists';
 
@@ -687,7 +688,7 @@ export function GeoForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) =>
 
 // ---------------------------------------------------------------- retention
 export function RetentionForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
-  const f = useForm<{ days: number }>('/settings/retention');
+  const f = useForm<{ days: number; domain_scan_days: number }>('/settings/retention');
   useReportDirty(f.dirty, onDirtyChange);
   const [runMsg, setRunMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [running, setRunning] = useState(false);
@@ -719,7 +720,10 @@ export function RetentionForm({ onDirtyChange }: { onDirtyChange?: (dirty: boole
           whole period are forgotten. Raw nmap XML is never kept long-term.
         </div>
         <div className="row wrap">
-          <Num label="Keep history (days)" value={f.form.days} min={7} max={3650} onChange={(v) => f.setForm({ days: v })} />
+          <Num label="Keep history (days)" value={f.form.days} min={7} max={3650} onChange={(v) => f.setForm({ ...f.form!, days: v })} />
+          <Num label="Keep domain scan history (days)" value={f.form.domain_scan_days} min={7} max={3650}
+            onChange={(v) => f.setForm({ ...f.form!, domain_scan_days: v })}
+            hint="Domain scans and their per-scan snapshots; subdomains gone this long leave the inventory" />
         </div>
         <Msg msg={f.msg} />
         <Msg msg={runMsg} />
@@ -727,6 +731,88 @@ export function RetentionForm({ onDirtyChange }: { onDirtyChange?: (dirty: boole
           <button className="btn primary" disabled={f.saving} onClick={() => f.save(f.form)}>Save</button>
           <button className="btn danger" onClick={runCleanup} disabled={running}>{running ? 'Cleaning up…' : 'Run cleanup now'}</button>
         </div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------- domain discovery (Domain scans)
+const KEY_FIELDS = [
+  ['virustotal', 'VirusTotal'], ['securitytrails', 'SecurityTrails'], ['shodan', 'Shodan'], ['other', 'Other provider key'],
+] as const;
+type KeyName = (typeof KEY_FIELDS)[number][0];
+
+export function DomainDiscoveryForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const f = useForm<DomainDiscoverySettings>('/settings/domain-discovery');
+  // Keys are write-only: what was typed (null = untouched) and which stored keys to clear.
+  const [edited, setEdited] = useState<Record<KeyName, string | null>>({ virustotal: null, securitytrails: null, shodan: null, other: null });
+  const [cleared, setCleared] = useState<Record<KeyName, boolean>>({ virustotal: false, securitytrails: false, shodan: false, other: false });
+  const keysDirty = Object.values(edited).some((v) => v) || Object.values(cleared).some(Boolean);
+  useReportDirty(f.dirty || keysDirty, onDirtyChange);
+  if (!f.form) return <Card title="Domain discovery"><ErrorBox error={f.error} /><Loading /></Card>;
+  const s = f.form;
+  const set = (patch: Partial<DomainDiscoverySettings>) => f.setForm({ ...s, ...patch });
+  const save = async () => {
+    const { keys: _keys, ...rest } = s;
+    void _keys;
+    const body: Record<string, unknown> = { ...rest };
+    for (const [name] of KEY_FIELDS) body[`${name}_key`] = keyPayload(edited[name], cleared[name]);
+    if (await f.save(body)) {
+      setEdited({ virustotal: null, securitytrails: null, shodan: null, other: null });
+      setCleared({ virustotal: false, securitytrails: false, shodan: false, other: false });
+    }
+  };
+  return (
+    <Card title="Domain discovery">
+      <div className="stack">
+        <div className="muted small">
+          Domain scans run in their own queue and never use the network-scan worker; a network scan always goes first.
+          The DNS rate limit covers every query of a scan so internal DNS servers are not overloaded.
+        </div>
+        <div className="row wrap">
+          <Num label="Concurrent domain scans" value={s.concurrency} min={1} max={4} onChange={(v) => set({ concurrency: v })} />
+          <Num label="DNS queries per second" value={s.dns_rate_per_second} min={1} max={500} onChange={(v) => set({ dns_rate_per_second: v })} />
+          <Num label="DNS timeout (s)" value={s.dns_timeout_seconds} min={0.5} max={30} onChange={(v) => set({ dns_timeout_seconds: v })} />
+          <Num label="Zone transfer timeout (s)" value={s.axfr_timeout_seconds} min={1} max={120} onChange={(v) => set({ axfr_timeout_seconds: v })} />
+        </div>
+        <div className="row wrap">
+          <Num label="subfinder time limit (min)" value={s.subfinder_timeout_minutes} min={1} max={120} onChange={(v) => set({ subfinder_timeout_minutes: v })} />
+          <Num label="dnsx time limit (min)" value={s.dnsx_timeout_minutes} min={1} max={240} onChange={(v) => set({ dnsx_timeout_minutes: v })} />
+          <Num label="Scan time limit (min)" value={s.max_job_minutes} min={5} max={1440} onChange={(v) => set({ max_job_minutes: v })} />
+          <Num label="Max wordlist entries" value={s.max_wordlist_entries} min={1} max={1000000} onChange={(v) => set({ max_wordlist_entries: v })} />
+        </div>
+        <div className="row wrap">
+          <label className="check"><input type="checkbox" checked={s.auto_port_scan} onChange={(e) => set({ auto_port_scan: e.target.checked })} />Port-scan new addresses automatically</label>
+          <label className="field">Port scan profile
+            <select value={s.port_scan_type} onChange={(e) => set({ port_scan_type: e.target.value as DomainDiscoverySettings['port_scan_type'] })}>
+              <option value="discovery">Discovery</option><option value="standard">Standard</option><option value="full">Full port</option>
+            </select>
+          </label>
+        </div>
+        <div className="muted small">
+          Optional API keys for subfinder's passive sources. Everything works without them. Keys are stored encrypted,
+          never shown again and only written to a temporary file while subfinder runs.
+        </div>
+        <div className="row wrap">
+          {KEY_FIELDS.map(([name, label]) => (
+            <label key={name} className="field">{label}
+              <input type="password" autoComplete="new-password" value={edited[name] ?? ''} disabled={cleared[name]}
+                placeholder={cleared[name] ? 'will be removed' : keyPlaceholder(s.keys[name])} data-testid={`key-${name}`}
+                onChange={(e) => setEdited({ ...edited, [name]: e.target.value })} />
+              {s.keys[name].set && (
+                <span className="hint">
+                  <label className="check small"><input type="checkbox" checked={cleared[name]} onChange={(e) => setCleared({ ...cleared, [name]: e.target.checked })} />Remove stored key</label>
+                </span>
+              )}
+            </label>
+          ))}
+          <label className="field">Other provider name
+            <input type="text" value={s.other_provider} placeholder="e.g. chaos" spellCheck={false} onChange={(e) => set({ other_provider: e.target.value })} />
+            <span className="hint">subfinder provider name for the key above</span>
+          </label>
+        </div>
+        <Msg msg={f.msg} />
+        <div className="row"><button className="btn primary" disabled={f.saving} onClick={save}>Save</button></div>
       </div>
     </Card>
   );

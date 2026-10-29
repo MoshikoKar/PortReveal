@@ -86,6 +86,22 @@ function changeParts(ev: ChangeEvent): ChangeParts {
         .filter(Boolean).join(' · ');
       return { cve: d.cve_id, note, kev: !!d.kev };
     }
+    case 'subdomain_new':
+      return { verb: 'new', to: newV, mono: true };
+    case 'subdomain_gone':
+      return { verb: 'gone', note: oldV };
+    case 'subdomain_ip_changed':
+      return { from: oldV ?? '-', to: newV ?? '-' };
+    case 'subdomain_exposure_changed':
+      return { verb: 'exposure', from: oldV ?? '-', to: newV ?? '-' };
+    case 'internal_name_exposed':
+      return { verb: 'visible publicly', to: newV, mono: true };
+    case 'wildcard_detected':
+      return { verb: 'wildcard', to: newV, mono: true };
+    case 'wildcard_removed':
+      return { verb: 'wildcard removed', note: oldV };
+    case 'zone_transfer_open':
+      return { verb: 'AXFR open on', to: newV, mono: true };
     default:
       return { to: ev.message };
   }

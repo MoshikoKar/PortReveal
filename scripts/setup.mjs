@@ -79,21 +79,35 @@ export function reportNmap() {
   else log(`${c.yellow('nmap NOT detected')} - the app will start, but only the mock scanner can run. Install nmap for real scans.`);
 }
 
-/** Windows host: Playwright Chromium + ffmpeg + FreeRDP (soft-fail; optional for scans). */
+/** Windows host: Playwright Chromium + ffmpeg + FreeRDP + subfinder/dnsx (soft-fail; optional for scans).
+ *  Linux: subfinder/dnsx from the pinned, sha256-verified releases in scripts/tools-manifest.json. */
 export function ensureCaptureTools() {
-  if (!IS_WIN) return;
   if (process.env.NF_SKIP_CAPTURE_TOOLS === '1') {
     log('skipping capture-tools install (NF_SKIP_CAPTURE_TOOLS=1)');
     return;
   }
+  if (!IS_WIN) {
+    ensureDnsTools();
+    return;
+  }
   const script = join(ROOT, 'scripts', 'install-capture-tools.ps1');
   if (!existsSync(script)) return;
-  log('ensuring web-capture host tools (Playwright / ffmpeg / FreeRDP)');
+  log('ensuring host tools (Playwright / ffmpeg / FreeRDP / subfinder / dnsx)');
   const status = run('powershell.exe', [
     '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
   ]);
   if (status !== 0) {
-    log(c.yellow('capture-tools install reported issues - RDP/RTSP/HTTP stills may soft-skip until tools are on PATH'));
+    log(c.yellow('capture-tools install reported issues - RDP/RTSP/HTTP stills and Domain scan steps may soft-skip until tools are on PATH'));
+  }
+}
+
+/** Linux / macOS: subfinder + dnsx into data/tools/bin unless already on PATH (soft-fail). */
+export function ensureDnsTools() {
+  const script = join(ROOT, 'scripts', 'install-dns-tools.py');
+  if (!existsSync(script) || !existsSync(VENV_PYTHON)) return;
+  log('ensuring Domain scan tools (subfinder / dnsx)');
+  if (run(VENV_PYTHON, ['-I', script]) !== 0) {
+    log(c.yellow('subfinder/dnsx install reported issues - Domain scan passive/wordlist steps stay disabled until installed'));
   }
 }
 

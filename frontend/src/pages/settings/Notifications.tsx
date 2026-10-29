@@ -4,6 +4,7 @@ import { NavLink, Navigate, useParams } from 'react-router-dom';
 import { del, patch, post, put } from '../../api';
 import { Card, Empty, ErrorBox, Loading, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import type {
+  Domain,
   EventType,
   Network,
   NotificationSettings,
@@ -21,7 +22,11 @@ import {
   eventFilterSummary as summarizeEvents,
   isNotificationSection,
   NOTIFICATION_SECTIONS,
+  scopeMode,
+  scopePayload,
+  toggleScopeId,
   urlHost,
+  type ScopeMode,
 } from './notificationsLogic';
 
 export {
@@ -41,6 +46,11 @@ const EVENT_CATEGORIES: { title: string; types: EventType[] }[] = [
   { title: 'Watches', types: ['watch_match', 'policy_violation', 'monitor_change'] },
   { title: 'Geo', types: ['geo_mismatch'] },
   { title: 'CVE', types: ['cve_watch_match'] },
+  {
+    title: 'Domains',
+    types: ['subdomain_new', 'subdomain_gone', 'subdomain_ip_changed', 'subdomain_exposure_changed',
+      'internal_name_exposed', 'wildcard_detected', 'wildcard_removed', 'zone_transfer_open'],
+  },
 ];
 
 function Msg({ msg }: { msg: { ok: boolean; text: string } | null }) {
@@ -324,6 +334,8 @@ type GroupDraft = {
   event_types: EventType[];
   min_severity: RecipientMinSeverity;
   network_ids: number[];
+  domain_scope: ScopeMode;
+  domain_ids: number[];
   delivery_mode: RecipientDeliveryMode;
   digest_time: string;
   max_per_hour: number;
@@ -348,6 +360,8 @@ function emptyGroupDraft(): GroupDraft {
     event_types: [],
     min_severity: 'info',
     network_ids: [],
+    domain_scope: 'all',
+    domain_ids: [],
     delivery_mode: 'daily',
     digest_time: '08:00',
     max_per_hour: 20,
@@ -368,6 +382,8 @@ function groupFromApi(g: RecipientGroup): GroupDraft {
     event_types: [...g.event_types],
     min_severity: g.min_severity,
     network_ids: [...(g.network_ids || [])],
+    domain_scope: scopeMode(g.domain_ids),
+    domain_ids: [...(g.domain_ids || [])],
     delivery_mode: g.delivery_mode,
     digest_time: g.digest_time || '08:00',
     max_per_hour: g.max_per_hour,
@@ -397,6 +413,7 @@ function groupSnapshot(d: GroupDraft) {
     event_types: d.event_types,
     min_severity: d.min_severity,
     network_ids: d.network_ids,
+    domain_ids: scopePayload(d.domain_scope, d.domain_ids),
     delivery_mode: d.delivery_mode,
     digest_time: d.digest_time,
     max_per_hour: d.max_per_hour,
@@ -432,6 +449,7 @@ function deliveryStatusLine(g: RecipientGroup): { text: string; tone: 'ok' | 'wa
 function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const { data, error, loading, reload } = useApi<RecipientGroup[]>('/recipient-groups');
   const networks = useApi<Network[]>('/networks');
+  const domains = useApi<Domain[]>('/domains');
   const hooks = useApi<WebhookEndpoint[]>('/webhooks');
   const [draft, setDraft] = useState<GroupDraft | null>(null);
   const [draftBase, setDraftBase] = useState<GroupDraft | null>(null);
@@ -489,6 +507,7 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
         event_types: draft.event_types.length ? draft.event_types : null,
         min_severity: draft.min_severity,
         network_ids: draft.network_ids.length ? draft.network_ids : null,
+        domain_ids: scopePayload(draft.domain_scope, draft.domain_ids),
         delivery_mode: draft.delivery_mode,
         digest_time: draft.delivery_mode === 'daily' ? draft.digest_time || '08:00' : null,
         max_per_hour: draft.max_per_hour,
@@ -791,6 +810,38 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
                 ))}
                 {!networks.data?.length && <span className="muted small">No networks yet.</span>}
               </div>
+            </div>
+
+            <div className="field" data-testid="domain-scope">
+              <span>Domain scope</span>
+              <span className="hint" style={{ display: 'block', marginBottom: 6 }}>
+                Domain scan events (Domains page) use this scope; device events use the network scope above.
+              </span>
+              <div className="row wrap" style={{ gap: 12 }}>
+                <label className="check small">
+                  <input type="radio" name="domain-scope" checked={draft.domain_scope === 'all'}
+                    onChange={() => setDraft({ ...draft, domain_scope: 'all' })} />
+                  All domains
+                </label>
+                <label className="check small">
+                  <input type="radio" name="domain-scope" checked={draft.domain_scope === 'selected'}
+                    onChange={() => setDraft({ ...draft, domain_scope: 'selected' })} disabled={!domains.data?.length} />
+                  Selected domains
+                </label>
+              </div>
+              {draft.domain_scope === 'selected' && (
+                <div className="row wrap" style={{ gap: 12, marginTop: 6 }}>
+                  {(domains.data || []).map((dm) => (
+                    <label key={dm.id} className="check small">
+                      <input type="checkbox" checked={draft.domain_ids.includes(dm.id)}
+                        onChange={(e) => setDraft({ ...draft, domain_ids: toggleScopeId(draft.domain_ids, dm.id, e.target.checked) })} />
+                      {dm.name}
+                    </label>
+                  ))}
+                  {!draft.domain_ids.length && <span className="muted small">Nothing selected yet: saved as all domains.</span>}
+                </div>
+              )}
+              {!domains.data?.length && <span className="muted small">No domains yet.</span>}
             </div>
 
             <h3 className="recipient-section-title">HOW</h3>

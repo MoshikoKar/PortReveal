@@ -207,6 +207,8 @@ class RetentionSettings(BaseModel):
     rtt_sample_days: int = Field(90, ge=7, le=365)
     # Hard cap per device (newest kept); graph API also limits to this many points.
     rtt_samples_per_device: int = Field(200, ge=50, le=2000)
+    # Domain scan history: domain_scans + their per-scan subdomain snapshots, and names gone this long.
+    domain_scan_days: int = Field(90, ge=7, le=3650)
 
 
 class WebCaptureSettings(BaseModel):
@@ -345,6 +347,41 @@ class DiscoverySettings(BaseModel):
     timeout_seconds: float = Field(2.0, ge=0.5, le=15.0)
 
 
+class DomainDiscoverySettings(BaseModel):
+    """Domain scans (core/domains): queue, DNS politeness, tool timeouts and optional subfinder keys.
+
+    Provider keys are Fernet-encrypted (`*_enc`), never returned by the API in full and never logged;
+    they are written to a short-lived subfinder provider-config file only for the duration of a run.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    concurrency: int = Field(1, ge=1, le=4)  # domain scans running at once (own queue, not scan workers)
+    dns_rate_per_second: int = Field(20, ge=1, le=500)  # every resolver query of a scan, all resolvers together
+    subfinder_timeout_minutes: int = Field(10, ge=1, le=120)
+    dnsx_timeout_minutes: int = Field(30, ge=1, le=240)
+    dns_timeout_seconds: float = Field(3.0, ge=0.5, le=30.0)
+    axfr_timeout_seconds: float = Field(15.0, ge=1.0, le=120.0)
+    max_wordlist_entries: int = Field(20_000, ge=1, le=1_000_000)
+    max_job_minutes: int = Field(120, ge=5, le=1440)
+    # New addresses (not previously known for the domain) get a port scan in the normal scan queue.
+    auto_port_scan: bool = True
+    port_scan_type: Literal["discovery", "standard", "full"] = "standard"
+    virustotal_key_enc: str = ""
+    securitytrails_key_enc: str = ""
+    shodan_key_enc: str = ""
+    other_provider: str = Field("", max_length=40)
+    other_key_enc: str = ""
+
+    @field_validator("other_provider")
+    @classmethod
+    def _provider(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", v):
+            raise ValueError("provider name: lower-case letters, digits, '-' and '_' only")
+        return v
+
+
 SECTIONS: dict[str, type[BaseModel]] = {
     "schedule": ScheduleSettings,
     "presence": PresenceSettings,
@@ -356,6 +393,7 @@ SECTIONS: dict[str, type[BaseModel]] = {
     "vuln": VulnSettings,
     "discovery": DiscoverySettings,
     "geo": GeoSettings,
+    "domain_discovery": DomainDiscoverySettings,
 }
 
 T = TypeVar("T", bound=BaseModel)

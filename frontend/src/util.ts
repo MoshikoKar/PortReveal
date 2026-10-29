@@ -91,6 +91,14 @@ export const EVENT_LABELS: Record<EventType, string> = {
   monitor_change: 'Monitor change',
   geo_mismatch: 'Geo mismatch',
   cve_watch_match: 'CVE watchlist',
+  subdomain_new: 'New subdomain',
+  subdomain_gone: 'Subdomain gone',
+  subdomain_ip_changed: 'Subdomain IP changed',
+  subdomain_exposure_changed: 'Exposure changed',
+  internal_name_exposed: 'Internal name exposed',
+  wildcard_detected: 'Wildcard detected',
+  wildcard_removed: 'Wildcard removed',
+  zone_transfer_open: 'Zone transfer open',
 };
 
 export const SCAN_TYPE_LABELS = { discovery: 'Discovery', standard: 'Standard', full: 'Full port' } as const;

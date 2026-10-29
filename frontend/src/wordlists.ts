@@ -96,6 +96,21 @@ export function effectiveSelection(id: number | null, lib: WordlistLibrary | nul
   return lib.items.some((w) => w.id === id && w.kind === 'paths') ? id : null;
 }
 
+export type DomainRef = { id: number; name: string };
+
+/** Same wording as the API's 409: "In use by 2 domain(s): example.com, example.org". */
+export function inUseByDomainsText(domains: DomainRef[]): string {
+  const names = domains.slice(0, 5).map((d) => d.name).join(', ') + (domains.length > 5 ? ` +${domains.length - 5}` : '');
+  return `In use by ${domains.length} domain(s): ${names}`;
+}
+
+/** Domains from a refused delete (409 wordlist_in_use), or null for any other error. */
+export function domainsFromError(e: unknown): DomainRef[] | null {
+  const err = e as { status?: number; code?: string; body?: { domains?: unknown } } | null;
+  if (!err || err.status !== 409 || err.code !== 'wordlist_in_use' || !Array.isArray(err.body?.domains)) return null;
+  return (err.body!.domains as DomainRef[]).filter((d) => d && typeof d.id === 'number' && typeof d.name === 'string');
+}
+
 export function deleteConfirmText(w: Pick<Wordlist, 'name' | 'in_use'>): string {
   return w.in_use
     ? `“${w.name}” is selected as the Web capture discovery wordlist. Delete it and fall back to the built-in list?`

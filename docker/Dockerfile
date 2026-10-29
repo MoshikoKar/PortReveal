@@ -57,6 +57,12 @@ RUN apt-get update \
  && setcap cap_net_raw,cap_net_admin,cap_net_bind_service+eip "$(readlink -f /usr/bin/nmap)" \
  && rm -rf /var/lib/apt/lists/*
 
+# subfinder + dnsx (Domain scans): pinned ProjectDiscovery releases, sha256-verified before install
+# (scripts/tools-manifest.json). Build egress: github.com / objects.githubusercontent.com:443.
+COPY scripts/tools-manifest.json scripts/install-dns-tools.py /tmp/dns-tools/
+RUN python /tmp/dns-tools/install-dns-tools.py --dest /usr/local/bin --strict \
+ && rm -rf /tmp/dns-tools
+
 WORKDIR /app
 COPY backend/requirements.txt backend/requirements.txt
 # Chromium download needs storage.googleapis.com:443 (or a proxy that can reach it).

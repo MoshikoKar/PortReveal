@@ -33,6 +33,7 @@ from ..settings_store import (
     get_value,
     set_value,
 )
+from .domains.manager import domain_scan_manager, enqueue_scheduled_domain_scans
 from .geo_sync import sync_due as geo_sync_due
 from .geo_sync import sync_running as geo_sync_running
 from .geo_sync import trigger_background_sync as trigger_geo_sync
@@ -157,6 +158,7 @@ def tick(now: datetime | None = None) -> None:
     now = now or datetime.now().astimezone()
     today = now.date().isoformat()
     queued: list[int] = []
+    domain_queued: list[int] = []
     send_hourly = False
     flush_channels = True  # every tick: per-group daily times + retries
     retention_files: tuple[int, int] | None = None
@@ -216,10 +218,15 @@ def tick(now: datetime | None = None) -> None:
         rt = now.replace(hour=RETENTION_TIME[0], minute=RETENTION_TIME[1], second=0, microsecond=0)
         if now >= rt and state.get("last_retention_date") != today:
             ret = get_section(db, RetentionSettings)
-            ret_counts, stale_captures = purge_expired(db, ret.days, rtt_days=ret.rtt_sample_days)
+            ret_counts, stale_captures = purge_expired(db, ret.days, rtt_days=ret.rtt_sample_days,
+                                                        domain_days=ret.domain_scan_days)
             retention_files = (ret.days, get_section(db, ScanSettings).raw_retention_days)
             state["last_retention_date"] = today
             changed = True
+
+        domain_queued = enqueue_scheduled_domain_scans(db, now, CATCH_UP_WINDOW)
+        if domain_queued:
+            log.info("scheduled domain scans queued: %s", domain_queued)
 
         vuln_cfg = get_section(db, VulnSettings)
         if sync_due(db, vuln_cfg, now=now) and not sync_running():
@@ -264,6 +271,8 @@ def tick(now: datetime | None = None) -> None:
             log.exception("recipient-group flush failed")
     if queued:
         manager.wake()
+    if domain_queued:
+        domain_scan_manager.wake()
 
 
 def last_scheduled_date() -> str | None:

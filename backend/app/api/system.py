@@ -11,11 +11,23 @@ from sqlalchemy.orm import Session
 from .. import __version__, metrics
 from ..auth.deps import current_user
 from ..config import get_settings
+from ..core.domains.manager import domain_scan_manager
+from ..core.domains.tools import tool_status
 from ..core.manager import manager
 from ..core.mockdata import mock_hidden, scan_visible
 from ..core.scheduler import last_scheduled_date, next_run, scheduler
 from ..db import check_db, get_db
-from ..models import SCAN_COMPLETED, SCAN_FAILED, SCAN_PARTIAL, SCAN_QUEUED, SCAN_RUNNING, Network, Scan, User
+from ..models import (
+    SCAN_COMPLETED,
+    SCAN_FAILED,
+    SCAN_PARTIAL,
+    SCAN_QUEUED,
+    SCAN_RUNNING,
+    DomainScan,
+    Network,
+    Scan,
+    User,
+)
 from ..scanner import scanner_status
 from ..settings_store import ScheduleSettings, get_section, get_value
 from .common import scan_out
@@ -107,4 +119,10 @@ def system_status(db: Session = Depends(get_db), user: User = Depends(current_us
             "message": st.message,
         },
         "scans": scan_summary(db),
+        "domain_scans": {
+            "worker_running": domain_scan_manager.running,
+            "running": db.scalar(select(func.count(DomainScan.id)).where(DomainScan.status == SCAN_RUNNING)) or 0,
+            "queued": db.scalar(select(func.count(DomainScan.id)).where(DomainScan.status == SCAN_QUEUED)) or 0,
+            "tools": {name: t.as_dict() for name, t in tool_status().items()},
+        },
     }

@@ -672,7 +672,16 @@ $haveFreerdp = [bool](
     (Get-Command sdl-freerdp -ErrorAction SilentlyContinue)
 )
 $havePlaywrightMarker = Test-Path -LiteralPath (Join-Path $env:USERPROFILE "AppData\Local\ms-playwright")
-if ((-not $haveFfmpeg -or -not $haveFreerdp -or -not $havePlaywrightMarker) -and $env:NF_SKIP_CAPTURE_TOOLS -ne "1") {
+# Domain scan tools: PATH, SUBFINDER_PATH / DNSX_PATH, or data\tools\bin (where setup installs them).
+$dnsToolsBin = Join-Path $DataDir "tools\bin"
+if ((Test-Path -LiteralPath $dnsToolsBin) -and $env:Path -notlike "*$dnsToolsBin*") { $env:Path = "$dnsToolsBin;$env:Path" }
+function Test-DnsTool([string] $Name) {
+    $configured = [Environment]::GetEnvironmentVariable(("{0}_PATH" -f $Name.ToUpperInvariant()))
+    if ($configured -and (Test-Path -LiteralPath $configured)) { return $true }
+    return [bool](Get-Command $(if ($configured) { $configured } else { $Name }) -ErrorAction SilentlyContinue)
+}
+$haveDnsTools = (Test-DnsTool "subfinder") -and (Test-DnsTool "dnsx")
+if ((-not $haveFfmpeg -or -not $haveFreerdp -or -not $havePlaywrightMarker -or -not $haveDnsTools) -and $env:NF_SKIP_CAPTURE_TOOLS -ne "1") {
     $captureScript = Join-Path $PSScriptRoot "install-capture-tools.ps1"
     if (Test-Path -LiteralPath $captureScript) {
         Write-Log "Web-capture tools incomplete - running scripts\install-capture-tools.ps1 (soft-fail)"
@@ -683,6 +692,7 @@ if ((-not $haveFfmpeg -or -not $haveFreerdp -or -not $havePlaywrightMarker) -and
             (Get-Command xfreerdp -ErrorAction SilentlyContinue) -or
             (Get-Command sdl-freerdp -ErrorAction SilentlyContinue)
         )
+        $haveDnsTools = (Test-DnsTool "subfinder") -and (Test-DnsTool "dnsx")
     }
 }
 if (-not $haveFfmpeg) {
@@ -690,6 +700,9 @@ if (-not $haveFfmpeg) {
 }
 if (-not $haveFreerdp) {
     Write-Log "FreeRDP not on PATH - RDP web-capture stills will soft-skip (npm run setup:capture-tools)" "WARN"
+}
+if (-not $haveDnsTools) {
+    Write-Log "subfinder/dnsx not on PATH - Domain scan disabled (npm run setup:capture-tools)" "WARN"
 }
 
 Start-DockerDb

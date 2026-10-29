@@ -21,6 +21,7 @@ from .api import (
     dashboard,
     data_transfer,
     devices,
+    domains,
     events,
     exclusions,
     host,
@@ -44,6 +45,8 @@ from .api import (
 )
 from .api.errors import error_body, validation_message
 from .config import check_production_config, get_settings
+from .core.domains.manager import domain_scan_manager
+from .core.domains.tools import tool_status
 from .core.manager import manager
 from .core.query import QueryError
 from .core.scheduler import scheduler
@@ -87,11 +90,16 @@ async def lifespan(app: FastAPI):
             "installed (e.g. apt-get install nmap). The application keeps working.",
             s.nmap_path,
         )
+    missing = [t.name for t in tool_status(refresh=True).values() if not t.found]
+    if missing:
+        log.warning("%s not found - Domain scan passive/wordlist steps are disabled until installed "
+                    "(npm run setup:capture-tools on Windows, npm run setup on Linux)", "/".join(missing))
     seed_dev()
     if s.background_jobs:
         manager.start()
         web_capture_manager.start()
         vuln_job_manager.start()
+        domain_scan_manager.start()
         scheduler.start()
         start_delivery_worker()
     stop_watcher = watcher_from_env()  # set by scripts/run.ps1 (Windows production)
@@ -104,6 +112,7 @@ async def lifespan(app: FastAPI):
     scheduler.stop()
     web_capture_manager.stop()
     vuln_job_manager.stop()
+    domain_scan_manager.stop()
     manager.stop()
     log.info("PortReveal stopped")
 
@@ -141,6 +150,7 @@ for r in (
     system,
     dashboard,
     devices,
+    domains,
     events,
     scans,
     networks,

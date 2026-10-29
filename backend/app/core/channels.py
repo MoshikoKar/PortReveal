@@ -26,6 +26,7 @@ from ..models import (
     DEST_SLACK,
     DEST_TEAMS,
     DEST_WEBHOOK,
+    DOMAIN_EVENT_TYPES,
     EV_CVE_WATCH_MATCH,
     SEVERITY_RANK,
     Event,
@@ -144,7 +145,11 @@ def deliver_channel_event_ids(event_ids: list[int]) -> None:
 
 
 def group_matches_event(group: RecipientGroup, ev: Event) -> bool:
-    """WHAT filters: event type, min severity, network scope. Alert-only (notify=True)."""
+    """WHAT filters: event type, min severity, scope. Alert-only (notify=True).
+
+    Scope: device events use the network scope; domain-scan events (no device) use the domain scope
+    only, so a network-filtered group with "all domains" still receives them.
+    """
     if not ev.notify:
         return False
     types = group.event_types or []
@@ -154,6 +159,9 @@ def group_matches_event(group: RecipientGroup, ev: Event) -> bool:
     ev_rank = SEVERITY_RANK.get(ev.severity or "info", 0)
     if ev_rank < min_rank:
         return False
+    if ev.event_type in DOMAIN_EVENT_TYPES:
+        dom_ids = group.domain_ids or []
+        return not dom_ids or ev.domain_id in dom_ids
     net_ids = group.network_ids or []
     if net_ids:
         dev = ev.device
@@ -228,6 +236,19 @@ def _is_critical(ev: Event | dict) -> bool:
     return (ev.severity or "") == "high" or ev.event_type == EV_CVE_WATCH_MATCH
 
 
+def _delivery_mode(group: RecipientGroup, ev: Event) -> str:
+    """The group's delivery mode, except for domain-scan events: critical ones ("high": zone transfer
+    open, internal name exposed, ...) are sent immediately whatever the group's mode; normal ones always
+    wait for a digest (the group's daily/hourly digest; hourly for an immediate group)."""
+    mode = group.delivery_mode or DELIVERY_DAILY
+    if ev.event_type in DOMAIN_EVENT_TYPES:
+        if (ev.severity or "") == "high":
+            return DELIVERY_IMMEDIATE
+        if mode == DELIVERY_IMMEDIATE:
+            return DELIVERY_HOURLY
+    return mode
+
+
 def _in_quiet_hours(quiet_start: str | None, quiet_end: str | None, now: datetime) -> bool:
     if not quiet_start or not quiet_end:
         return False
@@ -296,7 +317,7 @@ def _route_event_ids(event_ids: list[int]) -> None:
                 if not group_matches_event(group, ev):
                     continue
                 key = _dedupe_key(ev)
-                mode = group.delivery_mode or DELIVERY_DAILY
+                mode = _delivery_mode(group, ev)
                 dests_for_ev = destinations
                 if group.dedupe_seconds and group.dedupe_seconds > 0:
                     cutoff = utcnow() - timedelta(seconds=group.dedupe_seconds)
@@ -518,7 +539,8 @@ def flush_due_holds(*, hourly: bool = False) -> None:
                 if group.last_digest_on != today and _daily_due(group.digest_time, now):
                     reasons.append(HOLD_DIGEST)
                     claim_daily = True
-            if hourly and group.delivery_mode == DELIVERY_HOURLY:
+            # Immediate groups hold only normal domain-scan events as hourly (see _delivery_mode).
+            if hourly and group.delivery_mode in (DELIVERY_HOURLY, DELIVERY_IMMEDIATE):
                 reasons.append(HOLD_HOURLY)
             if hourly or (group.delivery_mode == DELIVERY_IMMEDIATE and claim_daily):
                 reasons.append(HOLD_RATE)

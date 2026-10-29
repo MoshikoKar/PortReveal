@@ -6,6 +6,7 @@ server-generated names. URL imports run only from these explicit admin actions, 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -35,8 +36,9 @@ from ..core.wordlists import (
     validate_url,
 )
 from ..db import get_db, utcnow
-from ..models import User, Wordlist
+from ..models import WORDLIST_MODE_LIBRARY, Domain, User, Wordlist
 from ..settings_store import WebCaptureSettings, get_section, put_section
+from .errors import error_body
 
 router = APIRouter(prefix="/api/wordlists", tags=["wordlists"])
 
@@ -55,7 +57,23 @@ def _selected_id(db: Session) -> int | None:
     return get_section(db, WebCaptureSettings).discovery_wordlist_id
 
 
-def _out(w: Wordlist, selected: int | None) -> dict:
+def _domain_users(db: Session, ids: list[int]) -> dict[int, list[dict]]:
+    """Domains whose wordlist brute force uses each list ({wordlist id: [{"id", "name"}]})."""
+    if not ids:
+        return {}
+    out: dict[int, list[dict]] = {}
+    for d in db.scalars(select(Domain).where(Domain.wordlist_id.in_(ids), Domain.wordlist_mode == WORDLIST_MODE_LIBRARY)
+                        .order_by(Domain.name)):
+        out.setdefault(d.wordlist_id, []).append({"id": d.id, "name": d.name})
+    return out
+
+
+def in_use_message(domains: list[dict]) -> str:
+    names = ", ".join(d["name"] for d in domains[:5]) + (f" +{len(domains) - 5}" if len(domains) > 5 else "")
+    return f"In use by {len(domains)} domain(s): {names}. Choose another wordlist for them first."
+
+
+def _out(w: Wordlist, selected: int | None, domains: list[dict] | None = None) -> dict:
     return {
         "id": w.id,
         "name": w.name,
@@ -71,6 +89,7 @@ def _out(w: Wordlist, selected: int | None) -> dict:
         "updated_at": w.updated_at,
         "created_by": w.created_by,
         "in_use": w.id == selected,
+        "domains": domains or [],
     }
 
 
@@ -135,12 +154,13 @@ def _create(db: Session, user: User, *, name: str, kind: str, source: str, stora
 def list_wordlists(db: Session = Depends(get_db), user: User = Depends(require_admin)):
     selected = _selected_id(db)
     rows = db.scalars(select(Wordlist).order_by(func.lower(Wordlist.name))).all()
+    users = _domain_users(db, [w.id for w in rows])
     return {
-        "items": [_out(w, selected) for w in rows],
+        "items": [_out(w, selected, users.get(w.id)) for w in rows],
         "builtin": {"name": "Built-in", "kind": KIND_PATHS, "source": SOURCE_BUILTIN,
                     "entries": len(APP_PATHS), "in_use": not selected},
         "limits": Limits.from_settings().as_dict(),
-        "subdomain_discovery": False,  # stored for future use; no scan consumes subdomain lists yet
+        "subdomain_discovery": True,  # subdomain lists feed Domain scans (wordlist brute force with dnsx)
     }
 
 
@@ -168,7 +188,7 @@ def upload_wordlist(
           {"id": w.id, "kind": kind, "file": filename, "sha256": result.sha256, **result.summary()},
           client_ip(request))
     db.commit()
-    return {"wordlist": _out(w, _selected_id(db)), "summary": result.summary()}
+    return {"wordlist": _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id)), "summary": result.summary()}
 
 
 def _fetch_into_store(db: Session, user: User, request: Request, url: str, kind: str, action: str,
@@ -202,7 +222,7 @@ def import_wordlist(body: ImportIn, request: Request, db: Session = Depends(get_
     audit(db, user.username, "wordlist.import", w.name,
           {"id": w.id, "kind": kind, "url": url, "sha256": result.sha256, **result.summary()}, client_ip(request))
     db.commit()
-    return {"wordlist": _out(w, _selected_id(db)), "summary": result.summary()}
+    return {"wordlist": _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id)), "summary": result.summary()}
 
 
 @router.post("/{wordlist_id}/reimport")
@@ -223,7 +243,7 @@ def reimport_wordlist(wordlist_id: int, request: Request, db: Session = Depends(
     db.commit()
     remove_stored(old_storage)
     return {
-        "wordlist": _out(w, _selected_id(db)),
+        "wordlist": _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id)),
         "summary": result.summary(),
         "previous_entries": previous,
         "changed": old_sha != result.sha256,
@@ -244,14 +264,19 @@ def rename_wordlist(wordlist_id: int, body: RenameIn, request: Request, db: Sess
     w.name, w.updated_at = name, utcnow()
     audit(db, user.username, "wordlist.rename", name, {"id": w.id, "from": old, "to": name}, client_ip(request))
     db.commit()
-    return _out(w, _selected_id(db))
+    return _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id))
 
 
 @router.delete("/{wordlist_id}", status_code=204)
 def delete_wordlist(wordlist_id: int, request: Request, force: bool = False, db: Session = Depends(get_db),
                     user: User = Depends(require_admin)):
-    """In use by Web capture: refused (409) unless ``force``, which reverts discovery to the built-in list."""
+    """In use by Web capture: refused (409) unless ``force``, which reverts discovery to the built-in list.
+    In use by a domain (wordlist brute force): always refused (409, with the domains); never a silent fallback."""
     w = _get(db, wordlist_id)
+    domains = _domain_users(db, [w.id]).get(w.id)
+    if domains:
+        return JSONResponse(status_code=409, content=error_body(409, in_use_message(domains), "wordlist_in_use",
+                                                                domains=domains))
     in_use = _selected_id(db) == w.id
     if in_use and not force:
         raise HTTPException(409, "this wordlist is selected for Web capture discovery; "

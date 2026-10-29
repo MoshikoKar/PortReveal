@@ -164,6 +164,70 @@ then restart the app.
 Any inventory port identified as **rtsp** is treated as a stream page; use
 **Watch live** on the host preview for the server-side RTSP→MJPEG proxy.
 
+### Domain scans (optional)
+
+**Domains** inventories and monitors the subdomains of your domains: what an unprivileged
+outside attacker can find, checked against your own authorized zone transfer (ground truth).
+Same roles as scans: everyone can view, admins add domains, scan and look up.
+
+Per domain: passive enumeration (subfinder) on/off, a wordlist for brute force (a *subdomains*
+list from the Wordlists library, typed labels, or none; run with dnsx), zone transfer (AXFR) from
+optional internal DNS servers, internal resolvers (default: this host's), public resolvers
+(default `1.1.1.1`, `8.8.8.8`), a schedule (server-local time and days) and notes.
+
+A scan: wildcard probes (random labels, both views) → subfinder → dnsx against the internal and
+the public resolvers → authorized AXFR → an AXFR attempt against every public authoritative NS
+from the scan host → every name resolved against both views (dnspython) → classification →
+inventory, per-scan snapshot and diff → port scan of new addresses.
+
+| Exposure / flag | Meaning |
+|---|---|
+| External / Internal / Both | Resolves on the public resolvers only / internal only / both (split DNS) |
+| Internal (authorized) | Found only through the authorized zone transfer: an outsider did not find it |
+| Internal name exposed | In the zone transfer, also visible publicly (passive sources or public DNS) while resolving to internal ranges |
+| Private IP in public DNS | The public answer holds a private address or one inside a configured network |
+| Wildcard | Answer equals the domain's wildcard answer. Marked, never filtered |
+| Zone transfer open | A public authoritative server answered AXFR from the scan host (critical) |
+
+Hosting per address: inside a configured network (linked to its device), a private range you do
+not manage, or external (ASN / provider from the local DB-IP database when present). **Lookup**
+resolves one host name inside a configured domain right now (also hosts outside your networks),
+with **Add to inventory** and **Port scan now**; audit-logged.
+
+- **Own queue.** Domain scans never use the network-scan worker; *Settings → Domain discovery*
+  sets their concurrency (default 1), a DNS query rate limit for the whole scan (default 20/s),
+  tool and scan time limits. A network scan always goes first. Cancel from the domain page.
+- **New addresses → port scan.** Addresses not seen before for the domain are queued as one
+  normal scan (profile from the same settings page), so results land in Devices / Ports /
+  Vulnerabilities. Exclusions apply; private addresses outside every configured network are not
+  probed; IPv4 only.
+- **Changes and alerts.** New subdomain, subdomain gone, IP changed, exposure changed, internal
+  name exposed, wildcard detected / removed and zone transfer open are change events (Changes page,
+  recipient groups). Critical (immediate delivery, also for digest groups): internal name exposed,
+  zone transfer open, a new external subdomain pointing inside a configured network, and
+  internal → external exposure changes. Everything else waits for the group's digest (hourly for
+  immediate groups); dedupe and quiet hours apply. The first scan of a domain is its baseline and
+  reports only critical findings.
+- **Optional API keys.** *Settings → Domain discovery*: VirusTotal, SecurityTrails, Shodan and one
+  other subfinder provider. Stored encrypted, shown masked, never logged; written to a private
+  provider-config file in the app data dir only while subfinder runs. Everything works without keys.
+- **Retention.** Domain scan history and snapshots: 90 days by default (*Settings → Retention*).
+- **Mock mode.** With `SCANNER_MODE=mock` (development default) domain scans are simulated: no
+  tool runs and no DNS query leaves the machine.
+
+| Tool | Used for | Install |
+|---|---|---|
+| `subfinder` (ProjectDiscovery) | Passive subdomain enumeration | Windows: `npm run setup:capture-tools` (winget/Scoop when they publish it, otherwise the pinned release, sha256-verified, into `data\tools\bin`). Linux: `npm run setup` (pinned release into `data/tools/bin`). **Preinstalled in Docker.** |
+| `dnsx` (ProjectDiscovery) | Wordlist brute force | Same as subfinder |
+| `dnspython` (Python package) | Dual-resolver lookups, AXFR | `npm run setup` (`backend/requirements.txt`) |
+
+Pinned versions, URLs and sha256 sums live in `scripts/tools-manifest.json`; on a checksum
+mismatch nothing is installed. A tool already on `PATH` or at `SUBFINDER_PATH` / `DNSX_PATH` is used
+as is (set an absolute path, `.exe` on Windows, for a custom location). Manual install: download the
+release zip from github.com/projectdiscovery, verify it, put `subfinder` / `dnsx` on `PATH`, restart.
+Without them a domain scan still resolves known names and runs zone transfers; *Settings → System
+health* shows found / version / path.
+
 ### Search
 
 **Search** queries the stored inventory (nmap results and Web Capture metadata)
@@ -264,7 +328,8 @@ Docker Desktop runs **Postgres only**; the app and nmap stay on the host.
 
 Requirements: Node.js 20.19+, Python 3.10+, nmap+Npc, Docker Desktop, and on
 `PATH`: **ffmpeg** (RTSP) plus **FreeRDP** (`wfreerdp` / `sdl-freerdp`) if you
-want RDP stills. Copy `.env.production.example` → `.env.production` and set at
+want RDP stills, and **subfinder** / **dnsx** for Domain scans (installed by
+`npm run setup:capture-tools`; see [Domain scans](#domain-scans-optional)). Copy `.env.production.example` → `.env.production` and set at
 least `POSTGRES_PASSWORD` and `APP_SECRET_KEY`.
 
 `npm run setup` (and production `run.ps1` when tools are missing) installs
@@ -363,7 +428,8 @@ after every reboot.
 ### Production (Linux Docker Compose)
 
 Linux Docker host with host networking (not Docker Desktop on Windows/macOS).
-Allow build egress to `storage.googleapis.com:443` (Playwright Chromium) plus the
+Allow build egress to `storage.googleapis.com:443` (Playwright Chromium),
+`github.com` / `objects.githubusercontent.com:443` (pinned subfinder / dnsx releases) plus the
 usual package indexes. Inbound TCP `APP_PORT` (default `8081`).
 
 ```bash
@@ -377,7 +443,7 @@ docker compose logs -f app
 ```
 
 Compose provides PostgreSQL 16 (`pgdata`) and the app image (frontend + FastAPI +
-nmap + Playwright Chromium + ffmpeg + FreeRDP) with host networking and
+nmap + Playwright Chromium + ffmpeg + FreeRDP + subfinder + dnsx) with host networking and
 `NET_RAW` / `NET_ADMIN`. One app process only (queue + scheduler live inside it);
 see [Availability and capacity](#availability-and-capacity).
 
@@ -583,8 +649,9 @@ the same remote discovery rates that finish a /16 in about an hour (~500-1000
 probes/s at normal timing), force that routed profile even if a NIC looks
 local, and drop "fast" timing so the tunnel never sees the 2000 probes/s
 burst. Scanning is not slowed or disabled relative to a normal remote job.
-Discovery uses ICMP/TCP (rate-capped ARP on local segments). No scan or
-enrichment stage sends UDP. Service detection runs `--version-light` and never
+Discovery uses ICMP/TCP (rate-capped ARP on local segments). No network-scan or
+enrichment stage sends UDP (Domain scans send rate-limited DNS queries to the configured
+resolvers only). Service detection runs `--version-light` and never
 probes telephony signaling ports (H.323 1720, SCCP 2000/2443, CTI 2748, SIP
 5060/5061), which can crash Cisco CUCM and similar call managers. Device identity prefers unique MAC, then IP/hostname rules.
 History and compressed daily snapshots are retained (default 365 days). What is
@@ -595,9 +662,10 @@ Layout overview:
 ```
 backend/app/
   scanner/          NmapScanner + MockScanner, XML parser, NIC bind, status
-  core/             runner, compare, identity, queue, scheduler, presence, web_capture
+  core/             runner, compare, identity, queue, scheduler, presence, web_capture,
+                    domains (subdomain inventory: subfinder / dnsx / dnspython, own queue)
   api/              REST; auth/ sessions, CSRF, LDAP; alembic/ migrations
-frontend/src/       React UI (Dashboard, Devices, Ports, Changes, Web, Scans, Settings)
+frontend/src/       React UI (Dashboard, Devices, Ports, Changes, Domains, Web, Scans, Settings)
 scripts/            setup, dev runner, Windows production runner
 docker/Dockerfile, docker-compose.yml
 ```
@@ -613,6 +681,7 @@ docker/Dockerfile, docker-compose.yml
 - SOC-style dashboard with devices, ports, changes, scans, and settings
 - Daily categorized HTML email summary of pending changes; optional webhooks and SSE
 - Optional web capture (HTTP / RTSP / RDP / VNC stills; live RTSP Watch)
+- Domain scans: subdomain inventory (passive, wordlist, authorized AXFR), split-DNS exposure, wildcard marking, open zone-transfer check, change alerts
 - Scheduled night scans plus daytime presence / correlated absence
 - Admin / viewer roles, sessions, CSRF, optional LDAP, audit log
 - CLI for status, scans, users, DB reset, and inventory import/export
@@ -650,6 +719,9 @@ recovery, see the [operations runbook](docs/runbook/runbook.md).
 | Browser unavailable at capture time | Windows: `npm run setup:capture-tools` as the app user, then restart. Manual: `backend\.venv\Scripts\python.exe -m playwright install chromium`. |
 | ffmpeg unavailable | Windows: `npm run setup:capture-tools` (fixes winget PATH). Confirm `ffmpeg -version`, then restart. Preinstalled in Docker. |
 | freerdp unavailable | Windows: `npm run setup:capture-tools` (Scoop + `wfreerdp` shim from `sdl-freerdp`). Linux: `sudo apt-get install -y freerdp2-x11`. Confirm on `PATH`, then restart. Preinstalled in Docker. |
+| subfinder / dnsx not installed (Domain scan notes, System health, `run.ps1` warning) | Windows: `npm run setup:capture-tools`. Linux: `npm run setup` (or `backend/.venv/bin/python scripts/install-dns-tools.py`). Installs into `data/tools/bin`; or set `SUBFINDER_PATH` / `DNSX_PATH` to an existing binary. Restart the app. Preinstalled in Docker. |
+| "sha256 mismatch - NOT installed" during setup | The download did not match `scripts/tools-manifest.json` (proxy rewriting, corrupt or changed asset). Nothing was installed; retry, or install manually from the official release after verifying its checksum. |
+| Domain scan finds nothing / only "Simulated results" | `SCANNER_MODE=mock` simulates domain scans. With real tools: check the internal / public resolvers on the domain and the DNS rate limit under Settings → Domain discovery. |
 | Scan stuck after restart | In-flight scans are marked failed; start a new one. |
 | App exits at start: `APP_SECRET_KEY must be set` | Production needs an explicit key. Set it in `.env.production` / `.env` (`openssl rand -hex 32`), or copy `data/.secret_key` from an earlier run to keep stored SMTP/LDAP passwords. |
 | Login HTTP 429 | Wait out the login window (`LOGIN_WINDOW_MINUTES`, default 15). |
@@ -708,6 +780,9 @@ cover them. Comply with each vendor’s terms, especially for commercial deploym
 | [Playwright](https://playwright.dev/) / Chromium | HTTP(S) web-capture screenshots | Apache-2.0 / Chromium BSD-related |
 | [FFmpeg](https://ffmpeg.org/) | RTSP stills and live MJPEG | LGPL/GPL (depends on build) |
 | [FreeRDP](https://www.freerdp.com/) | RDP stills | Apache-2.0 |
+| [subfinder](https://github.com/projectdiscovery/subfinder) (ProjectDiscovery) | Domain scans: passive subdomain enumeration | MIT |
+| [dnsx](https://github.com/projectdiscovery/dnsx) (ProjectDiscovery) | Domain scans: wordlist brute force | MIT |
+| [dnspython](https://www.dnspython.org/) | Domain scans: resolution, zone transfer | ISC |
 | Node.js / Python packages | App runtime | See each package’s license metadata |
 
 Development can run with `SCANNER_MODE=mock` (no Nmap). Production scanning needs

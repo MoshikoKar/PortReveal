@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from ..db import session_scope, utcnow
 from ..models import (
     ALWAYS_NOTIFY_TYPES,
+    DOMAIN_EVENT_TYPES,
     EV_CVE_WATCH_MATCH,
     EV_DEVICE_DISAPPEARED,
     EV_DEVICE_DISCOVERED,
@@ -65,6 +66,14 @@ TITLES = {
     EV_MONITOR_CHANGE: "Monitored changes",
     EV_GEO_MISMATCH: "Geo mismatches",
     EV_CVE_WATCH_MATCH: "CVE watchlist matches",
+    "subdomain_new": "New subdomains",
+    "subdomain_gone": "Subdomains gone",
+    "subdomain_ip_changed": "Subdomain addresses changed",
+    "subdomain_exposure_changed": "Subdomain exposure changed",
+    "internal_name_exposed": "Internal names exposed",
+    "wildcard_detected": "Wildcard DNS detected",
+    "wildcard_removed": "Wildcard DNS removed",
+    "zone_transfer_open": "Zone transfers open",
 }
 
 # Ordered categories for the daily summary email.
@@ -75,6 +84,7 @@ CATEGORIES: list[tuple[str, list[str]]] = [
     ("Ports", [EV_PORT_OPENED, EV_PORT_CLOSED]),
     ("Services", [EV_SERVICE_DETECTED, EV_SERVICE_CHANGED, EV_VERSION_CHANGED]),
     ("Tags", [EV_TAG_ADDED, EV_TAG_REMOVED]),
+    ("Domains", list(DOMAIN_EVENT_TYPES)),
 ]
 
 

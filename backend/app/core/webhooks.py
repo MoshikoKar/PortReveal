@@ -91,6 +91,9 @@ def _event_payload(event: Event) -> dict:
         "new_value": event.new_value,
         "notify": bool(event.notify),
     }
+    if event.domain_id is not None or event.hostname:  # domain-scan events: no device, a host name instead
+        payload["hostname"] = event.hostname
+        payload["domain_id"] = event.domain_id
     # cve_watch_match stores structured detail in old_value; promote fields for SIEM consumers.
     if event.event_type == EV_CVE_WATCH_MATCH and event.old_value:
         try:

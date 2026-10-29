@@ -399,7 +399,7 @@ def test_upload_select_and_scan_uses_list(client, db):
 
     lib = client.get("/api/wordlists").json()
     assert lib["builtin"]["in_use"] and lib["builtin"]["entries"] == len(APP_PATHS)
-    assert lib["limits"]["max_entries"] == 1_000_000 and not lib["subdomain_discovery"]
+    assert lib["limits"]["max_entries"] == 1_000_000 and lib["subdomain_discovery"]
 
     cfg = client.get("/api/settings/web-capture").json()
     assert cfg["discovery_wordlist_id"] is None and "discovery_wordlist" not in cfg

@@ -80,13 +80,16 @@ export interface SystemStatus {
     nmap_version: string | null; nmap_path: string; privileged: boolean; message: string;
   };
   scans: ScanSummary;
+  domain_scans?: { worker_running: boolean; running: number; queued: number; tools: Record<DomainToolName, DomainToolStatus> };
 }
 
 export type EventType =
   | 'device_discovered' | 'device_disappeared' | 'device_reappeared' | 'ip_changed'
   | 'port_opened' | 'port_closed' | 'service_detected' | 'service_changed' | 'version_changed'
   | 'tag_added' | 'tag_removed' | 'watch_match' | 'policy_violation' | 'banner_changed'
-  | 'os_changed' | 'monitor_change' | 'geo_mismatch' | 'cve_watch_match';
+  | 'os_changed' | 'monitor_change' | 'geo_mismatch' | 'cve_watch_match'
+  | 'subdomain_new' | 'subdomain_gone' | 'subdomain_ip_changed' | 'subdomain_exposure_changed'
+  | 'internal_name_exposed' | 'wildcard_detected' | 'wildcard_removed' | 'zone_transfer_open';
 
 export interface ChangeEvent {
   id: number;
@@ -104,6 +107,9 @@ export interface ChangeEvent {
   message: string;
   notify: boolean;
   notified_at: string | null;
+  /** Domain-scan events: no device; the domain and the host name instead. */
+  domain_id?: number | null;
+  hostname?: string | null;
 }
 
 export type DeviceStatus = 'active' | 'unknown' | 'not_detected';
@@ -521,6 +527,8 @@ export interface Wordlist {
   updated_at: string;
   created_by: string | null;
   in_use: boolean;
+  /** Domains whose wordlist brute force uses this list: deleting it is refused while any remain. */
+  domains: { id: number; name: string }[];
 }
 
 export interface WordlistLimits {
@@ -535,7 +543,7 @@ export interface WordlistLibrary {
   items: Wordlist[];
   builtin: { name: string; kind: 'paths'; source: 'builtin'; entries: number; in_use: boolean };
   limits: WordlistLimits;
-  /** False until a scan stage consumes subdomain lists; they can still be stored. */
+  /** True: subdomain lists feed Domain scans (dnsx wordlist brute force). */
   subdomain_discovery: boolean;
 }
 
@@ -727,6 +735,8 @@ export interface RecipientGroup {
   event_types: EventType[];
   min_severity: RecipientMinSeverity;
   network_ids: number[];
+  /** Domain-scan events: empty = all domains. Device events use network_ids. */
+  domain_ids: number[];
   delivery_mode: RecipientDeliveryMode;
   digest_time: string | null;
   max_per_hour: number;
@@ -1082,4 +1092,155 @@ export interface SnapshotInfo {
   hosts_active: number;
   open_ports: number;
   size_bytes: number;
+}
+
+// --- Domain scans -------------------------------------------------------------------------------
+export type DomainToolName = 'subfinder' | 'dnsx';
+export interface DomainToolStatus {
+  name: DomainToolName;
+  found: boolean;
+  path: string | null;
+  version: string | null;
+  configured: string;
+  message: string;
+}
+
+export type Exposure = 'external' | 'internal' | 'both' | 'unresolved';
+export type SubdomainSource = 'passive' | 'wordlist' | 'axfr' | 'manual';
+export type SubdomainFlag = 'internal_authorized' | 'internal_name_exposed' | 'private_ip_public';
+export type DomainWordlistMode = 'none' | 'library' | 'custom';
+
+export interface DomainSchedule { enabled: boolean; time: string; days: number[] }
+
+export type DomainPhaseKey = 'passive' | 'wordlist_internal' | 'wordlist_public' | 'axfr' | 'public_axfr'
+  | 'resolve' | 'diff' | 'port_scan';
+export type DomainPhaseStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
+export interface DomainScanPhase {
+  key: DomainPhaseKey;
+  label: string;
+  status: DomainPhaseStatus;
+  started_at: string | null;
+  finished_at: string | null;
+  processed: number;
+  total: number | null;
+  found: number;
+  queries: number;
+  unit: string | null;
+  reason: string | null;
+  duration_s: number | null;
+  /** DNS queries per second while running. */
+  rate: number | null;
+  eta_s: number | null;
+}
+
+export interface DomainScanJob {
+  id: number;
+  domain_id: number;
+  domain_name: string | null;
+  status: ScanStatus;
+  trigger: 'manual' | 'scheduled';
+  requested_by: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  stage: string | null;
+  progress: number;
+  error: string | null;
+  notes: string | null;
+  /** Counts, plus partial_reasons (string[]) and checks (per source / resolver outcome). */
+  stats: (Record<string, number | boolean> & { partial_reasons?: string[]; checks?: Record<string, string | null> }) | null;
+  wildcard: { internal: string[]; public: string[] } | null;
+  axfr: { authorized: Record<string, { status: string; names?: number; detail?: string }>;
+    public: Record<string, { status: string; names?: number }> } | null;
+  phases: DomainScanPhase[];
+  port_scan_id: number | null;
+}
+
+export interface Domain {
+  id: number;
+  name: string;
+  enabled: boolean;
+  notes: string | null;
+  wordlist_mode: DomainWordlistMode;
+  wordlist_id: number | null;
+  wordlist_name: string | null;
+  custom_words: string[];
+  passive_enabled: boolean;
+  axfr_enabled: boolean;
+  axfr_servers: string[];
+  internal_resolvers: string[];
+  public_resolvers: string[];
+  schedule: DomainSchedule;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  counts: { active: number; wildcard: number } & Record<Exposure, number>;
+  wildcard: { internal: string[]; public: string[] };
+  zone_transfer_open: string[];
+  last_scan: DomainScanJob | null;
+}
+
+export interface DnsView { a: string[]; aaaa: string[]; cname: string[]; status?: string }
+
+export interface HostingEntry {
+  ip: string;
+  kind: 'network' | 'external' | 'private';
+  network: string | null;
+  device_uuid: string | null;
+  device_label: string | null;
+  asn: number | null;
+  as_org: string | null;
+}
+
+export interface Subdomain {
+  id: number;
+  domain_id: number;
+  name: string;
+  exposure: Exposure;
+  records: { internal?: DnsView; public?: DnsView };
+  records_summary: string;
+  ips: string[];
+  hosting: HostingEntry[];
+  sources: SubdomainSource[];
+  wildcard: boolean;
+  flags: SubdomainFlag[];
+  device_uuid: string | null;
+  status: 'active' | 'gone';
+  /** The latest scan could not check it (resolver error / timeout / not reached): state kept as is. */
+  unverified: boolean;
+  /** Written by a running scan, classification not final yet. */
+  in_progress: boolean;
+  missed_scans: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface LookupResult {
+  hostname: string;
+  domain_id: number;
+  domain: string;
+  internal: DnsView;
+  public: DnsView;
+  ips: string[];
+  exposure: Exposure;
+  wildcard: boolean;
+  flags: SubdomainFlag[];
+  hosting: HostingEntry[];
+  in_inventory: boolean;
+}
+
+export interface MaskedKey { set: boolean; masked: string }
+export interface DomainDiscoverySettings {
+  concurrency: number;
+  dns_rate_per_second: number;
+  subfinder_timeout_minutes: number;
+  dnsx_timeout_minutes: number;
+  dns_timeout_seconds: number;
+  axfr_timeout_seconds: number;
+  max_wordlist_entries: number;
+  max_job_minutes: number;
+  auto_port_scan: boolean;
+  port_scan_type: 'discovery' | 'standard' | 'full';
+  other_provider: string;
+  keys: { virustotal: MaskedKey; securitytrails: MaskedKey; shodan: MaskedKey; other: MaskedKey & { provider: string } };
 }

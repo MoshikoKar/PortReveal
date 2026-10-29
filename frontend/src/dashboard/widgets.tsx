@@ -24,6 +24,9 @@ const TYPE_COLORS: Record<EventType, string> = {
   tag_added: 'var(--info)', tag_removed: 'var(--info)', watch_match: 'var(--medium)', policy_violation: 'var(--high)',
   banner_changed: 'var(--info)', os_changed: 'var(--medium)', monitor_change: 'var(--medium)',
   geo_mismatch: 'var(--high)', cve_watch_match: 'var(--high)',
+  subdomain_new: 'var(--medium)', subdomain_gone: 'var(--low)', subdomain_ip_changed: 'var(--low)',
+  subdomain_exposure_changed: 'var(--medium)', internal_name_exposed: 'var(--high)',
+  wildcard_detected: 'var(--medium)', wildcard_removed: 'var(--info)', zone_transfer_open: 'var(--high)',
 };
 
 const LEVEL_COLORS = { high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)' } as const;

@@ -5,7 +5,7 @@ import { useApp } from '../context';
 import { AuditSettings, HealthPanel, UsersSettings } from './settings/Admin';
 import { DataTransferPanel } from './settings/DataTransfer';
 import { ExclusionsSettings } from './settings/Exclusions';
-import { DiscoveryForm, GeoForm, LdapForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, VulnForm } from './settings/Forms';
+import { DiscoveryForm, DomainDiscoveryForm, GeoForm, LdapForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, VulnForm } from './settings/Forms';
 import { NetworksSettings } from './settings/Networks';
 import { NotificationsSettings } from './settings/Notifications';
 import { TokensSettings } from './settings/Tokens';
@@ -20,6 +20,7 @@ const TABS = [
   { id: 'vulnerabilities', label: 'Vulnerabilities', viewer: false },
   { id: 'discovery', label: 'Local discovery', viewer: false },
   { id: 'geo', label: 'Geo', viewer: false },
+  { id: 'domain-discovery', label: 'Domain discovery', viewer: false },
   { id: 'notifications', label: 'Notifications', viewer: false },
   { id: 'authentication', label: 'Authentication', viewer: false },
   { id: 'users', label: 'Users', viewer: false },
@@ -137,6 +138,7 @@ export default function Settings() {
       {tab === 'vulnerabilities' && <VulnForm onDirtyChange={setFormDirty} />}
       {tab === 'discovery' && <DiscoveryForm onDirtyChange={setFormDirty} />}
       {tab === 'geo' && <GeoForm onDirtyChange={setFormDirty} />}
+      {tab === 'domain-discovery' && <DomainDiscoveryForm onDirtyChange={setFormDirty} />}
       {tab === 'notifications' && <NotificationsSettings onDirtyChange={setFormDirty} />}
       {tab === 'authentication' && <LdapForm onDirtyChange={setFormDirty} />}
       {tab === 'users' && <UsersSettings onDirtyChange={setEntityDirty} />}

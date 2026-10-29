@@ -7,6 +7,10 @@ import {
   isNotificationSection,
   notificationSectionFromPath,
   NOTIFICATION_SECTIONS,
+  domainScopeSummary,
+  scopeMode,
+  scopePayload,
+  toggleScopeId,
   urlHost,
 } from './notificationsLogic';
 
@@ -48,5 +52,26 @@ describe('webhook display helpers', () => {
       ['port_opened', 'port_closed', 'watch_match'],
       { port_opened: 'Port opened', port_closed: 'Port closed', watch_match: 'Watch match' },
     )).toBe('3 event types');
+  });
+});
+
+describe('recipient group domain scope', () => {
+  it('maps the stored ids to the selector and back', () => {
+    expect(scopeMode(null)).toBe('all');
+    expect(scopeMode([])).toBe('all');
+    expect(scopeMode([3])).toBe('selected');
+    expect(scopePayload('all', [3])).toBeNull();
+    expect(scopePayload('selected', [3, 5])).toEqual([3, 5]);
+    expect(scopePayload('selected', [])).toBeNull(); // nothing ticked = all domains
+  });
+
+  it('toggles domains and summarises the scope', () => {
+    expect(toggleScopeId([1], 2, true)).toEqual([1, 2]);
+    expect(toggleScopeId([1, 2], 2, true)).toEqual([1, 2]);
+    expect(toggleScopeId([1, 2], 1, false)).toEqual([2]);
+    const names = { 1: 'example.com', 2: 'example.org', 3: 'example.net' };
+    expect(domainScopeSummary([], names)).toBe('All domains');
+    expect(domainScopeSummary([1, 2], names)).toBe('example.com, example.org');
+    expect(domainScopeSummary([1, 2, 3, 9], names)).toBe('example.com, example.org +2');
   });
 });

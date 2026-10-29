@@ -213,6 +213,20 @@ export function HealthPanel() {
           <div>{scanner.mode}{scanner.mock_active && ' (simulated)'}</div>
           <div className="muted small">{scanner.message}</div>
         </Health>
+        {system.domain_scans && (
+          <Health ok={Object.values(system.domain_scans.tools).every((t) => t.found) ? true : null} label="Domain scan tools">
+            {Object.values(system.domain_scans.tools).map((t) => (
+              <div key={t.name} className="small" data-testid={`tool-${t.name}`}>
+                {t.found ? <>{t.name} {t.version ?? '(version unknown)'}</> : <span style={{ color: 'var(--medium)' }}>{t.name} not installed</span>}
+                <div className="muted small mono" style={{ overflowWrap: 'anywhere' }}>{t.path ?? t.configured}</div>
+              </div>
+            ))}
+            {!Object.values(system.domain_scans.tools).every((t) => t.found) && (
+              <div className="muted small">Install: <code>npm run setup:capture-tools</code> (Windows) or <code>npm run setup</code> (Linux). Domain scans still run without them (resolution and zone transfer only).</div>
+            )}
+            <div className="muted small">worker {system.domain_scans.worker_running ? 'running' : 'stopped'} · {system.domain_scans.running} running · {system.domain_scans.queued} queued</div>
+          </Health>
+        )}
         <Health ok={!scans.last_failed || (scans.last_successful?.id ?? 0) > scans.last_failed.id} label="Scans">
           <div className="small">Last success: {scans.last_successful ? fmtTime(scans.last_successful.finished_at) : '-'}</div>
           <div className="small">Last failure: {scans.last_failed ? fmtTime(scans.last_failed.finished_at) : '-'}</div>

@@ -80,6 +80,25 @@ EV_OS_CHANGED = "os_changed"
 EV_MONITOR_CHANGE = "monitor_change"
 EV_GEO_MISMATCH = "geo_mismatch"
 EV_CVE_WATCH_MATCH = "cve_watch_match"
+# Domain scans (core/domains): subdomain inventory diffs. Not tied to a device; Event.domain_id is set.
+EV_SUBDOMAIN_NEW = "subdomain_new"
+EV_SUBDOMAIN_GONE = "subdomain_gone"
+EV_SUBDOMAIN_IP_CHANGED = "subdomain_ip_changed"
+EV_SUBDOMAIN_EXPOSURE_CHANGED = "subdomain_exposure_changed"
+EV_INTERNAL_NAME_EXPOSED = "internal_name_exposed"
+EV_WILDCARD_DETECTED = "wildcard_detected"
+EV_WILDCARD_REMOVED = "wildcard_removed"
+EV_ZONE_TRANSFER_OPEN = "zone_transfer_open"
+DOMAIN_EVENT_TYPES = (
+    EV_SUBDOMAIN_NEW,
+    EV_SUBDOMAIN_GONE,
+    EV_SUBDOMAIN_IP_CHANGED,
+    EV_SUBDOMAIN_EXPOSURE_CHANGED,
+    EV_INTERNAL_NAME_EXPOSED,
+    EV_WILDCARD_DETECTED,
+    EV_WILDCARD_REMOVED,
+    EV_ZONE_TRANSFER_OPEN,
+)
 EVENT_TYPES = (
     EV_DEVICE_DISCOVERED,
     EV_DEVICE_DISAPPEARED,
@@ -99,6 +118,7 @@ EVENT_TYPES = (
     EV_MONITOR_CHANGE,
     EV_GEO_MISMATCH,
     EV_CVE_WATCH_MATCH,
+    *DOMAIN_EVENT_TYPES,
 )
 # Saved-search alerts are explicit subscriptions: the digest includes them regardless of event_types.
 ALWAYS_NOTIFY_TYPES = (EV_WATCH_MATCH, EV_POLICY_VIOLATION, EV_MONITOR_CHANGE, EV_CVE_WATCH_MATCH)
@@ -121,6 +141,16 @@ EVENT_SEVERITY = {
     EV_TAG_REMOVED: "info",
     EV_BANNER_CHANGED: "info",
     EV_OS_CHANGED: "low",
+    # Domain events: "high" is the critical tier (immediate delivery). New subdomains and exposure
+    # changes are promoted to it per event (core/domains/diff.py).
+    EV_SUBDOMAIN_NEW: "low",
+    EV_SUBDOMAIN_GONE: "low",
+    EV_SUBDOMAIN_IP_CHANGED: "low",
+    EV_SUBDOMAIN_EXPOSURE_CHANGED: "medium",
+    EV_INTERNAL_NAME_EXPOSED: "high",
+    EV_WILDCARD_DETECTED: "medium",
+    EV_WILDCARD_REMOVED: "info",
+    EV_ZONE_TRANSFER_OPEN: "high",
 }
 
 SEVERITIES = ("high", "medium", "low", "info")
@@ -211,6 +241,30 @@ GEO_SOURCE_PUBLISHED_NAME = "published_name"
 GEO_SOURCE_DEVICE_IP = "device_ip"
 GEO_SOURCES = (GEO_SOURCE_PUBLISHED_NAME, GEO_SOURCE_DEVICE_IP)
 
+# Domain scans (core/domains): own job queue; statuses mirror SCAN_*.
+DOMAIN_SCAN_TRIGGERS = (TRIGGER_MANUAL, TRIGGER_SCHEDULED)
+EXPOSURE_EXTERNAL = "external"  # resolves on the public resolvers only
+EXPOSURE_INTERNAL = "internal"  # resolves on the internal resolvers only
+EXPOSURE_BOTH = "both"  # split DNS: resolves on both
+EXPOSURE_UNRESOLVED = "unresolved"  # known name (AXFR / manual) that resolves nowhere right now
+EXPOSURES = (EXPOSURE_EXTERNAL, EXPOSURE_INTERNAL, EXPOSURE_BOTH, EXPOSURE_UNRESOLVED)
+SUBDOMAIN_ACTIVE = "active"
+SUBDOMAIN_GONE = "gone"
+SUBDOMAIN_STATUSES = (SUBDOMAIN_ACTIVE, SUBDOMAIN_GONE)
+SOURCE_PASSIVE = "passive"
+SOURCE_WORDLIST = "wordlist"
+SOURCE_AXFR = "axfr"
+SOURCE_MANUAL = "manual"
+SUBDOMAIN_SOURCES = (SOURCE_PASSIVE, SOURCE_WORDLIST, SOURCE_AXFR, SOURCE_MANUAL)
+WORDLIST_MODE_NONE = "none"
+WORDLIST_MODE_LIBRARY = "library"
+WORDLIST_MODE_CUSTOM = "custom"
+WORDLIST_MODES = (WORDLIST_MODE_NONE, WORDLIST_MODE_LIBRARY, WORDLIST_MODE_CUSTOM)
+# Subdomain flags (attacker view vs ground truth)
+FLAG_INTERNAL_AUTHORIZED = "internal_authorized"  # found only through the authorized AXFR
+FLAG_INTERNAL_NAME_EXPOSED = "internal_name_exposed"  # AXFR name also public, resolving to internal ranges
+FLAG_PRIVATE_IP_PUBLIC = "private_ip_public"  # public answer contains a private / configured-network IP
+
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
 # migration that rewrites the matching constraint.
@@ -237,6 +291,11 @@ CLOSED_VALUES: dict[tuple[str, str], tuple[str, ...]] = {
     ("vuln_jobs", "status"): VULN_JOB_STATUSES,
     ("vuln_jobs", "trigger"): VULN_JOB_TRIGGERS,
     ("vuln_finding_lifecycle", "resolution"): VULN_RESOLUTIONS,
+    ("domains", "wordlist_mode"): WORDLIST_MODES,
+    ("domain_scans", "status"): SCAN_STATUSES,
+    ("domain_scans", "trigger"): DOMAIN_SCAN_TRIGGERS,
+    ("subdomains", "exposure"): EXPOSURES,
+    ("subdomains", "status"): SUBDOMAIN_STATUSES,
 }
 
 
@@ -805,7 +864,8 @@ class RecipientGroup(Base):
     # WHAT
     event_types: Mapped[list | None] = mapped_column(JSON)  # empty/None = all types
     min_severity: Mapped[str] = mapped_column(String(10), default="info")
-    network_ids: Mapped[list | None] = mapped_column(JSON)  # empty/None = all networks
+    network_ids: Mapped[list | None] = mapped_column(JSON)  # empty/None = all networks (device events)
+    domain_ids: Mapped[list | None] = mapped_column(JSON)  # empty/None = all domains (domain-scan events)
     # WHEN
     delivery_mode: Mapped[str] = mapped_column(String(20), default=DELIVERY_DAILY)
     digest_time: Mapped[str | None] = mapped_column(String(5))  # HH:MM local, daily mode
@@ -1014,6 +1074,10 @@ class Event(Base):
     message: Mapped[str] = mapped_column(Text)
     notify: Mapped[bool] = mapped_column(Boolean, default=True)
     notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Domain-scan events (DOMAIN_EVENT_TYPES) have no device: they point at the domain and name the host.
+    domain_id: Mapped[int | None] = mapped_column(ForeignKey("domains.id", ondelete="SET NULL"), index=True)
+    domain_scan_id: Mapped[int | None] = mapped_column(ForeignKey("domain_scans.id", ondelete="SET NULL"))
+    hostname: Mapped[str | None] = mapped_column(String(255))
     device: Mapped[Device | None] = relationship(lazy="joined")
 
 
@@ -1063,6 +1127,112 @@ class Wordlist(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
     created_by: Mapped[str | None] = mapped_column(String(150))
+
+
+# --- Domain scans (subdomain inventory; own job queue, see core/domains) ---------------
+class Domain(Base):
+    """A DNS domain whose subdomains are inventoried (passive sources, wordlist, authorized AXFR)."""
+
+    __tablename__ = "domains"
+    __table_args__ = (one_of("domains", "wordlist_mode"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(253), unique=True)  # lower-case, punycode
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    wordlist_mode: Mapped[str] = mapped_column(String(10), default=WORDLIST_MODE_NONE)
+    wordlist_id: Mapped[int | None] = mapped_column(ForeignKey("wordlists.id", ondelete="SET NULL"))
+    custom_words: Mapped[list | None] = mapped_column(JSON)  # labels typed by the admin (custom mode)
+    passive_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    axfr_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    axfr_servers: Mapped[list | None] = mapped_column(JSON)  # internal DNS servers authorized to transfer
+    internal_resolvers: Mapped[list | None] = mapped_column(JSON)  # empty/None = system resolver
+    public_resolvers: Mapped[list | None] = mapped_column(JSON)
+    schedule: Mapped[dict | None] = mapped_column(JSON)  # {"enabled", "time": "HH:MM", "days": [0..6]}
+    last_scheduled_on: Mapped[str | None] = mapped_column(String(10))  # local YYYY-MM-DD
+    created_by: Mapped[str | None] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+
+
+class DomainScan(Base):
+    """One domain-scan job (queue row + result summary). Mirrors `Scan` / `VulnJob`."""
+
+    __tablename__ = "domain_scans"
+    __table_args__ = (one_of("domain_scans", "status"), one_of("domain_scans", "trigger"))
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default=SCAN_QUEUED, index=True)
+    trigger: Mapped[str] = mapped_column(String(20), default=TRIGGER_MANUAL)
+    requested_by: Mapped[str | None] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    stage: Mapped[str | None] = mapped_column(String(40))
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    error: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    # Summary counts: total / new / gone / changed / per exposure / wildcard / per source / events.
+    stats: Mapped[dict | None] = mapped_column(JSON)
+    # Wildcard probe answers {"internal": [ips], "public": [ips]}; AXFR outcome per server.
+    wildcard: Mapped[dict | None] = mapped_column(JSON)
+    axfr: Mapped[dict | None] = mapped_column(JSON)
+    # Per phase (core/domains/progress.py): [{"key", "label", "status", "started_at", "finished_at",
+    # "processed", "total", "found", "queries", "reason"}]; updated in batches while the scan runs.
+    phases: Mapped[list | None] = mapped_column(JSON)
+    port_scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id", ondelete="SET NULL"))
+
+
+class Subdomain(Base):
+    """Current state of one name under a domain (inventory row)."""
+
+    __tablename__ = "subdomains"
+    __table_args__ = (
+        UniqueConstraint("domain_id", "name", name="uq_subdomain_name"),
+        Index("ix_subdomains_domain_status", "domain_id", "status"),
+        one_of("subdomains", "exposure"),
+        one_of("subdomains", "status"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(253), index=True)
+    exposure: Mapped[str] = mapped_column(String(12), default=EXPOSURE_UNRESOLVED)
+    # {"internal": {"a": [], "aaaa": [], "cname": []}, "public": {...}}
+    records: Mapped[dict | None] = mapped_column(JSON)
+    ips: Mapped[list | None] = mapped_column(JSON)
+    sources: Mapped[list | None] = mapped_column(JSON)  # SUBDOMAIN_SOURCES
+    wildcard: Mapped[bool] = mapped_column(Boolean, default=False)
+    flags: Mapped[list | None] = mapped_column(JSON)  # FLAG_*
+    # Per IP: {"ip", "kind": network|external|private, "network", "device_uuid", "device_label", "asn", "as_org"}
+    hosting: Mapped[list | None] = mapped_column(JSON)
+    device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(10), default=SUBDOMAIN_ACTIVE)
+    first_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    # Last time a scan (or lookup) saw the name resolve; never moved by a scan that could not check it.
+    last_seen: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, index=True)
+    # Last scan that verified this row (NULL: never verified by a scan, e.g. found by a cancelled one).
+    last_scan_id: Mapped[int | None] = mapped_column(ForeignKey("domain_scans.id", ondelete="SET NULL"))
+    # Consecutive complete (non-partial) scans that did not find the name; "gone" at 2.
+    missed_scans: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # The latest scan could not check the name (resolver error / timeout / not reached): state kept as is.
+    unverified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # Written by a running scan, classification not final yet.
+    in_progress: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
+class SubdomainObservation(Base):
+    """Per-scan snapshot of one name: the diff base for the next scan, purged with its scan."""
+
+    __tablename__ = "subdomain_observations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain_scan_id: Mapped[int] = mapped_column(ForeignKey("domain_scans.id", ondelete="CASCADE"), index=True)
+    subdomain_id: Mapped[int | None] = mapped_column(ForeignKey("subdomains.id", ondelete="SET NULL"), index=True)
+    name: Mapped[str] = mapped_column(String(253))
+    exposure: Mapped[str] = mapped_column(String(12))
+    records: Mapped[dict | None] = mapped_column(JSON)
+    ips: Mapped[list | None] = mapped_column(JSON)
+    sources: Mapped[list | None] = mapped_column(JSON)
+    wildcard: Mapped[bool] = mapped_column(Boolean, default=False)
+    flags: Mapped[list | None] = mapped_column(JSON)
 
 
 # --- Web Capture (inventory enrichment; independent of nmap scans) -------------

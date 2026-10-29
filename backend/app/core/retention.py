@@ -14,15 +14,19 @@ from ..db import utcnow
 from ..models import (
     DEVICE_ACTIVE,
     SCAN_ACTIVE_STATES,
+    SUBDOMAIN_GONE,
     WEB_CAPTURE_ACTIVE_STATES,
     AuditLog,
     Device,
     DeviceRttSample,
+    DomainScan,
     Event,
     GeoLookupCache,
     Scan,
     ScanHost,
     Snapshot,
+    Subdomain,
+    SubdomainObservation,
     UserSession,
     WebCapture,
 )
@@ -32,9 +36,9 @@ log = logging.getLogger(__name__)
 
 
 def run_retention(db: Session, days: int, raw_days: int = 7, now: datetime | None = None,
-                  rtt_days: int = 90) -> dict[str, int]:
+                  rtt_days: int = 90, domain_days: int = 90) -> dict[str, int]:
     """DB deletes, commit, then filesystem cleanup (no transaction held open during rmtree)."""
-    counts, stale_uuids = purge_expired(db, days, now, rtt_days=rtt_days)
+    counts, stale_uuids = purge_expired(db, days, now, rtt_days=rtt_days, domain_days=domain_days)
     db.commit()
     counts.update(cleanup_files(stale_uuids, live_capture_uuids(db), raw_days))
     log.info("Retention cleanup (%s days): %s", days, counts)
@@ -42,7 +46,7 @@ def run_retention(db: Session, days: int, raw_days: int = 7, now: datetime | Non
 
 
 def purge_expired(db: Session, days: int, now: datetime | None = None,
-                  rtt_days: int = 90) -> tuple[dict[str, int], list[str]]:
+                  rtt_days: int = 90, domain_days: int = 90) -> tuple[dict[str, int], list[str]]:
     """Delete expired rows (not committed). Returns counts and the uuids of deleted web captures,
     whose files the caller removes with cleanup_files() once the deletes are committed."""
     now = now or utcnow()
@@ -63,6 +67,14 @@ def purge_expired(db: Session, days: int, now: datetime | None = None,
     # Devices not seen for the whole retention period are forgotten (ports/IPs/events cascade)
     _del("devices", delete(Device).where(Device.last_seen < cutoff, Device.status != DEVICE_ACTIVE))
     _del("sessions", delete(UserSession).where(UserSession.expires_at < now))
+    # Domain scan history (own window): scans past it go with their per-scan snapshots; names that
+    # have been gone for the whole window leave the inventory. Active / queued jobs are never touched.
+    domain_cutoff = now - timedelta(days=domain_days)
+    old_scans = select(DomainScan.id).where(DomainScan.created_at < domain_cutoff,
+                                            DomainScan.status.not_in(SCAN_ACTIVE_STATES))
+    _del("subdomain_observations", delete(SubdomainObservation).where(SubdomainObservation.domain_scan_id.in_(old_scans)))
+    _del("domain_scans", delete(DomainScan).where(DomainScan.id.in_(old_scans)))
+    _del("subdomains", delete(Subdomain).where(Subdomain.status == SUBDOMAIN_GONE, Subdomain.last_seen < domain_cutoff))
 
     # Web captures past retention (never delete active jobs); cascade deletes web_pages
     stale = list(

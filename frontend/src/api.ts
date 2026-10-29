@@ -10,6 +10,8 @@ export class ApiError extends Error {
   requestId?: string;
   /** Machine-readable error code from the backend envelope (`conflict`, `invalid_query`, ...). */
   code?: string;
+  /** The parsed error envelope, for endpoints that add structured fields (e.g. the domains using a wordlist). */
+  body?: any;
   constructor(status: number, message: string, pos?: number, requestId?: string, code?: string) {
     super(message);
     this.status = status;
@@ -70,7 +72,9 @@ export function responseError(res: Response, body: any, sentId: string): ApiErro
   let message = errorMessage(body, res.status);
   if (res.status >= 500) message += ` (reference ${requestId})`;
   const pos = typeof body?.pos === 'number' ? body.pos : undefined;
-  return new ApiError(res.status, message, pos, requestId, typeof body?.code === 'string' ? body.code : undefined);
+  const err = new ApiError(res.status, message, pos, requestId, typeof body?.code === 'string' ? body.code : undefined);
+  err.body = body;
+  return err;
 }
 
 async function readJson(res: Response): Promise<any> {

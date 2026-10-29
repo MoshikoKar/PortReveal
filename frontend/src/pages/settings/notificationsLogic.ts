@@ -39,3 +39,25 @@ export function eventFilterSummary(types: EventType[], labels: Record<string, st
   if (types.length <= 2) return types.map((t) => labels[t] || t).join(', ');
   return `${types.length} event types`;
 }
+
+// --- recipient-group domain scope (domain-scan events) -------------------------------------------------------
+export type ScopeMode = 'all' | 'selected';
+
+export function scopeMode(ids: number[] | null | undefined): ScopeMode {
+  return ids && ids.length ? 'selected' : 'all';
+}
+
+export function toggleScopeId(ids: number[], id: number, on: boolean): number[] {
+  return on ? (ids.includes(id) ? ids : [...ids, id]) : ids.filter((x) => x !== id);
+}
+
+/** API value: null = all domains (also when "selected" has nothing ticked yet). */
+export function scopePayload(mode: ScopeMode, ids: number[]): number[] | null {
+  return mode === 'selected' && ids.length ? ids : null;
+}
+
+export function domainScopeSummary(ids: number[], names: Record<number, string>): string {
+  if (!ids.length) return 'All domains';
+  const labels = ids.map((i) => names[i] ?? `#${i}`);
+  return labels.length <= 2 ? labels.join(', ') : `${labels[0]}, ${labels[1]} +${labels.length - 2}`;
+}

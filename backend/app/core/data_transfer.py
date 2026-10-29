@@ -406,6 +406,9 @@ def import_inventory(db: Session, src: Path | BinaryIO, *, confirm: bool) -> dic
             soft_col = SOFT_SCAN_FK_COLUMNS.get(name)
             for data in _iter_table_rows(zf, name):
                 kwargs = _dict_to_kwargs(model, data)
+                if name == "events":
+                    # Domains are configuration, not inventory: the package never carries them.
+                    kwargs["domain_id"] = kwargs["domain_scan_id"] = None
                 if soft_col is not None:
                     ref = kwargs.get(soft_col)
                     pk = kwargs.get("id")

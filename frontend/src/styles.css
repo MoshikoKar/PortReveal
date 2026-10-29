@@ -621,6 +621,19 @@ table.heatmap col.heatmap-label { width: 180px; }
 /* Fluid column: takes the table's leftover width and truncates instead of forcing a horizontal scroll
    (max-width: 0 drops the cell's min-content width so the auto table layout can shrink it). */
 td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
+/* Domains / subdomain inventory: short columns keep their content width on one line; the name and
+   the fluid columns (IPs, hosting, summary) share the rest and truncate (full text in the title). */
+.domain-table th, .domain-table td { white-space: nowrap; }
+.domain-table .domain-col-name { width: 30%; max-width: 0; min-width: 160px; }
+.domain-table .domain-col-fluid { width: 18%; max-width: 0; min-width: 110px; }
+/* Running domain scan: compact phase stepper (wraps on narrow screens). */
+.phase-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.phase-step { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.phase-step .badge { min-width: 20px; justify-content: center; }
+.phase-step.running .phase-label { color: var(--text); font-weight: 600; }
+.phase-step.pending .phase-label, .phase-step.skipped .phase-label { color: var(--muted); }
+.phase-step.skipped .phase-label { text-decoration: line-through; }
+.phase-step.failed .phase-label { color: var(--high); }
 table.compact td.heatmap-cell { padding: 2px; }
 .heatmap-cell button {
   display: block; width: 100%; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm);

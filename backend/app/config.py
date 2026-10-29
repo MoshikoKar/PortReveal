@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # are detected automatically; these are only added to them.
     scanner_host_ips: str = ""
     mock_scan_delay: float = 0.4
+    # Domain scan tools (ProjectDiscovery). A bare name is looked up on PATH, then in <data dir>/tools/bin
+    # (where `npm run setup` installs the pinned release); an absolute path (".exe" on Windows) is used as is.
+    subfinder_path: str = "subfinder"
+    dnsx_path: str = "dnsx"
 
     app_secret_key: str = ""
     session_idle_minutes: int = 480

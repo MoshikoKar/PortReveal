@@ -132,7 +132,7 @@ def cmd_retention(_args) -> int:
     with session_scope() as db:
         ret = get_section(db, RetentionSettings)
         counts = run_retention(db, ret.days, get_section(db, ScanSettings).raw_retention_days,
-                               rtt_days=ret.rtt_sample_days)
+                               rtt_days=ret.rtt_sample_days, domain_days=ret.domain_scan_days)
     print(json.dumps(counts))
     return 0
 

@@ -25,6 +25,7 @@ from ..models import (
     DEST_WEBHOOK,
     EVENT_TYPES,
     SEVERITIES,
+    Domain,
     Network,
     RecipientDestination,
     RecipientGroup,
@@ -55,6 +56,7 @@ class GroupIn(BaseModel):
     event_types: list[str] | None = None
     min_severity: str = "info"
     network_ids: list[int] | None = None
+    domain_ids: list[int] | None = None  # None / empty = all domains
     delivery_mode: str = DELIVERY_DAILY
     digest_time: str | None = Field(None, max_length=5)
     max_per_hour: int = Field(20, ge=1, le=500)
@@ -71,6 +73,7 @@ class GroupPatch(BaseModel):
     event_types: list[str] | None = None
     min_severity: str | None = None
     network_ids: list[int] | None = None
+    domain_ids: list[int] | None = None
     delivery_mode: str | None = None
     digest_time: str | None = Field(None, max_length=5)
     max_per_hour: int | None = Field(None, ge=1, le=500)
@@ -156,7 +159,21 @@ def _network_names(db: Session, ids: list[int] | None) -> dict[int, str]:
     return {n.id: n.name for n in rows}
 
 
-def _group_summary(g: RecipientGroup, net_names: dict[int, str] | None = None) -> str:
+def _domain_names(db: Session, ids: list[int] | None) -> dict[int, str]:
+    if not ids:
+        return {}
+    return {d.id: d.name for d in db.scalars(select(Domain).where(Domain.id.in_(ids))).all()}
+
+
+def _labels(ids: list[int], names: dict[int, str]) -> str:
+    labels = [names.get(i) or f"#{i}" for i in ids]
+    if len(labels) <= 2:
+        return ", ".join(labels)
+    return f"{labels[0]}, {labels[1]} +{len(labels) - 2}"
+
+
+def _group_summary(g: RecipientGroup, net_names: dict[int, str] | None = None,
+                   dom_names: dict[int, str] | None = None) -> str:
     """One-line card summary — omits name and delivery mode (badges cover those)."""
     sev = {
         "high": "Critical+High",
@@ -177,6 +194,9 @@ def _group_summary(g: RecipientGroup, net_names: dict[int, str] | None = None) -
         else:
             nets = f"{labels[0]}, {labels[1]} +{len(labels) - 2}"
     # Delivery mode (and daily clock) live on the badge only — avoid doubling.
+    dom_ids = list(g.domain_ids or [])
+    if dom_ids:
+        return f"{sev} · {nets} · Domains: {_labels(dom_ids, dom_names or {})}"
     return f"{sev} · {nets}"
 
 
@@ -212,7 +232,7 @@ def _destination_kind_labels(dests: list[dict]) -> list[str]:
     return kinds
 
 
-def _out(g: RecipientGroup, net_names: dict[int, str] | None = None) -> dict:
+def _out(g: RecipientGroup, net_names: dict[int, str] | None = None, dom_names: dict[int, str] | None = None) -> dict:
     dests = [_dest_out(d) for d in (g.destinations or [])]
     kinds = _destination_kind_labels(dests)
     return {
@@ -223,6 +243,7 @@ def _out(g: RecipientGroup, net_names: dict[int, str] | None = None) -> dict:
         "event_types": g.event_types or [],
         "min_severity": g.min_severity,
         "network_ids": g.network_ids or [],
+        "domain_ids": g.domain_ids or [],
         "delivery_mode": g.delivery_mode,
         "digest_time": g.digest_time,
         "max_per_hour": g.max_per_hour,
@@ -230,7 +251,7 @@ def _out(g: RecipientGroup, net_names: dict[int, str] | None = None) -> dict:
         "quiet_start": g.quiet_start,
         "quiet_end": g.quiet_end,
         "quiet_bypass_critical": g.quiet_bypass_critical,
-        "summary": _group_summary(g, net_names),
+        "summary": _group_summary(g, net_names, dom_names),
         "destination_kinds": kinds,
         "destinations": dests,
         "created_at": g.created_at,
@@ -259,6 +280,16 @@ def _validate_network_ids(db: Session, network_ids: list[int] | None) -> list[in
     if missing:
         raise HTTPException(422, f"unknown network_ids: {missing}")
     return list(network_ids)
+
+
+def _validate_domain_ids(db: Session, domain_ids: list[int] | None) -> list[int] | None:
+    if not domain_ids:
+        return None
+    existing = set(db.scalars(select(Domain.id).where(Domain.id.in_(domain_ids))).all())
+    missing = [i for i in domain_ids if i not in existing]
+    if missing:
+        raise HTTPException(422, f"unknown domain_ids: {missing}")
+    return list(dict.fromkeys(domain_ids))
 
 
 def _apply_destinations(db: Session, group: RecipientGroup, destinations: list[DestinationIn]) -> None:
@@ -312,7 +343,8 @@ def list_groups(db: Session = Depends(get_db), user=Depends(require_admin)):
     )
     all_net_ids = {i for g in rows for i in (g.network_ids or [])}
     names = _network_names(db, list(all_net_ids)) if all_net_ids else {}
-    return [_out(g, names) for g in rows]
+    dom_names = _domain_names(db, list({i for g in rows for i in (g.domain_ids or [])}))
+    return [_out(g, names, dom_names) for g in rows]
 
 
 @router.post("", status_code=201)
@@ -328,6 +360,7 @@ def create_group(body: GroupIn, request: Request, db: Session = Depends(get_db),
     )
     _require_destinations(body.destinations)
     net_ids = _validate_network_ids(db, body.network_ids)
+    dom_ids = _validate_domain_ids(db, body.domain_ids)
     g = RecipientGroup(
         name=name,
         enabled=body.enabled,
@@ -335,6 +368,7 @@ def create_group(body: GroupIn, request: Request, db: Session = Depends(get_db),
         event_types=types,
         min_severity=min_sev,
         network_ids=net_ids,
+        domain_ids=dom_ids,
         delivery_mode=mode,
         digest_time=digest,
         max_per_hour=body.max_per_hour,
@@ -352,7 +386,7 @@ def create_group(body: GroupIn, request: Request, db: Session = Depends(get_db),
     audit(db, user.username, "recipient_group.create", g.name, {"id": g.id, "mode": mode}, client_ip(request))
     db.commit()
     g = db.scalar(select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations)))
-    return _out(g, _network_names(db, g.network_ids))
+    return _out(g, _network_names(db, g.network_ids), _domain_names(db, g.domain_ids))
 
 
 @router.patch("/{group_id}")
@@ -398,6 +432,8 @@ def patch_group(
         g.last_digest_on = daily_seed_last_digest_on(digest)
     if "network_ids" in data:
         g.network_ids = _validate_network_ids(db, data["network_ids"])
+    if "domain_ids" in data:
+        g.domain_ids = _validate_domain_ids(db, data["domain_ids"])
     if "max_per_hour" in data:
         g.max_per_hour = data["max_per_hour"]
     if "dedupe_seconds" in data:
@@ -410,7 +446,7 @@ def patch_group(
     audit(db, user.username, "recipient_group.update", g.name, {"id": g.id, "mode": mode}, client_ip(request))
     db.commit()
     g = db.scalar(select(RecipientGroup).where(RecipientGroup.id == g.id).options(selectinload(RecipientGroup.destinations)))
-    return _out(g, _network_names(db, g.network_ids))
+    return _out(g, _network_names(db, g.network_ids), _domain_names(db, g.domain_ids))
 
 
 @router.delete("/{group_id}", status_code=204)
