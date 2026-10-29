@@ -1044,6 +1044,27 @@ class AuditLog(Base):
     ip: Mapped[str | None] = mapped_column(String(64))
 
 
+class Wordlist(Base):
+    """Admin-managed wordlist (Web capture discovery). Entries live in a server-named file under
+    <data dir>/wordlists; only sanitized, accepted entries are stored there."""
+
+    __tablename__ = "wordlists"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    kind: Mapped[str] = mapped_column(String(20))  # paths | subdomains
+    source: Mapped[str] = mapped_column(String(20))  # upload | url
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    storage_name: Mapped[str] = mapped_column(String(64), unique=True)
+    entries: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)  # bytes received (compressed for .gz)
+    sha256: Mapped[str] = mapped_column(String(64))  # of the bytes received
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, onupdate=utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(150))
+
+
 # --- Web Capture (inventory enrichment; independent of nmap scans) -------------
 WEB_CAPTURE_QUEUED = "queued"
 WEB_CAPTURE_RUNNING = "running"

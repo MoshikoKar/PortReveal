@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     import_max_uncompressed_mb: int = 8192  # sum of the package's JSONL entries (zip-bomb guard)
     import_max_rows: int = 20_000_000  # all tables together
 
+    # Wordlist library guards (uploads and URL imports; enforced while streaming)
+    wordlist_max_upload_mb: int = 10  # bytes received (compressed, for .gz)
+    wordlist_max_decompressed_mb: int = 50
+    wordlist_max_entries: int = 1_000_000
+    # URL imports are https-only unless this is set (plain http is open to tampering in transit).
+    wordlist_allow_http: bool = False
+
     @property
     def is_dev(self) -> bool:
         return self.app_env != "production"

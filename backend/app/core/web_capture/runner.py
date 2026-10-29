@@ -271,6 +271,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             capture_uuid = job_row.uuid
             mock = job_row.mock_mode
             internal = InternalHosts.load(db, excl)
+            discovery_app_paths = discovery_paths(db, cfg.discovery_wordlist_id)
 
         _update(capture_id, endpoints_found=len(endpoint_data), stage="probing", progress=0.15)
 
@@ -294,7 +295,6 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
 
         deadline = started + cfg.max_job_minutes * 60
         shot_budget = cfg.max_screenshots_per_job
-        discovery_app_paths = discovery_paths(cfg.discovery_wordlist)
         browser_ok = playwright_available() if not mock else True
         ffmpeg_ok = ffmpeg_available() if not mock else True
         if not browser_ok and not mock:

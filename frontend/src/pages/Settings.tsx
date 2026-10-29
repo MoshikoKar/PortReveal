@@ -5,10 +5,11 @@ import { useApp } from '../context';
 import { AuditSettings, HealthPanel, UsersSettings } from './settings/Admin';
 import { DataTransferPanel } from './settings/DataTransfer';
 import { ExclusionsSettings } from './settings/Exclusions';
-import { DiscoveryForm, GeoForm, LdapForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, VulnForm, WebCaptureForm } from './settings/Forms';
+import { DiscoveryForm, GeoForm, LdapForm, PresenceForm, RetentionForm, ScanProfileForm, ScheduleForm, VulnForm } from './settings/Forms';
 import { NetworksSettings } from './settings/Networks';
 import { NotificationsSettings } from './settings/Notifications';
 import { TokensSettings } from './settings/Tokens';
+import { WebCaptureTab } from './settings/Wordlists';
 
 const TABS = [
   { id: 'networks', label: 'Networks', viewer: true },
@@ -132,7 +133,7 @@ export default function Settings() {
       {tab === 'exclusions' && <ExclusionsSettings onDirtyChange={setEntityDirty} />}
       {tab === 'schedule' && <><ScheduleForm onDirtyChange={setFormDirty} /><PresenceForm onDirtyChange={setPresenceDirty} /></>}
       {tab === 'scan-profiles' && <ScanProfileForm onDirtyChange={setFormDirty} />}
-      {tab === 'web-capture' && <WebCaptureForm onDirtyChange={setFormDirty} />}
+      {tab === 'web-capture' && <WebCaptureTab onDirtyChange={setFormDirty} />}
       {tab === 'vulnerabilities' && <VulnForm onDirtyChange={setFormDirty} />}
       {tab === 'discovery' && <DiscoveryForm onDirtyChange={setFormDirty} />}
       {tab === 'geo' && <GeoForm onDirtyChange={setFormDirty} />}

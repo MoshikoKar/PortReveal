@@ -15,6 +15,7 @@ from ..core.audit import audit
 from ..core.notify import format_sample_digest, send_email, smtp_failure_reason
 from ..core.retention import run_retention
 from ..core.scheduler import last_scheduled_date, next_presence_run, next_run, presence_slots_done_today
+from ..core.wordlists import KIND_PATHS
 from ..db import get_db
 from ..models import (
     ALWAYS_NOTIFY_TYPES,
@@ -24,6 +25,7 @@ from ..models import (
     User,
     Vulnerability,
     VulnFeedState,
+    Wordlist,
 )
 from ..security import encrypt_secret
 from ..settings_store import (
@@ -113,7 +115,16 @@ def get_web_capture_settings(db: Session = Depends(get_db), user: User = Depends
 def put_web_capture_settings(
     body: WebCaptureSettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)
 ):
+    selected = body.discovery_wordlist_id
+    if selected is not None:
+        w = db.get(Wordlist, selected)
+        if w is None or w.kind != KIND_PATHS:
+            raise HTTPException(422, "discovery_wordlist_id must reference a stored 'paths' wordlist")
+    previous = get_section(db, WebCaptureSettings).discovery_wordlist_id
     put_section(db, body)
+    if selected != previous:
+        audit(db, user.username, "wordlist.select", w.name if selected is not None else "Built-in",
+              {"setting": "discovery_wordlist_id", "from": previous, "to": selected}, _ip(request))
     audit(db, user.username, "settings.web_capture", None, body.model_dump(), _ip(request))
     db.commit()
     return body.model_dump()

@@ -40,6 +40,7 @@ from .api import (
     watches,
     web_captures,
     webhooks,
+    wordlists,
 )
 from .api.errors import error_body, validation_message
 from .config import check_production_config, get_settings
@@ -159,6 +160,7 @@ for r in (
     vuln_jobs,
     vulns,
     cve_watchlist,
+    wordlists,
 ):
     app.include_router(r.router)
 

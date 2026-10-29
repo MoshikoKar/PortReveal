@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, put } from '../../api';
 import { Card, ErrorBox, Loading, useReportDirty } from '../../components/ui';
-import type { CdnAsnEntry, DiscoverySettings, GeoSettings, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings } from '../../types';
+import type { CdnAsnEntry, DiscoverySettings, GeoSettings, LdapSettings, NotificationSettings, PresenceSettings, ScanSettings, ScheduleSettings, VulnSettings, VulnStatus, WebCaptureSettings, WordlistLibrary } from '../../types';
 import { DAYS, fmtTime, relTime, useApi } from '../../util';
+import { discoveryOptions, effectiveSelection } from '../../wordlists';
 
 function useForm<T>(path: string) {
   const res = useApi<T>(path);
@@ -194,12 +195,16 @@ export function ScanProfileForm({ onDirtyChange }: { onDirtyChange?: (dirty: boo
 }
 
 // ---------------------------------------------------------------- web capture
-export function WebCaptureForm({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+export function WebCaptureForm({ onDirtyChange, wordlists = null }: {
+  onDirtyChange?: (dirty: boolean) => void; wordlists?: WordlistLibrary | null;
+}) {
   const f = useForm<WebCaptureSettings>('/settings/web-capture');
   useReportDirty(f.dirty, onDirtyChange);
   if (!f.form) return <Card title="Web capture"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   const set = (patch: Partial<WebCaptureSettings>) => f.setForm({ ...s, ...patch });
+  // A list deleted since this form loaded shows (and saves) as the built-in list.
+  const wordlistId = effectiveSelection(s.discovery_wordlist_id, wordlists);
   return (
     <Card title="Web capture">
       <div className="stack">
@@ -232,13 +237,14 @@ export function WebCaptureForm({ onDirtyChange }: { onDirtyChange?: (dirty: bool
           <Num label="Browser timeout (sec)" value={s.browser_timeout_seconds} min={3} max={120} onChange={(v) => set({ browser_timeout_seconds: v })} />
           <Num label="Page settle time (sec)" value={s.page_settle_seconds} min={0} max={60} onChange={(v) => set({ page_settle_seconds: v })} hint="Max wait after load for delayed redirects and slow rendering before the screenshot; still-blank pages are skipped" />
         </div>
-        <label className="field">Discovery wordlist file
-          <input type="text" value={s.discovery_wordlist} placeholder="built-in list"
-            onChange={(e) => set({ discovery_wordlist: e.target.value })} />
-          <span className="hint">Optional path to a newline-delimited list of paths (absolute, or relative to the data dir). Leave blank for the built-in list.</span>
+        <label className="field">Discovery wordlist
+          <select value={wordlistId ?? ''} onChange={(e) => set({ discovery_wordlist_id: e.target.value ? Number(e.target.value) : null })}>
+            {discoveryOptions(wordlists).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <span className="hint">Paths tried by app discovery. Manage lists under Wordlists below.</span>
         </label>
         <Msg msg={f.msg} />
-        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save(s)}>Save Web Capture settings</button></div>
+        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save({ ...s, discovery_wordlist_id: wordlistId })}>Save Web Capture settings</button></div>
       </div>
     </Card>
   );

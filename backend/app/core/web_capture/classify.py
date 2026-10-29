@@ -410,8 +410,11 @@ def candidate_paths_for_endpoint(base: str, html: str | None, allowed_hosts: set
 
     root = base if base.endswith("/") else base + "/"
     add(root, WEB_PAGE_HOME)
+    root_origin = urlparse(root)[:2]
     for path in paths[:max(0, discovery)]:
-        add(urljoin(root, path.lstrip("/")), classify_from_path(path))
+        url = urljoin(root, path.lstrip("/"))
+        if urlparse(url)[:2] == root_origin:  # a wordlist entry can never change scheme, host or port
+            add(url, classify_from_path(path))
     for path in LOGIN_PATHS + REGISTER_PATHS:
         add(urljoin(root, path.lstrip("/")), classify_from_path(path))
     if html:

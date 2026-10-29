@@ -1081,6 +1081,9 @@ def test_web_gallery_pages_filters_and_preview(live_app, browser):
         expect(cards.first).to_be_visible(timeout=5_000)
         assert time.monotonic() - started < 5
         expect(cards).to_have_count(36)
+        # Opens on "With preview": only cards that have a screenshot.
+        expect(page.get_by_role("button", name=re.compile(r"^With preview"))).to_have_attribute("aria-pressed", "true")
+        assert cards.evaluate_all("els => els.every((e) => e.dataset.status === 'ok')")
         shown = page.get_by_text(re.compile(r"^Showing \d+ of \d+$"))
         total = int(re.search(r"of (\d+)", shown.inner_text()).group(1))
         assert total > 36
@@ -1106,6 +1109,7 @@ def test_web_gallery_pages_filters_and_preview(live_app, browser):
         assert cards.evaluate_all("els => els.every((e) => e.dataset.status === 'error')")
 
         page.get_by_role("button", name=re.compile(r"^All")).click()
+        expect(page).to_have_url(re.compile(r"status=all"))
         page.get_by_label("Search web interfaces").fill("host-07")
         expect(page).to_have_url(re.compile(r"q=host-07"), timeout=5_000)
         expect(cards).to_have_count(1, timeout=10_000)

@@ -491,7 +491,8 @@ export interface WebCaptureSettings {
   max_screenshots_per_job: number;
   max_candidate_probes: number;
   max_discovery_paths: number;
-  discovery_wordlist: string;
+  /** Stored "paths" wordlist; null = built-in list. */
+  discovery_wordlist_id: number | null;
   max_response_bytes: number;
   max_job_minutes: number;
   http_timeout_seconds: number;
@@ -500,6 +501,57 @@ export interface WebCaptureSettings {
   http_concurrency: number;
   screenshot_concurrency: number;
   force_mock: boolean;
+}
+
+export type WordlistKind = 'paths' | 'subdomains';
+
+/** Admin-managed wordlist (Settings > Web capture > Wordlists). Entries are stored sanitized server-side. */
+export interface Wordlist {
+  id: number;
+  name: string;
+  kind: WordlistKind;
+  source: 'upload' | 'url';
+  source_url: string | null;
+  original_filename: string | null;
+  entries: number;
+  skipped: number;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  in_use: boolean;
+}
+
+export interface WordlistLimits {
+  max_upload_bytes: number;
+  max_decompressed_bytes: number;
+  max_entries: number;
+  allow_http: boolean;
+  extensions: string[];
+}
+
+export interface WordlistLibrary {
+  items: Wordlist[];
+  builtin: { name: string; kind: 'paths'; source: 'builtin'; entries: number; in_use: boolean };
+  limits: WordlistLimits;
+  /** False until a scan stage consumes subdomain lists; they can still be stored. */
+  subdomain_discovery: boolean;
+}
+
+export interface WordlistImportSummary {
+  accepted: number;
+  skipped: number;
+  reasons: Record<string, number>;
+  samples: string[];
+}
+
+export interface WordlistImportResult {
+  wordlist: Wordlist;
+  summary: WordlistImportSummary;
+  /** Re-import only. */
+  previous_entries?: number;
+  changed?: boolean;
 }
 
 /** Gateway whose ARP table (read over SNMP) supplies MACs across a routed / VPN path. Secrets are write-only. */

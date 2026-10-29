@@ -175,9 +175,9 @@ export default function WebHosts() {
   }, [filters.archived]);
 
   const withShot = (items ?? []).filter((c) => c.status === 'ok');
-  const filtered = !!(filters.q || filters.network || filters.port || filters.scheme || filters.status);
   const counts = meta?.counts;
   const countAll = counts ? counts.ok + counts.no_preview + counts.error : null;
+  const filtered = !!(filters.q || filters.network || filters.port || filters.scheme) || (countAll ?? 0) > 0;
 
   return (
     <>

@@ -3,12 +3,15 @@
 export type PreviewStatus = 'ok' | 'no_preview' | 'error';
 export const PREVIEW_STATUSES: PreviewStatus[] = ['ok', 'no_preview', 'error'];
 export const WEB_PREVIEWS_PAGE_SIZE = 36;
+/** The gallery opens on cards with a preview; `status=all` in the URL lists every card. */
+export const DEFAULT_STATUS: PreviewStatus = 'ok';
 
 export interface WebFilters {
   q: string;
   network: number | null;
   port: number | null;
   scheme: 'http' | 'https' | null;
+  /** null = every status. */
   status: PreviewStatus | null;
   archived: boolean;
 }
@@ -27,16 +30,22 @@ export function filtersFromParams(sp: URLSearchParams): WebFilters {
     network: intParam(sp.get('network'), Number.MAX_SAFE_INTEGER),
     port: intParam(sp.get('port'), 65535),
     scheme: scheme === 'http' || scheme === 'https' ? scheme : null,
-    status: PREVIEW_STATUSES.includes(status as PreviewStatus) ? (status as PreviewStatus) : null,
+    status: status === 'all' ? null
+      : PREVIEW_STATUSES.includes(status as PreviewStatus) ? (status as PreviewStatus) : DEFAULT_STATUS,
     archived: sp.get('archived') === '1',
   };
 }
 
-/** A copy of `sp` with the given filters set (empty/null values removed); other params are kept. */
+/**
+ * A copy of `sp` with the given filters set; other params are kept. Empty/null values are removed,
+ * except status: null (every status) is written as `status=all`, and the default is left out.
+ */
 export function withFilters(sp: URLSearchParams, patch: Partial<WebFilters>): URLSearchParams {
   const next = new URLSearchParams(sp);
   for (const [k, v] of Object.entries(patch)) {
-    const s = typeof v === 'boolean' ? (v ? '1' : '') : v == null ? '' : String(v);
+    const s = k === 'status'
+      ? (v == null ? 'all' : v === DEFAULT_STATUS ? '' : String(v)) // the default stays out of the URL
+      : typeof v === 'boolean' ? (v ? '1' : '') : v == null ? '' : String(v);
     if (s) next.set(k, s);
     else next.delete(k);
   }

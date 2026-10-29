@@ -225,9 +225,8 @@ class WebCaptureSettings(BaseModel):
     max_candidate_probes: int = Field(10, ge=1, le=30)
     # When "/" serves only an error or a web server's default page, try this many extra app paths.
     max_discovery_paths: int = Field(12, ge=0, le=200)
-    # Optional path to a newline-delimited wordlist (absolute, or relative to the data dir).
-    # Empty means use the built-in list.
-    discovery_wordlist: str = Field("", max_length=1000)
+    # Stored "paths" wordlist (Settings > Web capture > Wordlists); None means the built-in list.
+    discovery_wordlist_id: int | None = Field(None, ge=1)
     max_response_bytes: int = Field(512_000, ge=8_000, le=5_000_000)
     max_job_minutes: int = Field(30, ge=1, le=240)
     http_timeout_seconds: float = Field(8.0, ge=1.0, le=60.0)

@@ -65,14 +65,22 @@ describe('gallery filters in the URL', () => {
 
   it('ignores malformed values', () => {
     const f = filtersFromParams(new URLSearchParams('network=abc&port=70000&scheme=ftp&status=bogus&archived=yes'));
-    expect(f).toEqual({ q: '', network: null, port: null, scheme: null, status: null, archived: false });
+    expect(f).toEqual({ q: '', network: null, port: null, scheme: null, status: 'ok', archived: false });
+  });
+
+  it('opens on "With preview"; status=all lists every card', () => {
+    expect(filtersFromParams(new URLSearchParams()).status).toBe('ok');
+    expect(filtersFromParams(new URLSearchParams('status=all')).status).toBeNull();
+    const sp = new URLSearchParams();
+    expect(withFilters(sp, { status: null }).toString()).toBe('status=all');
+    expect(withFilters(new URLSearchParams('status=error'), { status: 'ok' }).toString()).toBe('');
   });
 
   it('round-trips through the URL and keeps unrelated params', () => {
-    const sp = withFilters(new URLSearchParams('tab=x'), { q: '10.0.0.10', port: 8080, scheme: 'http', status: 'ok', archived: true });
+    const sp = withFilters(new URLSearchParams('tab=x'), { q: '10.0.0.10', port: 8080, scheme: 'http', status: 'error', archived: true });
     expect(sp.get('tab')).toBe('x');
-    expect(filtersFromParams(sp)).toMatchObject({ q: '10.0.0.10', port: 8080, scheme: 'http', status: 'ok', archived: true });
-    const cleared = withFilters(sp, { q: '', port: null, scheme: null, status: null, archived: false });
+    expect(filtersFromParams(sp)).toMatchObject({ q: '10.0.0.10', port: 8080, scheme: 'http', status: 'error', archived: true });
+    const cleared = withFilters(sp, { q: '', port: null, scheme: null, status: 'ok', archived: false });
     expect(cleared.toString()).toBe('tab=x');
   });
 
@@ -81,6 +89,7 @@ describe('gallery filters in the URL', () => {
     expect(previewQuery(f, 2)).toEqual({
       page: 2, page_size: 36, q: 'host-a', network_id: 2, scheme: 'https', status: 'ok', include_archived: 'true',
     });
-    expect(previewQuery(filtersFromParams(new URLSearchParams()), 1)).toEqual({ page: 1, page_size: 36 });
+    expect(previewQuery(filtersFromParams(new URLSearchParams()), 1)).toEqual({ page: 1, page_size: 36, status: 'ok' });
+    expect(previewQuery(filtersFromParams(new URLSearchParams('status=all')), 1)).toEqual({ page: 1, page_size: 36 });
   });
 });

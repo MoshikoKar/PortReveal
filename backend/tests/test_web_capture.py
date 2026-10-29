@@ -546,16 +546,17 @@ def test_wordlist_loads_normalises_and_dedupes(tmp_path):
     wordlist._cache.clear()
     f = tmp_path / "paths.txt"
     f.write_text("# comment\nadmin\n/admin\n/app/\n\nhttp://evil/\n../etc\nok path\n", encoding="utf-8")
-    out = wordlist.load_wordlist(str(f))
-    assert out == ("/admin", "/app/")  # bare+rooted deduped; url/traversal/space rejected
+    out = wordlist.load_wordlist(f)
+    assert out == ("/admin", "/app/", "/ok%20path")  # bare+rooted deduped; url/traversal rejected; space encoded
 
 
-def test_wordlist_missing_file_falls_back_to_builtin():
+def test_wordlist_missing_selection_falls_back_to_builtin(tmp_path, db):
     from app.core.web_capture import wordlist
     from app.core.web_capture.classify import APP_PATHS
 
-    assert wordlist.load_wordlist("/no/such/file.txt") == ()
-    assert wordlist.discovery_paths("/no/such/file.txt") == APP_PATHS
+    assert wordlist.load_wordlist(tmp_path / "no-such-file.txt") == ()
+    assert wordlist.discovery_paths(db, None) == APP_PATHS
+    assert wordlist.discovery_paths(db, 9999) == APP_PATHS
 
 
 def test_screenshot_served_inline(db, client):
