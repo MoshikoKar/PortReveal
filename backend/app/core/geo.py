@@ -272,15 +272,24 @@ def build_lookup(cfg: GeoSettings) -> IpLookup | None:
     return lookup
 
 
-def _cache_get(db: Session, key: str, now: datetime) -> dict | None:
+def _cache_row(db: Session, key: str) -> GeoLookupCache | None:
+    # Sessions run with autoflush off: a row added earlier in this check is still pending and
+    # invisible to db.get, so a name shared by several devices would be inserted twice.
     row = db.get(GeoLookupCache, key)
+    if row is None:
+        row = next((o for o in db.new if isinstance(o, GeoLookupCache) and o.cache_key == key), None)
+    return row
+
+
+def _cache_get(db: Session, key: str, now: datetime) -> dict | None:
+    row = _cache_row(db, key)
     if row is None or row.expires_at <= now:
         return None
     return dict(row.payload or {})
 
 
 def _cache_put(db: Session, key: str, kind: str, payload: dict, expires: datetime) -> None:
-    row = db.get(GeoLookupCache, key)
+    row = _cache_row(db, key)
     if row is None:
         db.add(GeoLookupCache(cache_key=key, kind=kind, payload=payload, expires_at=expires))
     else:

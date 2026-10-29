@@ -207,15 +207,19 @@ def after_scan(db: Session, scan: Scan, changed: Iterable[Event]) -> tuple[int, 
     try:
         with db.begin_nested():
             ids = list(db.scalars(select(ScanHost.device_id).where(ScanHost.scan_id == scan.id)).all())
+            # Own savepoints: a failed flush in one step rolls back only that step, not the
+            # outer savepoint the tagging and vuln-job steps below still need.
             try:
-                _enrich_open_services(db, ids, scan_id=scan.id)
+                with db.begin_nested():
+                    _enrich_open_services(db, ids, scan_id=scan.id)
             except Exception:
                 log.exception("scan %s: service enrichment failed", scan.id)
             geo_ids: list[int] = []
             try:
                 from .geo import check_devices_geo
 
-                geo_ids = [e.id for e in check_devices_geo(db, ids, scan_id=scan.id)]
+                with db.begin_nested():
+                    geo_ids = [e.id for e in check_devices_geo(db, ids, scan_id=scan.id)]
             except Exception:
                 log.exception("scan %s: geo check failed", scan.id)
             report = {e.device.id for e in changed if e.device is not None and e.device.id is not None}

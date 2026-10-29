@@ -261,6 +261,26 @@ def test_cache_expires_and_re_resolves(db):
     assert db.get(GeoLookupCache, "dns:host.example.test") is not None
 
 
+def test_shared_published_name_is_cached_once_per_check(db):
+    """Several devices publishing the same name in one check: one cache row, one DNS lookup (no UNIQUE error)."""
+    net = _armed(db, make_network(db, name="Shared"))
+    ids = [_device(db, net, ip=f"10.0.0.{20 + i}", hostname="portal.example.test").id for i in range(3)]
+    calls = {"dns": 0, "ip": 0}
+
+    def resolver(_name):
+        calls["dns"] += 1
+        return ["203.0.113.80", "203.0.113.81"]
+
+    def lookup(_ip):
+        calls["ip"] += 1
+        return GeoRecord(country="AA")
+
+    check_devices_geo(db, ids, ensure_dbs=False, resolver=resolver, lookup=lookup)
+    db.commit()
+    assert calls == {"dns": 1, "ip": 2}
+    assert db.get(GeoLookupCache, "dns:portal.example.test") is not None
+
+
 def test_scan_pipeline_tags_geo_mismatch(db):
     net = _armed(db, make_network(db, name="Scan geo"))
     scanner = ScriptedScanner([host("10.0.0.13", hostname="host.example.test")])
