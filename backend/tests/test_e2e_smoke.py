@@ -82,7 +82,7 @@ def live_app(tmp_path_factory) -> Iterator[dict]:
     base = f"http://127.0.0.1:{port}"
     try:
         _wait_healthy(base, proc)
-        yield {"base": base, "database_url": db_url}
+        yield {"base": base, "database_url": db_url, "data_dir": work / "data"}
     finally:
         proc.terminate()
         try:
@@ -270,6 +270,165 @@ def _seed_vuln_networks(database_url: str) -> tuple[str, str]:
         db.commit()
     engine.dispose()
     return name_a, name_b
+
+
+LONG_NET_NAME = "Test Network B with a deliberately long placeholder name for layout checks"
+LONG_HOST = "host-a-with-a-deliberately-long-placeholder-name.example.test"
+
+
+def _seed_dashboard_layout_data(database_url: str) -> None:
+    """Placeholder rows that stress the dashboard cards: long network/host names, networks pending
+    their baseline, CVE watchlist alerts and changes with long details."""
+    import json
+    import uuid as _uuid
+
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from app.db import utcnow
+    from app.models import DEVICE_ACTIVE, Device, Event, Network
+
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    with Session(engine) as db:
+        if db.scalar(select(Network).where(Network.name == "Test Network A")) is not None:
+            return
+        net_a = Network(name="Test Network A", cidr="10.0.0.0/24", description="E2E placeholder")
+        net_b = Network(name=LONG_NET_NAME, cidr="10.0.1.0/24", description="E2E placeholder")
+        db.add_all([net_a, net_b])
+        db.flush()
+        dev = Device(uuid=str(_uuid.uuid4()), current_ip="10.0.0.10", hostname=LONG_HOST, network_id=net_a.id,
+                     status=DEVICE_ACTIVE, first_seen=utcnow(), last_seen=utcnow())
+        db.add(dev)
+        db.flush()
+        for i in range(14):
+            detail = {"cve_id": f"CVE-2024-{10000 + i}", "device_uuid": dev.uuid, "hostname": LONG_HOST,
+                      "ip": dev.current_ip, "port": 8443, "protocol": "tcp", "state": "confirmed",
+                      "cvss": 9.8, "kev": i % 2 == 0}
+            db.add(Event(device_id=dev.id, event_type="cve_watch_match", severity="high", ip=dev.current_ip,
+                         old_value=json.dumps(detail), new_value=detail["cve_id"],
+                         message=f"CVE watchlist match {detail['cve_id']} on {LONG_HOST}"))
+        for i in range(8):
+            db.add(Event(device_id=dev.id, event_type="service_changed", severity="medium", ip=dev.current_ip,
+                         protocol="tcp", port=8000 + i, old_value="placeholder-httpd 1.0 (old banner text)",
+                         new_value="placeholder-httpd 2.0 with a long version banner for layout checks",
+                         message=f"Service changed on {LONG_HOST}"))
+        ip = dev.current_ip
+        db.add_all([
+            Event(device_id=dev.id, event_type="port_opened", severity="high", ip=ip, protocol="tcp", port=443,
+                  new_value="https", message=f"New open port TCP/443 (https) on {LONG_HOST} ({ip})"),
+            Event(device_id=dev.id, event_type="port_closed", severity="medium", ip=ip, protocol="tcp", port=8080,
+                  old_value="http-proxy", message=f"Port TCP/8080 (http-proxy) closed on {LONG_HOST} ({ip})"),
+            Event(device_id=dev.id, event_type="ip_changed", severity="low", ip=ip, old_value="10.0.0.9",
+                  new_value=ip, message=f"{LONG_HOST} changed IP address 10.0.0.9 -> {ip}"),
+            Event(device_id=dev.id, event_type="device_disappeared", severity="medium", ip=ip, notify=False,
+                  message=f"{LONG_HOST} ({ip}) is no longer detected"),
+        ])
+        db.commit()
+    engine.dispose()
+
+
+def test_dashboard_cards_fit_rows_without_overflow(live_app, browser):
+    """Networks, Recent changes and Watch alerts: the last visible row sits fully inside the card and
+    nothing overflows sideways, at common desktop widths."""
+    from playwright.sync_api import expect
+
+    _seed_dashboard_layout_data(live_app["database_url"])
+    base = live_app["base"]
+    for width in (1280, 1440, 1920):
+        page = browser.new_page(viewport={"width": width, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc, errors=errors: errors.append(str(exc)))
+        try:
+            _sign_in(page, base)
+            expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+            expect(page.locator('[data-grid-id="networks"] tbody tr').first).to_be_visible(timeout=15_000)
+            expect(page.locator('[data-grid-id="watch_alerts"] .feed > li').first).to_be_visible(timeout=15_000)
+            expect(page.locator('[data-grid-id="recent_changes"] tbody tr').first).to_be_visible(timeout=15_000)
+            page.wait_for_timeout(300)  # let the fitted row counts settle after the last resize
+            report = page.evaluate(
+                """(ids) => ids.map((id) => {
+                  const card = document.querySelector(`[data-grid-id="${id}"] .dashboard-widget`);
+                  const body = card.querySelector(':scope > .card-body');
+                  const b = body.getBoundingClientRect();
+                  const top = b.top + body.clientTop;
+                  const bottom = top + body.clientHeight;
+                  const rows = [...body.querySelectorAll('tbody tr, .feed > li')]
+                    .map((r) => r.getBoundingClientRect())
+                    .filter((r) => r.bottom > top && r.top < bottom);
+                  const last = rows[rows.length - 1];
+                  return {
+                    id, rows: rows.length, lastBottom: last ? last.bottom : null, bottom,
+                    cardOverflow: card.scrollWidth - card.clientWidth,
+                    bodyOverflow: body.scrollWidth - body.clientWidth,
+                  };
+                })""",
+                ["networks", "recent_changes", "watch_alerts"],
+            )
+            for card in report:
+                assert card["rows"] > 0, (width, card)
+                assert card["lastBottom"] <= card["bottom"] + 0.5, (width, card)
+                assert card["cardOverflow"] <= 0, (width, card)
+                assert card["bodyOverflow"] <= 0, (width, card)
+        finally:
+            page.close()
+        assert errors == []
+
+
+# Per row: the IP under the device and how often it occurs in the row's text; plus sideways overflow.
+_EVENT_TABLE_REPORT = """(root) => {
+  const table = root.querySelector('table.event-table');
+  const scroller = table.parentElement;
+  const rows = [...table.querySelectorAll('tbody tr')].map((tr) => {
+    const ip = tr.querySelector('.event-device-cell .mono');
+    const text = tr.innerText;
+    const needle = ip ? ip.textContent.trim() : null;
+    const hits = needle ? text.split(needle).length - 1 : null;
+    return { ip: needle, hits };
+  });
+  return {
+    headers: [...table.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
+    rows,
+    overflow: Math.max(scroller.scrollWidth - scroller.clientWidth, table.scrollWidth - table.clientWidth),
+  };
+}"""
+
+
+def test_change_tables_columns_and_no_duplicate_ip(live_app, browser):
+    """Changes page and dashboard Recent changes: Time/Event/Device/Port/Change(/Scan) columns, the IP
+    only under the device, and no sideways overflow."""
+    from playwright.sync_api import expect
+
+    _seed_dashboard_layout_data(live_app["database_url"])
+    base = live_app["base"]
+    for width in (1280, 1440, 1920):
+        page = browser.new_page(viewport={"width": width, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc, errors=errors: errors.append(str(exc)))
+        try:
+            _sign_in(page, base)
+            expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+            card = page.locator('[data-grid-id="recent_changes"]')
+            expect(card.locator("tbody tr").first).to_be_visible(timeout=15_000)
+            rep = card.evaluate(_EVENT_TABLE_REPORT)
+            assert rep["headers"] == ["Time", "Event", "Device", "Port", "Change"], rep["headers"]
+            assert rep["overflow"] <= 0, (width, rep)
+            for row in rep["rows"]:
+                assert row["hits"] in (None, 1), (width, row)
+
+            page.goto(f"{base}/changes?range=all")
+            expect(page.get_by_role("heading", name="Changes", exact=True)).to_be_visible(timeout=15_000)
+            main = page.get_by_role("main")
+            expect(main.locator("tbody tr").filter(has_text="TCP/443").first).to_be_visible(timeout=15_000)
+            rep = main.evaluate(_EVENT_TABLE_REPORT)
+            assert rep["headers"] == ["Time", "Event", "Device", "Port", "Change", "Scan"], rep["headers"]
+            assert rep["overflow"] <= 0, (width, rep)
+            assert any(r["ip"] == "10.0.0.10" for r in rep["rows"]), rep["rows"]
+            for row in rep["rows"]:
+                assert row["hits"] in (None, 1), (width, row)
+            expect(main.get_by_text("recorded only", exact=True).first).to_be_visible()
+        finally:
+            page.close()
+        assert errors == []
 
 
 def test_sign_in_dashboard_and_devices_list(live_app, browser):
@@ -845,4 +1004,118 @@ def test_notifications_tabs_and_webhook_crud(live_app, browser):
     finally:
         page.close()
         httpd.shutdown()
+    assert errors == []
+
+
+WEB_NET = "Test Network W"
+
+
+def _seed_web_gallery(database_url: str, data_dir: Path, count: int = 45) -> None:
+    """Placeholder Web gallery: `count` HTTPS hosts with screenshots plus two 404-only hosts. Files are
+    written straight into the live app's data dir (screenshot + its grid thumbnail)."""
+    import uuid as _uuid
+    from io import BytesIO
+
+    from PIL import Image, ImageDraw
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from app.core.web_storage import make_thumbnail
+    from app.db import utcnow
+    from app.models import DEVICE_ACTIVE, WEB_CAPTURE_COMPLETED, Device, Network, WebCapture, WebPage
+
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    with Session(engine) as db:
+        if db.scalar(select(Network).where(Network.name == WEB_NET)) is not None:
+            return
+        net = Network(name=WEB_NET, cidr="10.0.2.0/24", description="E2E placeholder")
+        cap = WebCapture(status=WEB_CAPTURE_COMPLETED, targets="10.0.2.0/24", requested_by="e2e")
+        db.add_all([net, cap])
+        db.flush()
+        cap_dir = data_dir / "web-captures" / cap.uuid
+        cap_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(count + 2):
+            ip = f"10.0.2.{10 + i}"
+            dev = Device(uuid=str(_uuid.uuid4()), current_ip=ip, hostname=f"host-{i:02d}.example.test",
+                         network_id=net.id, status=DEVICE_ACTIVE, first_seen=utcnow(), last_seen=utcnow())
+            db.add(dev)
+            db.flush()
+            page_uuid = str(_uuid.uuid4())
+            ok = i < count
+            row = WebPage(uuid=page_uuid, capture_id=cap.id, device_id=dev.id, ip=ip, port=443, scheme="https",
+                          host_used=ip, kind="home", url=f"https://{ip}/", final_url=f"https://{ip}/",
+                          http_status=200 if ok else 404, title=f"Placeholder app {i:02d}" if ok else "Not Found",
+                          screenshot_status="skipped")
+            if ok:
+                img = Image.new("RGB", (1280, 720), (20 + i * 4, 60, 120))
+                ImageDraw.Draw(img).text((40, 40), f"host-{i:02d}.example.test", fill=(255, 255, 255))
+                buf = BytesIO()
+                img.save(buf, format="WEBP", quality=70)
+                (cap_dir / f"{page_uuid}.webp").write_bytes(buf.getvalue())
+                (cap_dir / f"{page_uuid}.thumb.webp").write_bytes(make_thumbnail(buf.getvalue()))
+                row.screenshot_status, row.screenshot_relpath = "captured", f"{cap.uuid}/{page_uuid}.webp"
+            db.add(row)
+        db.commit()
+    engine.dispose()
+
+
+def test_web_gallery_pages_filters_and_preview(live_app, browser):
+    """/web: first page arrives fast with placeholders and lazily loaded thumbnails, Load more appends the
+    next page, filters narrow the list (kept in the URL), and a card opens the full screenshot."""
+    from playwright.sync_api import expect
+
+    _seed_web_gallery(live_app["database_url"], live_app["data_dir"])
+    base = live_app["base"]
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    thumbs: list[str] = []
+    page.on("request", lambda req: thumbs.append(req.url) if req.url.endswith("/thumbnail") else None)
+    try:
+        _sign_in(page, base)
+        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+        started = time.monotonic()
+        page.goto(f"{base}/web?network=")
+        cards = page.locator(".host-grid .host-card[data-status]")
+        expect(cards.first).to_be_visible(timeout=5_000)
+        assert time.monotonic() - started < 5
+        expect(cards).to_have_count(36)
+        shown = page.get_by_text(re.compile(r"^Showing \d+ of \d+$"))
+        total = int(re.search(r"of (\d+)", shown.inner_text()).group(1))
+        assert total > 36
+        # Only cards near the viewport fetched their thumbnail; the rest show a placeholder.
+        page.wait_for_timeout(500)
+        assert 0 < len(set(thumbs)) < 36, len(set(thumbs))
+        assert page.locator(".host-card .shot-skeleton").count() > 0
+
+        page.get_by_role("button", name="Load more").click()
+        expect(cards).to_have_count(min(total, 72), timeout=10_000)
+
+        # Filters: network, then status; both land in the URL and survive a reload.
+        page.get_by_label("Network", exact=True).select_option(label=WEB_NET)
+        expect(page).to_have_url(re.compile(r"network=\d+"))
+        expect(cards).to_have_count(36, timeout=10_000)
+        assert all(ip.startswith("10.0.2.") or "10.0.2." in ip
+                   for ip in cards.locator(".mono").all_inner_texts())
+        page.get_by_role("button", name=re.compile(r"^Errors")).click()
+        expect(page).to_have_url(re.compile(r"status=error"))
+        expect(cards).to_have_count(2, timeout=10_000)
+        page.reload()
+        expect(cards).to_have_count(2, timeout=10_000)
+        assert cards.evaluate_all("els => els.every((e) => e.dataset.status === 'error')")
+
+        page.get_by_role("button", name=re.compile(r"^All")).click()
+        page.get_by_label("Search web interfaces").fill("host-07")
+        expect(page).to_have_url(re.compile(r"q=host-07"), timeout=5_000)
+        expect(cards).to_have_count(1, timeout=10_000)
+
+        # Clicking the thumbnail opens the full screenshot.
+        cards.first.locator("button.shot-img").click()
+        dialog = page.get_by_role("dialog")
+        expect(dialog).to_be_visible()
+        expect(dialog.locator("img")).to_have_attribute("src", re.compile(r"/api/web-pages/\d+/screenshot$"))
+        expect(dialog.get_by_role("heading", name="Placeholder app 07")).to_be_visible()
+    finally:
+        page.close()
     assert errors == []

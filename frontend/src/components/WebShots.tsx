@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ImgHTMLAttributes, type KeyboardEvent
 import { RtspLivePlayer, liveStreamUrl } from './RtspLivePlayer';
 import type { WebPage, WebPageKind } from '../types';
 import { fmtTime } from '../util';
+import { observeWhenVisible } from '../webGallery';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -14,12 +15,34 @@ export const KIND_LABELS: Record<WebPageKind, string> = {
 };
 
 export const shotUrl = (p: WebPage) => `/api/web-pages/${p.id}/screenshot`;
+/** ~400px WebP of the screenshot, for grids. */
+export const thumbUrl = (p: WebPage) => `/api/web-pages/${p.id}/thumbnail`;
 
 /** Screenshot image that turns into a note when the file cannot be loaded - never a broken icon. */
 export function ShotImg({ alt, ...rest }: ImgHTMLAttributes<HTMLImageElement> & { src: string }) {
   const [failed, setFailed] = useState(false);
   if (failed) return <span className="shot-missing">Screenshot unavailable</span>;
   return <img alt={alt} {...rest} onError={() => setFailed(true)} />;
+}
+
+/**
+ * Thumbnail that is requested only once its card comes near the viewport; a pulsing placeholder
+ * holds the space until the image has loaded.
+ */
+export function LazyShot({ src, alt }: { src: string; alt: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => (ref.current ? observeWhenVisible(ref.current, () => setVisible(true)) : undefined), []);
+  return (
+    <span ref={ref} className={`lazy-shot${loaded ? ' loaded' : ''}`}>
+      {!loaded && <span className="shot-skeleton" aria-hidden="true" />}
+      {visible && (
+        <ShotImg src={src} alt={alt} loading="lazy" decoding="async" width={400} height={225}
+          onLoad={() => setLoaded(true)} />
+      )}
+    </span>
+  );
 }
 
 export const isRtspPage = (p: WebPage) =>
@@ -93,6 +116,7 @@ export function shotNote(p: WebPage): string {
     const m = p.error_reason.match(/\(([^)]+)\)/);
     return m ? `${m[1]} default page - no app here` : 'Default server page';
   }
+  if (p.capture_error?.startsWith('unavailable: ')) return `Unavailable - ${p.capture_error.slice(13)}`;
   if (p.http_status == null) return 'No response';
   if (p.error_reason === 'blank page') return 'Blank page - nothing shown';
   if (p.error_reason) return 'Error page';

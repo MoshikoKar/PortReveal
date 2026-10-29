@@ -25,6 +25,7 @@ from ...models import (
     WEB_CAPTURE_PARTIAL,
     WEB_CAPTURE_QUEUED,
     WEB_CAPTURE_RUNNING,
+    WEB_PAGE_HOME,
     WEB_PAGE_LOGIN,
     WEB_PAGE_STREAM,
     DevicePort,
@@ -38,7 +39,13 @@ from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
 from ..image_intel import average_hash, ocr_text
 from ..web_storage import delete_capture_files, write_screenshot
-from .classify import BLANK_PAGE_REASON, looks_like_login_html, looks_like_login_url, unusable_page_reason
+from .classify import (
+    BLANK_PAGE_REASON,
+    UNAVAILABLE_PREFIX,
+    looks_like_login_html,
+    looks_like_login_url,
+    unusable_page_reason,
+)
 from .internal import InternalHosts
 from .inventory import find_web_endpoints
 from .mock import mock_probe_endpoint, mock_rtsp_endpoint, placeholder_image
@@ -141,7 +148,7 @@ def _probe_http_endpoint(ep: dict, cfg: WebCaptureSettings, *, mock: bool, app_p
         except CaptureCancelled:
             raise
         except Exception as exc:
-            last_err = str(exc)
+            last_err = str(exc) or exc.__class__.__name__  # httpx timeouts often have no message
             log.debug("probe %s:%s via %s failed: %s", ep["ip"], ep["port"], host, exc)
             probe = None
     return probe, last_err, False
@@ -377,7 +384,19 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
                 break
             if probe is None:
                 had_failures = True
-                notes.append(f"{ep['ip']}:{ep['port']}: probe failed ({last_err or 'no response'}).")
+                reason = last_err or "no response"
+                notes.append(f"{ep['ip']}:{ep['port']}: probe failed ({reason}).")
+                # Keep the endpoint in the gallery as unavailable (reason in capture_error) rather than
+                # dropping it: a slow or broken site never blocks the job, and stays visible.
+                with session_scope() as db:
+                    host = ep["hosts"][0] if ep["hosts"] else ep["ip"]
+                    db.add(WebPage(
+                        capture_id=capture_id, device_id=ep["device_id"], device_port_id=ep["device_port_id"],
+                        ip=ep["ip"], port=ep["port"], scheme=ep["scheme"], host_used=host, kind=WEB_PAGE_HOME,
+                        url=f"{ep['scheme']}://{host}:{ep['port']}/", http_status=None,
+                        screenshot_status=SCREENSHOT_SKIPPED, capture_error=(UNAVAILABLE_PREFIX + reason)[:500],
+                    ))
+                pages_done += 1
                 continue
 
             # Persist pages + screenshots

@@ -5,7 +5,7 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select, true
 from sqlalchemy.orm import Session, selectinload
@@ -25,7 +25,7 @@ from ..core.web_capture.rtsp import (
     release_live_slot,
 )
 from ..core.web_capture.runner import CaptureContext
-from ..core.web_storage import resolve_screenshot
+from ..core.web_storage import resolve_screenshot, resolve_thumbnail
 from ..db import get_db
 from ..models import (
     SCREENSHOT_CAPTURED,
@@ -41,13 +41,18 @@ from ..models import (
 from ..netutils import AddressSet, TargetError
 from ..scanner import scanner_status
 from ..settings_store import WebCaptureSettings, get_section
-from .common import CaptureStarted, Paging, WebHostsPage, paged
+from .common import CaptureStarted, Paging, WebHostsPage, paged, paging_with
 
 router = APIRouter(tags=["web-captures"])
 log = logging.getLogger(__name__)
 
 # Captures whose pages are shown in host previews (running ones fill in live).
 HOST_VIEW_STATES = ("running", "completed", "partial", "cancelled")
+# Web gallery cards: a usable service with a screenshot, one without (failed, timed out, skipped, over
+# the screenshot budget), or a host with no usable service at all. Listed in this order.
+PREVIEW_STATUSES = ("ok", "no_preview", "error")
+# Screenshot files never change once written (a new capture writes new pages), so browsers may keep them.
+IMAGE_CACHE_CONTROL = "private, max-age=86400"
 
 
 class WebCaptureRequest(BaseModel):
@@ -104,12 +109,19 @@ def _has_shot(p: WebPage) -> bool:
     """A captured screenshot whose file is really on disk.
 
     The row alone is not proof: files can be gone (data dir restored/moved without
-    web-captures, disk cleanup), and the UI would then render a broken image.
+    web-captures, disk cleanup), and the UI would then render a broken image. Checked once per
+    loaded row (gallery listings rank and serialize each page several times).
     """
-    return bool(
+    key = (p.screenshot_status, p.screenshot_relpath)
+    cached = p.__dict__.get("_has_shot")
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    ok = bool(
         p.screenshot_relpath and p.screenshot_status == SCREENSHOT_CAPTURED
         and resolve_screenshot(p.screenshot_relpath) is not None
     )
+    p.__dict__["_has_shot"] = (key, ok)
+    return ok
 
 
 def _classification_capture_error(err: str | None) -> str | None:
@@ -399,18 +411,46 @@ def remove_web_capture(capture_id: int, request: Request, db: Session = Depends(
     db.commit()
 
 
+def _image_response(path, request: Request) -> Response:
+    """Serve a stored image inline with an ETag; answer 304 when the browser already has it."""
+    st = path.stat()
+    etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+    headers = {"Cache-Control": IMAGE_CACHE_CONTROL, "ETag": etag}
+    sent = {t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")}
+    if etag in sent or "*" in sent:
+        return Response(status_code=304, headers=headers)
+    # inline: render in the browser instead of downloading
+    return FileResponse(path, media_type="image/webp", filename=path.name, content_disposition_type="inline",
+                        headers=headers)
+
+
 @router.get("/api/web-pages/{page_id}/screenshot")
-def get_screenshot(page_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def get_screenshot(page_id: int, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
     page = db.get(WebPage, page_id)
     if page is None:
         raise HTTPException(404, "Web page not found")
     path = resolve_screenshot(page.screenshot_relpath)
     if path is None:
         raise HTTPException(404, "Screenshot not available")
-    media = "image/webp" if path.suffix.lower() == ".webp" else "image/png"
-    # inline: render in the browser instead of downloading; a page's screenshot never changes
-    return FileResponse(path, media_type=media, filename=path.name, content_disposition_type="inline",
-                        headers={"Cache-Control": "private, max-age=86400"})
+    return _image_response(path, request)
+
+
+@router.get("/api/web-pages/{page_id}/thumbnail")
+def get_thumbnail(page_id: int, request: Request, db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
+    """Small (~400px) WebP of the screenshot for the Web gallery grid; the full image stays on /screenshot.
+
+    Written next to the screenshot by the capture job; screenshots saved before thumbnails existed get
+    theirs built once on first request (and fall back to the full image if that fails).
+    """
+    page = db.get(WebPage, page_id)
+    if page is None:
+        raise HTTPException(404, "Web page not found")
+    path = resolve_thumbnail(page.screenshot_relpath) or resolve_screenshot(page.screenshot_relpath)
+    if path is None:
+        raise HTTPException(404, "Screenshot not available")
+    return _image_response(path, request)
 
 
 @router.get("/api/web-pages/{page_id}/live")
@@ -541,28 +581,7 @@ def web_hosts(
     screenshots first) before paging, so page 1 always holds the most useful cards. Hosts of archived
     networks (and simulated hosts while they are hidden) are left out like everywhere else.
     """
-    latest = (
-        select(WebPage.device_id, func.max(WebPage.capture_id).label("cid"))
-        .join(WebCapture, WebCapture.id == WebPage.capture_id)
-        .join(Device, Device.id == WebPage.device_id)
-        .where(WebPage.device_id.is_not(None), WebCapture.status.in_(HOST_VIEW_STATES),
-               device_visible(db, include_archived=include_archived))
-        .group_by(WebPage.device_id)
-        .subquery()
-    )
-    pages = db.scalars(
-        select(WebPage)
-        .join(latest, (WebPage.device_id == latest.c.device_id) & (WebPage.capture_id == latest.c.cid))
-        .options(selectinload(WebPage.device))
-    ).all()
-    by_dev: dict[int, list[WebPage]] = {}
-    for p in pages:
-        desktop = _is_desktop_page(p)
-        if kind == "remote" and not desktop:
-            continue
-        if kind == "web" and desktop:
-            continue
-        by_dev.setdefault(p.device_id, []).append(p)
+    by_dev = _latest_pages_by_device(db, kind=kind, include_archived=include_archived)
     hosts = []
     for dev_pages in by_dev.values():
         dev = dev_pages[0].device
@@ -591,6 +610,102 @@ def web_hosts(
     hosts.sort(key=lambda h: (h["screenshot_count"] == 0, h["reachable_count"] == 0, h["hostname"] or h["ip"]))
     return {"hosts": hosts[paging.offset:paging.offset + paging.page_size], "total": len(hosts),
             "page": paging.page, "page_size": paging.page_size}
+
+
+def _latest_pages_by_device(db: Session, *, kind: Literal["web", "remote"], include_archived: bool,
+                            network_id: int | None = None) -> dict[int, list[WebPage]]:
+    """Pages of each visible device's latest capture: web (HTTP(S)/RTSP) or remote (RDP/VNC) ones."""
+    conds = [WebPage.device_id.is_not(None), WebCapture.status.in_(HOST_VIEW_STATES),
+             device_visible(db, include_archived=include_archived)]
+    if network_id is not None:
+        conds.append(Device.network_id == network_id)
+    latest = (
+        select(WebPage.device_id, func.max(WebPage.capture_id).label("cid"))
+        .join(WebCapture, WebCapture.id == WebPage.capture_id)
+        .join(Device, Device.id == WebPage.device_id)
+        .where(*conds)
+        .group_by(WebPage.device_id)
+        .subquery()
+    )
+    pages = db.scalars(
+        select(WebPage)
+        .join(latest, (WebPage.device_id == latest.c.device_id) & (WebPage.capture_id == latest.c.cid))
+        .options(selectinload(WebPage.device))
+    ).all()
+    by_dev: dict[int, list[WebPage]] = {}
+    for p in pages:
+        if _is_desktop_page(p) == (kind == "web"):
+            continue
+        by_dev.setdefault(p.device_id, []).append(p)
+    return by_dev
+
+
+def _preview_cards(dev_pages: list[WebPage]) -> list[dict]:
+    """Gallery cards of one host: one per usable web service, or a single ``error`` card (its most
+    representative page) when the host has no usable service."""
+    dev = dev_pages[0].device
+    base = {"device_uuid": dev.uuid, "hostname": dev.hostname, "ip": dev.current_ip}
+    services = _web_services(dev_pages)
+    if services:
+        return [{
+            **base,
+            "key": f"{dev.uuid}:{s['scheme']}:{s['port']}",
+            "status": "ok" if s["page"]["has_screenshot"] and s["page"]["error_reason"] is None else "no_preview",
+            "scheme": s["scheme"], "port": s["port"], "ports": s["ports"],
+            "page_count": s["page_count"], "has_login": s["has_login"],
+            "captured_at": s["page"]["captured_at"], "page": s["page"],
+        } for s in services]
+    hero = min(dev_pages, key=_page_rank)
+    return [{
+        **base,
+        "key": f"{dev.uuid}:{hero.scheme}:{hero.port}",
+        "status": "error",
+        "scheme": hero.scheme, "port": hero.port, "ports": sorted({p.port for p in dev_pages}),
+        "page_count": 0, "has_login": False,
+        "captured_at": max(p.captured_at for p in dev_pages), "page": web_page_out(hero),
+    }]
+
+
+@router.get("/api/web-previews")
+def web_previews(
+    network_id: int | None = Query(None),
+    port: int | None = Query(None, ge=1, le=65535),
+    scheme: Literal["http", "https"] | None = Query(None),
+    status: Literal["ok", "no_preview", "error"] | None = Query(None),
+    q: str | None = Query(None, max_length=200, description="substring of hostname, IP or page title"),
+    include_archived: bool = Query(False, description="also list hosts of archived networks"),
+    paging: Paging = Depends(paging_with(36, 200)),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    """The Web gallery: one card per HTTP(S)/RTSP service of each device's latest capture, filtered and
+    paged on the server.
+
+    Cards with a preview come first, then services without one, then hosts with no usable service.
+    ``counts`` holds the number of cards per status under the other filters (for the status chips).
+    Images are not inlined: the grid loads ``/api/web-pages/{id}/thumbnail`` per visible card.
+    """
+    by_dev = _latest_pages_by_device(db, kind="web", include_archived=include_archived, network_id=network_id)
+    needle = (q or "").strip().lower()
+    cards = []
+    for dev_pages in by_dev.values():
+        for c in _preview_cards(dev_pages):
+            if port is not None and port not in c["ports"]:
+                continue
+            if scheme is not None and (c["scheme"] or "").lower() != scheme:
+                continue
+            if needle and not any(needle in (v or "").lower() for v in (c["hostname"], c["ip"], c["page"]["title"])):
+                continue
+            cards.append(c)
+    counts = {s: 0 for s in PREVIEW_STATUSES}
+    for c in cards:
+        counts[c["status"]] += 1
+    if status is not None:
+        cards = [c for c in cards if c["status"] == status]
+    rank = {s: i for i, s in enumerate(PREVIEW_STATUSES)}
+    cards.sort(key=lambda c: (rank[c["status"]], (c["hostname"] or c["ip"]).lower(), c["ip"], c["port"]))
+    return {"items": cards[paging.offset:paging.offset + paging.page_size], "total": len(cards),
+            "page": paging.page, "page_size": paging.page_size, "counts": counts}
 
 
 @router.get("/api/devices/{uuid}/web-interfaces")

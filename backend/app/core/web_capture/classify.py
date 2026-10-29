@@ -278,6 +278,11 @@ def blank_page_reason(html: str | None) -> str | None:
     return BLANK_PAGE_REASON
 
 
+# capture_error of an endpoint whose probe failed or timed out (no HTTP response at all); the reason
+# follows. The page is kept so the gallery shows it as unavailable, and auto-capture retries it.
+UNAVAILABLE_PREFIX = "unavailable: "
+
+
 def unusable_page_reason(
     http_status: int | None,
     title: str | None,

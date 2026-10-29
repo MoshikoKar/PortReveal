@@ -1,273 +1,254 @@
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { HttpBadge, ShotImg, endpointUrl, isRtspPage, isUsefulShot, shotNote, shotUrl } from '../components/WebShots';
-import { Card, ErrorBox, Loading, Pager } from '../components/ui';
-import type { WebHost, WebHostPage, WebService } from '../types';
-import { WEB_HOSTS_PAGE_SIZE, relTime, useApi } from '../util';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { get, post } from '../api';
+import { useApp } from '../context';
+import { HttpBadge, LazyShot, Lightbox, endpointUrl, isRtspPage, shotNote, thumbUrl } from '../components/WebShots';
+import { Card, ErrorBox } from '../components/ui';
+import type { Network, WebCapture, WebPreviewCard, WebPreviewPage } from '../types';
+import { fmtTime, relTime, useApi } from '../util';
+import { type PreviewStatus, type WebFilters, filtersFromParams, previewQuery, withFilters } from '../webGallery';
 
-/** A host is a real "web app" if its latest capture produced at least one usable web service. */
-const isApp = (h: WebHost) => h.services.length > 0;
-
-type NoAppKind = 'default' | 'error' | 'redirect' | 'no_response' | 'blank' | 'other';
-
-const NO_APP_FILTERS: { id: NoAppKind; label: string }[] = [
-  { id: 'default', label: 'Default server pages' },
+const STATUS_CHIPS: { id: PreviewStatus | null; label: string }[] = [
+  { id: null, label: 'All' },
+  { id: 'ok', label: 'With preview' },
+  { id: 'no_preview', label: 'No preview' },
   { id: 'error', label: 'Errors' },
-  { id: 'redirect', label: 'Redirects' },
-  { id: 'no_response', label: 'No response' },
-  { id: 'blank', label: 'Blank pages' },
-  { id: 'other', label: 'Other' },
 ];
+const ACTIVE_CAPTURE = new Set(['queued', 'running']);
 
-/** Why this host has no usable web application (general rules, not per-IP). */
-function noAppKind(h: WebHost): NoAppKind {
-  const p = h.hero;
-  const reason = (p.error_reason ?? p.capture_error ?? '').toLowerCase();
-  if (reason.startsWith('default server page')) return 'default';
-  if (reason === 'blank page' || reason.startsWith('blank page')) return 'blank';
-  if (
-    p.external_redirect
-    || reason === 'redirect'
-    || reason.startsWith('redirect')
-    || (p.http_status != null && p.http_status >= 300 && p.http_status < 400)
-  ) {
-    return 'redirect';
-  }
-  if (p.http_status == null || reason.includes('no http response') || reason === 'no response') {
-    return 'no_response';
-  }
-  if (reason.startsWith('error page') || p.http_status >= 400) return 'error';
-  return 'other';
+/** Why a card has no image, in words (the full reason is in the tooltip). */
+function noPreviewLabel(c: WebPreviewCard): string {
+  if (c.status === 'error') return shotNote(c.page);
+  return c.page.capture_error?.startsWith('unavailable: ') ? 'Unavailable' : 'Preview unavailable';
 }
 
-function noAppLabel(h: WebHost): string {
-  const note = shotNote(h.hero);
-  const title = h.hero.title?.trim();
-  if (title && note && !note.toLowerCase().includes(title.toLowerCase()) && title !== note) {
-    return `${title} - ${note}`;
-  }
-  return title || note;
-}
-
-/** One card per web service, so every app on a host is visible without opening the host. */
-function ServiceCard({ h, s, index }: { h: WebHost; s: WebService; index: number }) {
-  const p = s.page;
-  const total = h.services.length;
+/** One card per web service; hosts without any usable service get a single `error` card. */
+function PreviewCard({ c, onOpen, refresh, onRefresh }: {
+  c: WebPreviewCard;
+  onOpen?: () => void;
+  refresh?: 'queued' | string;
+  onRefresh?: () => void;
+}) {
+  const p = c.page;
+  const to = `/devices/${c.device_uuid}/web`;
+  const note = shotNote(p);
   return (
-    <Link to={`/devices/${h.device_uuid}/web`} className="host-card">
-      {isUsefulShot(p) ? (
-        <div className="shot-img"><ShotImg src={shotUrl(p)} alt="" loading="lazy" /></div>
+    <article className="host-card" data-status={c.status}>
+      {onOpen ? (
+        <button type="button" className="shot-img" onClick={onOpen} title="Open full preview"
+          aria-label={`Open preview of ${c.hostname ?? c.ip}`}>
+          <LazyShot src={thumbUrl(p)} alt={p.title ?? endpointUrl(p)} />
+        </button>
       ) : (
-        <div className="shot-img shot-ph"><span>{p.screenshot_status === 'captured' ? 'No screenshot' : shotNote(p)}</span></div>
+        <Link to={to} className="shot-img shot-ph" title={note}><span>{noPreviewLabel(c)}</span></Link>
       )}
       <div className="shot-meta">
         <div className="spread">
-          <strong className="shot-title">{h.hostname ?? h.ip}</strong>
+          <Link to={to} className="shot-title host-card-name">{c.hostname ?? c.ip}</Link>
           <HttpBadge status={p.http_status} rtsp={isRtspPage(p)} />
         </div>
         <div className="mono small muted shot-title" title={endpointUrl(p)}>
-          {h.hostname && p.host_used !== h.ip ? `${h.ip} · ` : ''}{endpointUrl(p)}
+          {c.hostname && p.host_used !== c.ip ? `${c.ip} · ` : ''}{endpointUrl(p)}
         </div>
         <div className="small shot-title" title={p.title ?? undefined}>{p.title ?? <span className="muted">Untitled</span>}</div>
-        <div>{s.ports.map((port) => <span className="chip" key={port}>{port}</span>)}</div>
+        <div>{c.ports.map((port) => <span className="chip" key={port}>{port}</span>)}</div>
         <div className="row wrap gap-2">
-          {s.has_login && <span className="badge low">login page</span>}
+          {c.has_login && <span className="badge low">login page</span>}
           {p.tls_verified === false && <span className="badge outline">TLS unverified</span>}
+          {c.status !== 'ok' && <span className="badge outline" title={note}>{c.status === 'error' ? 'no web application' : 'no preview'}</span>}
         </div>
-        <div className="muted small">
-          {total > 1 && <>service {index + 1} of {total} · </>}
-          {s.page_count} live page{s.page_count === 1 ? '' : 's'} · {relTime(p.captured_at)}
+        <div className="spread muted small">
+          <span title={`Captured ${fmtTime(c.captured_at, true)}`}>
+            {c.page_count > 0 && <>{c.page_count} live page{c.page_count === 1 ? '' : 's'} · </>}captured {relTime(c.captured_at)}
+          </span>
+          {onRefresh && (
+            <button type="button" className="btn ghost sm" disabled={!!refresh} onClick={onRefresh}
+              title={refresh && refresh !== 'queued' ? refresh : 'Capture this device again (new screenshot)'}>
+              {refresh === 'queued' ? 'Refreshing…' : 'Refresh'}
+            </button>
+          )}
         </div>
       </div>
-    </Link>
+    </article>
+  );
+}
+
+function SkeletonCard() {
+  return (
+    <div className="host-card" aria-hidden="true">
+      <div className="shot-img"><span className="shot-skeleton" /></div>
+      <div className="shot-meta">
+        <span className="skeleton-bar" style={{ width: '60%' }} />
+        <span className="skeleton-bar" style={{ width: '80%' }} />
+        <span className="skeleton-bar" style={{ width: '40%' }} />
+      </div>
+    </div>
   );
 }
 
 export default function WebHosts() {
-  // Filter state lives in the URL (q, noapp=1, hide=kind,kind, page) so reload, Back and shared links keep it.
-  const nav = useNavigate();
+  // Filters live in the URL (q, network, port, scheme, status, archived) so reload, Back and shared links keep them.
+  const { isAdmin } = useApp();
   const [sp, setSp] = useSearchParams();
-  const page = Math.max(1, Number(sp.get('page')) || 1);
-  const showArchived = sp.get('archived') === '1';
-  const { data, error } = useApi<WebHostPage>('/web-hosts', {
-    kind: 'web', page, page_size: WEB_HOSTS_PAGE_SIZE,
-    include_archived: showArchived ? 'true' : undefined,
-  }, 15000);
-  const q = sp.get('q') ?? '';
-  // Hidden by default: default server pages, errors, blank shells, redirects, no-response
-  const showNoApp = sp.get('noapp') === '1';
-  // Services without a screenshot are set aside too (listed with the reason, collapsed by default)
-  const showNoShot = sp.get('noshot') === '1';
-  const hidden = new Set((sp.get('hide') ?? '').split(','));
-  const noAppFilters = Object.fromEntries(NO_APP_FILTERS.map((f) => [f.id, !hidden.has(f.id)])) as Record<NoAppKind, boolean>;
-  const update = (patch: Record<string, string | null>, replace = false) => {
-    const next = new URLSearchParams(sp);
-    for (const [k, v] of Object.entries(patch)) {
-      if (v) next.set(k, v);
-      else next.delete(k);
+  const filters = useMemo(() => filtersFromParams(sp), [sp]);
+  const networks = useApi<Network[]>('/networks', { include_archived: filters.archived ? 'true' : undefined });
+  const [qInput, setQInput] = useState(filters.q);
+  const [items, setItems] = useState<WebPreviewCard[] | null>(null);
+  const [meta, setMeta] = useState<Omit<WebPreviewPage, 'items'> | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState<Record<string, string>>({});
+  const seq = useRef(0);
+  const query = JSON.stringify(previewQuery(filters, 1));
+
+  // From the URL at call time (not this render's copy): the debounced search must not undo a filter clicked meanwhile.
+  const update = (patch: Partial<WebFilters>, replace = false) => setSp((cur) => withFilters(cur, patch), { replace });
+
+  // Search box -> URL after a short pause; Back/links -> search box.
+  useEffect(() => { setQInput(filters.q); }, [filters.q]);
+  useEffect(() => {
+    if (qInput === filters.q) return;
+    const t = window.setTimeout(() => update({ q: qInput }, true), 300);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
+
+  // Filters changed: start over from the first page.
+  useEffect(() => {
+    const my = ++seq.current;
+    setItems(null);
+    setOpen(null);
+    setError(null);
+    get<WebPreviewPage>('/web-previews', JSON.parse(query))
+      .then(({ items: first, ...rest }) => {
+        if (my !== seq.current) return;
+        setItems(first);
+        setMeta(rest);
+      })
+      .catch((e) => { if (my === seq.current) setError(e.message || String(e)); });
+  }, [query]);
+
+  const loadMore = async () => {
+    if (!meta || loadingMore) return;
+    const my = seq.current;
+    setLoadingMore(true);
+    try {
+      const { items: more, ...rest } = await get<WebPreviewPage>('/web-previews', previewQuery(filters, meta.page + 1));
+      if (my !== seq.current) return;
+      setItems((cur) => {
+        const seen = new Set((cur ?? []).map((c) => c.key));
+        return [...(cur ?? []), ...more.filter((c) => !seen.has(c.key))];
+      });
+      setMeta(rest);
+    } catch (e: any) {
+      if (my === seq.current) setError(e.message || String(e));
+    } finally {
+      setLoadingMore(false);
     }
-    setSp(next, { replace });
   };
 
-  const needle = q.trim().toLowerCase();
-  const matches = (...values: unknown[]) =>
-    !needle || values.some((v) => v != null && String(v).toLowerCase().includes(needle));
-
-  // Services of the same host stay next to each other (hosts keep the API's order)
-  const cards = (data?.hosts ?? []).filter(isApp).flatMap((h) =>
-    h.services
-      .map((s, index) => ({ h, s, index }))
-      .filter(({ s }) => matches(h.hostname, h.ip, s.page.title, s.page.server_header, s.ports.join(' '), endpointUrl(s.page))));
-  const shotCards = cards.filter(({ s }) => isUsefulShot(s.page));
-  const noShotCards = cards.filter(({ s }) => !isUsefulShot(s.page));
-  const noApp = (data?.hosts ?? []).filter((h) =>
-    !isApp(h) && matches(h.hostname, h.ip, h.hero.title, h.hero.server_header, h.ports.join(' '), h.hero.error_reason, shotNote(h.hero)));
-
-  const noAppGrouped = (() => {
-    const groups = Object.fromEntries(NO_APP_FILTERS.map((f) => [f.id, [] as WebHost[]])) as Record<NoAppKind, WebHost[]>;
-    for (const h of noApp) {
-      groups[noAppKind(h)].push(h);
+  // Refresh: capture the device again, wait for the job, then swap in that device's new cards.
+  const refreshCard = useCallback(async (c: WebPreviewCard) => {
+    setRefreshing((r) => ({ ...r, [c.device_uuid]: 'queued' }));
+    try {
+      let { capture: job } = await post<{ capture: WebCapture }>('/web-captures', { device_uuids: [c.device_uuid], scope: 'web' });
+      while (ACTIVE_CAPTURE.has(job.status)) {
+        await new Promise((r) => window.setTimeout(r, 3000));
+        job = await get<WebCapture>(`/web-captures/${job.id}`);
+      }
+      const fresh = await get<WebPreviewPage>('/web-previews', {
+        q: c.ip, page_size: 200, include_archived: filters.archived ? 'true' : undefined,
+      });
+      const mine = fresh.items.filter((x) => x.device_uuid === c.device_uuid);
+      setItems((cur) => {
+        if (!cur) return cur;
+        const at = cur.findIndex((x) => x.device_uuid === c.device_uuid);
+        const rest = cur.filter((x) => x.device_uuid !== c.device_uuid);
+        rest.splice(at < 0 ? rest.length : at, 0, ...mine);
+        return rest;
+      });
+      setRefreshing((r) => Object.fromEntries(Object.entries(r).filter(([k]) => k !== c.device_uuid)));
+    } catch (e: any) {
+      setRefreshing((r) => ({ ...r, [c.device_uuid]: `Refresh failed: ${e.message || e}` }));
     }
-    return groups;
-  })();
+  }, [filters.archived]);
 
-  const visibleNoAppCount = NO_APP_FILTERS.reduce(
-    (n, f) => n + (noAppFilters[f.id] ? noAppGrouped[f.id].length : 0),
-    0,
-  );
-
-  const toggleFilter = (id: NoAppKind) => {
-    const hide = NO_APP_FILTERS.filter((f) => (f.id === id ? noAppFilters[f.id] : !noAppFilters[f.id])).map((f) => f.id);
-    update({ hide: hide.join(',') || null });
-  };
+  const withShot = (items ?? []).filter((c) => c.status === 'ok');
+  const filtered = !!(filters.q || filters.network || filters.port || filters.scheme || filters.status);
+  const counts = meta?.counts;
+  const countAll = counts ? counts.ok + counts.no_preview + counts.error : null;
 
   return (
     <>
       <div className="page-head">
         <div>
           <h1>Web interfaces</h1>
-          <p>HTTP(S) and RTSP services from the latest Web Capture - one card per service. RDP and VNC desktops are under <Link to="/remote">Remote</Link>. Services without a screenshot, default server pages, errors, blank pages and redirects are set aside below.</p>
+          <p>HTTP(S) and RTSP services from the latest Web Capture - one card per service, previews first. RDP and VNC desktops are under <Link to="/remote">Remote</Link>.</p>
         </div>
         <div className="row wrap">
           <label className="check small" title="Hosts of networks archived in Settings > Networks are hidden by default">
-            <input type="checkbox" checked={showArchived} onChange={(e) => update({ archived: e.target.checked ? '1' : null, page: null })} />Show archived networks
+            <input type="checkbox" checked={filters.archived} onChange={(e) => update({ archived: e.target.checked })} />Show archived networks
           </label>
-          <input type="search" placeholder="Filter by host, IP, title, port…" value={q} onChange={(e) => update({ q: e.target.value || null }, true)} style={{ width: 260 }} />
+          <input type="search" aria-label="Search web interfaces" placeholder="Search host, IP, title…" value={qInput}
+            onChange={(e) => setQInput(e.target.value)} style={{ width: 240 }} />
+        </div>
+      </div>
+      <div className="row wrap web-filters">
+        <select aria-label="Network" value={filters.network ?? ''} onChange={(e) => update({ network: e.target.value ? Number(e.target.value) : null })}>
+          <option value="">All networks</option>
+          {(networks.data ?? []).map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+        </select>
+        <select aria-label="Scheme" value={filters.scheme ?? ''} onChange={(e) => update({ scheme: (e.target.value || null) as WebFilters['scheme'] })}>
+          <option value="">HTTP and HTTPS</option><option value="http">HTTP</option><option value="https">HTTPS</option>
+        </select>
+        <input type="number" aria-label="Port" placeholder="Port" min={1} max={65535} value={filters.port ?? ''} style={{ width: 96 }}
+          onChange={(e) => update({ port: e.target.value ? Number(e.target.value) : null }, true)} />
+        <div className="row" style={{ gap: 4 }}>
+          {STATUS_CHIPS.map((s) => {
+            const n = counts ? (s.id ? counts[s.id] : countAll) : null;
+            return (
+              <button key={s.label} type="button" className={`btn sm toggle${filters.status === s.id ? ' on' : ''}`}
+                aria-pressed={filters.status === s.id} onClick={() => update({ status: s.id })}>
+                {s.label}{n != null && <span className="muted"> ({n})</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
       <ErrorBox error={error} />
-      {!data ? <Loading /> : !data.hosts.length ? (
+      {!items ? (
+        error ? null : <div className="host-grid" aria-busy="true">{Array.from({ length: 8 }, (_, i) => <SkeletonCard key={i} />)}</div>
+      ) : !items.length ? (
         <Card>
-          <span className="muted">No captures yet. Start one from <Link to="/scans?tab=web-captures">Scans → Web captures</Link> or from a device page.</span>
+          <span className="muted">
+            {filtered ? 'No web service matches these filters.' : <>No captures yet. Start one from <Link to="/scans?tab=web-captures">Scans → Web captures</Link> or from a device page.</>}
+          </span>
         </Card>
       ) : (
         <>
-          {shotCards.length > 0 ? (
-            <div className="host-grid">
-              {shotCards.map(({ h, s, index }) => <ServiceCard key={`${h.device_uuid}:${s.scheme}:${s.port}`} h={h} s={s} index={index} />)}
+          <div className="host-grid">
+            {items.map((c) => (
+              <PreviewCard key={c.key} c={c}
+                onOpen={c.status === 'ok' ? () => setOpen(withShot.indexOf(c)) : undefined}
+                refresh={refreshing[c.device_uuid]}
+                onRefresh={isAdmin ? () => refreshCard(c) : undefined} />
+            ))}
+          </div>
+          {meta && (
+            <div className="row web-more">
+              <span className="muted small">Showing {items.length} of {meta.total}</span>
+              {items.length < meta.total && (
+                <button type="button" className="btn" onClick={loadMore} disabled={loadingMore}>
+                  {loadingMore ? 'Loading…' : 'Load more'}
+                </button>
+              )}
             </div>
-          ) : (
-            <Card><span className="muted">{q ? 'No captured web application matches the filter.' : 'No web application has a screenshot in the latest captures on this page.'}</span></Card>
-          )}
-
-          {noShotCards.length > 0 && (
-            <Card
-              title={`No screenshot - ${noShotCards.length} service${noShotCards.length === 1 ? '' : 's'}`}
-              flush
-              actions={<button className="btn sm ghost" aria-expanded={showNoShot} onClick={() => update({ noshot: showNoShot ? null : '1' })}>{showNoShot ? 'Hide' : 'Show'}</button>}
-            >
-              {showNoShot && (
-                <div className="table-wrap">
-                <table>
-                  <thead><tr><th>Host</th><th>Service</th><th>Title</th><th>Why no screenshot</th></tr></thead>
-                  <tbody>
-                    {noShotCards.map(({ h, s }) => (
-                      <tr key={`${h.device_uuid}:${s.scheme}:${s.port}`} className="clickable" onClick={() => nav(`/devices/${h.device_uuid}/web`)}>
-                        <td>
-                          <Link to={`/devices/${h.device_uuid}/web`} onClick={(e) => e.stopPropagation()}>{h.hostname ?? h.ip}</Link>
-                          {h.hostname && <div className="mono muted small">{h.ip}</div>}
-                        </td>
-                        <td className="mono small">{endpointUrl(s.page)}</td>
-                        <td className="small">{s.page.title ?? <span className="muted">-</span>}</td>
-                        <td className="small muted">{shotNote(s.page)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                </div>
-              )}
-            </Card>
-          )}
-
-          {noApp.length > 0 && (
-            <Card
-              title={`No web application - ${noApp.length} host${noApp.length === 1 ? '' : 's'}`}
-              flush
-              actions={<button className="btn sm ghost" aria-expanded={showNoApp} onClick={() => update({ noapp: showNoApp ? null : '1' })}>{showNoApp ? 'Hide' : 'Show'}</button>}
-            >
-              {showNoApp && (
-                <>
-                  <div className="row wrap gap-2 card-toolbar">
-                    <span className="muted small">Show:</span>
-                    {NO_APP_FILTERS.map((f) => {
-                      const count = noAppGrouped[f.id].length;
-                      if (!count) return null;
-                      return (
-                        <button
-                          key={f.id}
-                          type="button"
-                          className={`btn sm toggle${noAppFilters[f.id] ? ' on' : ''}`}
-                          onClick={() => toggleFilter(f.id)}
-                          aria-pressed={noAppFilters[f.id]}
-                        >
-                          {f.label} ({count})
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {visibleNoAppCount === 0 ? (
-                    <div className="card-body muted small">All categories are filtered out.</div>
-                  ) : (
-                    NO_APP_FILTERS.map((f) => {
-                      const rows = noAppGrouped[f.id];
-                      if (!noAppFilters[f.id] || !rows.length) return null;
-                      return (
-                        <div key={f.id}>
-                          <div className="card-subhead">
-                            {f.label} - {rows.length}
-                          </div>
-                          <div className="table-wrap">
-                          <table>
-                            <thead><tr><th>Host</th><th>Ports</th><th>Answered with</th><th /></tr></thead>
-                            <tbody>
-                              {rows.map((h) => (
-                                <tr key={h.device_uuid} className="clickable" onClick={() => nav(`/devices/${h.device_uuid}/web`)}>
-                                  <td>
-                                    <Link to={`/devices/${h.device_uuid}/web`} onClick={(e) => e.stopPropagation()}>{h.hostname ?? h.ip}</Link>
-                                    {h.hostname && <div className="mono small muted">{h.ip}</div>}
-                                  </td>
-                                  <td>{h.ports.map((p) => <span className="chip" key={p}>{p}</span>)}</td>
-                                  <td>
-                                    <HttpBadge status={h.hero.http_status} />{' '}
-                                    <span className="small muted">{noAppLabel(h)}</span>
-                                  </td>
-                                  <td className="right"><span className="muted small">{relTime(h.captured_at)}</span></td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </>
-              )}
-            </Card>
           )}
         </>
       )}
-      {data && data.total > WEB_HOSTS_PAGE_SIZE && (
-        <Pager page={page} pageSize={WEB_HOSTS_PAGE_SIZE} total={data.total} onPage={(p) => update({ page: p > 1 ? String(p) : null })} />
+      {open != null && withShot[open] && (
+        <Lightbox pages={withShot.map((c) => c.page)} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />
       )}
     </>
   );

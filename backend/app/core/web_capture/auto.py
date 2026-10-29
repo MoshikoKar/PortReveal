@@ -27,6 +27,7 @@ from ...netutils import ip_sort_key
 from ...scanner import scanner_status
 from ...settings_store import WebCaptureSettings, get_section
 from ..web_storage import resolve_screenshot
+from .classify import UNAVAILABLE_PREFIX
 from .inventory import COMMON_RTSP_PORTS, COMMON_WEB_PORTS, find_web_endpoints, is_rtsp_service, is_web_service
 from .inventory_sync import _http_claims_hypervisor, _product_conflicts_hypervisor
 
@@ -99,7 +100,7 @@ def _candidate_ips(db: Session, scan: Scan, cfg: WebCaptureSettings, *, baseline
         page = latest.get(e.device_port_id)
         if page is None:
             continue
-        if page.scheme != e.scheme or (
+        if page.scheme != e.scheme or (page.capture_error or "").startswith(UNAVAILABLE_PREFIX) or (
             page.screenshot_status == SCREENSHOT_CAPTURED and page.screenshot_relpath
             and resolve_screenshot(page.screenshot_relpath) is None
         ):

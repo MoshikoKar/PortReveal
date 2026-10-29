@@ -64,12 +64,12 @@ p { line-height: 1.6; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 /* Content links keep a quiet underline so they are not signalled by color alone (WCAG 1.4.1).
-   Component links (buttons, badges, chips, cards, bar rows, tabs) keep their own chrome. */
-.content a:not(.btn, .badge, .chip, .host-card, .bar-row, .result-shot):not(.tabs a) {
+   Component links (buttons, badges, chips, cards and their name/preview, bar rows, tabs) keep their own chrome. */
+.content a:not(.btn, .badge, .chip, .host-card, .host-card-name, .shot-img, .bar-row, .result-shot):not(.tabs a) {
   text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px;
   text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
 }
-.content a:not(.btn, .badge, .chip, .host-card, .bar-row, .result-shot):not(.tabs a):hover { text-decoration-color: currentColor; }
+.content a:not(.btn, .badge, .chip, .host-card, .host-card-name, .shot-img, .bar-row, .result-shot):not(.tabs a):hover { text-decoration-color: currentColor; }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 h1 { font-size: 20px; }
 h2 { font-size: 15px; }
@@ -208,7 +208,10 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .dashboard-grid-wrap { width: 100%; min-height: 120px; overflow-x: clip; }
 .dashboard-grid-item { height: 100%; }
 .dashboard-widget { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-.dashboard-widget > .card-body { flex: 1 1 0; min-height: 0; overflow: hidden; }
+/* Widgets list only the rows that fit (useFittingRows); the body still scrolls (never cuts) if content
+   outgrows it. Bottom padding keeps the last row clear of the card edge. */
+.dashboard-widget > .card-body { flex: 1 1 0; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.dashboard-widget > .card-body.flush { padding-bottom: var(--space-2); }
 .dashboard-widget-actions { margin-inline-start: auto; gap: 4px; flex-wrap: nowrap; min-width: 0; }
 /* KPI strip: plain tiles on the page outside edit mode; its cell height follows the tiles. */
 .dashboard-widget.bare { background: transparent; border-color: transparent; }
@@ -253,6 +256,42 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   0% { box-shadow: 0 0 0 0 rgba(14, 208, 217, 0.55); }
   100% { box-shadow: 0 0 0 14px rgba(14, 208, 217, 0); }
 }
+/* Dashboard card tables: short columns (time, scope, counters, badges, actions) take their content
+   width and never wrap; the main column (.dash-main) takes the rest and truncates to one line, full
+   value in its title. max-width: 0 drops its min-content width so the auto layout can shrink it. */
+.dash-table th, .dash-table td { white-space: nowrap; padding-left: 10px; padding-right: 10px; }
+.dash-table .dash-main { width: 100%; max-width: 0; min-width: 48px; overflow: hidden; text-overflow: ellipsis; }
+/* Two shrinkable columns (Networks: name + baseline, Exposure: hostname + type) split the leftover width. */
+.dash-table .dash-main.dash-split { width: 55%; }
+.dash-table .dash-shrink { width: 45%; max-width: 0; min-width: 56px; overflow: hidden; text-overflow: ellipsis; }
+/* Sticky header: collapsed borders scroll away with the rows, so draw the divider on the cell. */
+.dash-table thead th { z-index: 1; border-bottom: 0; box-shadow: inset 0 -1px 0 var(--border); }
+/* Pending baseline: compact badge + button on one line. The cell is a size container: the labels
+   shorten as it narrows, and in the narrowest cells the Run button alone stands for "pending". */
+.dash-baseline { display: flex; align-items: center; gap: 6px; min-width: 0; container-type: inline-size; }
+.dash-baseline .dash-short { display: none; }
+@container (max-width: 250px) {
+  .dash-baseline .badge .dash-long { display: none; }
+  .dash-baseline .badge .dash-short { display: inline; }
+}
+@container (max-width: 160px) {
+  .dash-baseline .btn .dash-long { display: none; }
+  .dash-baseline .btn .dash-short { display: inline; }
+}
+@container (max-width: 110px) { .dash-baseline .badge:has(+ .btn) { display: none; } }
+.dash-baseline > * { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dash-baseline .badge { display: block; flex-shrink: 100; height: 18px; line-height: 16px; padding: 0 6px; font-size: 11px; }
+.dash-baseline .btn.sm { display: block; min-width: 40px; padding: 2px 8px; font-size: 12px; }
+
+/* Alert feed (narrow card): two lines per alert - when + what, then device and finding details. */
+.feed.alert-feed > li { display: flex; flex-direction: column; align-items: stretch; gap: 3px; }
+.alert-feed-head { display: flex; align-items: center; gap: 8px; }
+.alert-feed-body { display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; }
+/* The device gives way first; finding details only truncate once the device is at its minimum. */
+.alert-feed-device { flex: 0 100 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; }
+.alert-feed-detail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.alert-feed-detail .chip { margin: 0; }
+
 .dashboard-chart-fill { width: 100%; height: 100%; min-height: 100px; }
 .dashboard-chart-fill .trend-wrap { height: 100%; }
 .dashboard-chart-fill .trend { height: 100%; display: block; }
@@ -533,6 +572,28 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .feed .msg { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 700px) { .feed li { grid-template-columns: 1fr; gap: 2px; } }
 
+/* Change events table (Changes page, dashboard Recent changes): Time, Event, Port and Scan take their
+   content width; Device and Change share the rest (Change the larger part) and truncate to one line,
+   full text in the title. Every row is two lines tall (device name + IP), with or without an IP. */
+.event-table th, .event-table td { white-space: nowrap; }
+.event-table .event-device { width: 35%; max-width: 0; min-width: 96px; }
+.event-table .event-change { width: 65%; max-width: 0; min-width: 120px; }
+.event-table.compact .event-device { min-width: 64px; }
+.event-table.compact .event-change { min-width: 80px; }
+.event-device-cell { display: flex; flex-direction: column; justify-content: center; min-width: 0; min-height: 36px; }
+.event-device-cell .small { line-height: 1.3; }
+.event-table.compact .event-device-cell { min-height: 32px; }
+.event-change-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.event-change-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.event-diff { display: flex; gap: 4px; }
+.event-from { flex: 0 100 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis; }
+.event-to { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.event-change-cell > .badge, .event-no-alert { flex: none; }
+.event-table .badge.outline { height: 18px; padding: 0 6px; font-size: 11px; }
+.event-no-alert { display: inline-flex; }
+.event-kev { margin-left: 6px; }
+.event-emailed { margin-left: 6px; }
+
 .bars { display: flex; flex-direction: column; gap: 8px; }
 /* Label column scales with the card (same width on every row, so bars line up); long labels truncate
    with an ellipsis (full text in the row's title) instead of wrapping or running into the bar. */
@@ -651,6 +712,19 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 }
 .shot-ph span { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 4px 10px; }
 /* ShotImg fallback when the image file cannot be loaded */
+/* Web gallery: thumbnails load as their card nears the viewport; a pulsing block holds the space. */
+.lazy-shot { display: block; width: 100%; height: 100%; position: relative; }
+.lazy-shot img { opacity: 0; transition: opacity 0.2s, transform 0.25s; }
+.lazy-shot.loaded img { opacity: 1; }
+.shot-skeleton { position: absolute; inset: 0; background: var(--panel-3); animation: pulse 1.6s ease-in-out infinite; }
+.host-card .shot-meta .skeleton-bar { height: 12px; }
+.host-card-name { color: var(--text); font-weight: 600; }
+.host-card-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+a.shot-img { text-decoration: none; }
+.web-filters { gap: var(--space-2); margin-bottom: var(--space-4); align-items: center; }
+/* A select is as wide as its longest option; long network names must not stretch the bar. */
+.web-filters select { max-width: 260px; }
+.web-more { justify-content: center; gap: var(--space-3); margin-top: var(--space-4); }
 .shot-missing { display: grid; place-items: center; width: 100%; height: 100%; min-height: 60px; color: var(--muted); font-size: 12.5px; background: var(--panel); }
 .shot-meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .shot-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -929,7 +1003,7 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 @media (prefers-reduced-motion: reduce) {
   /* Spinners still signal activity, just slowly; decorative motion stops. */
   .spinner, svg[style*='nf-spin'] { animation-duration: 2.4s !important; }
-  .pulse, .skeleton-bar { animation: none; }
+  .pulse, .skeleton-bar, .shot-skeleton { animation: none; }
   .host-card, .shot-img img, .progress > div { transition: none; }
   .host-card:hover, button.shot-img:hover img, .host-card:hover .shot-img img { transform: none; }
 }

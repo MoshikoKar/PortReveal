@@ -35,6 +35,53 @@ type WatchDetail = {
   kev?: boolean;
 };
 
+/**
+ * Alerts for a narrow card, two lines each: time, type and KEV badges; then the device (truncates
+ * first) and the finding - CVE link, status, port, CVSS - or the event's usual details.
+ */
+export function AlertFeed({ events, empty }: { events: ChangeEvent[]; empty: string }) {
+  if (!events.length) return <Empty>{empty}</Empty>;
+  return (
+    <ul className="feed alert-feed">
+      {events.map((e) => {
+        const detail = parseWatchDetail(e);
+        const deviceUuid = e.device_uuid ?? detail?.device_uuid;
+        const device = e.device_label ?? detail?.hostname ?? detail?.ip ?? e.ip;
+        return (
+          <li key={e.id}>
+            <div className="alert-feed-head">
+              <span className="time" title={fmtTime(e.created_at, true)}>{fmtShortTime(e.created_at)}</span>
+              <SeverityBadge ev={e} />
+              {detail?.kev && <span className="badge high">KEV</span>}
+            </div>
+            <div className="alert-feed-body">
+              {device && (
+                <span className="alert-feed-device" title={device}>
+                  {deviceUuid ? <Link to={`/devices/${deviceUuid}`}>{device}</Link> : device}
+                </span>
+              )}
+              <span className="alert-feed-detail" title={e.message}>
+                {detail ? (
+                  <>
+                    {detail.cve_id ? (
+                      <Link className="mono" to={`/vulnerabilities/${encodeURIComponent(detail.cve_id)}`}>{detail.cve_id}</Link>
+                    ) : (
+                      <span className="mono">{e.new_value ?? e.message}</span>
+                    )}
+                    <span className="muted"> · {detail.state === 'potential' ? 'potential' : 'confirmed'}</span>
+                    {detail.port != null && <> <span className="chip new">{(detail.protocol || 'tcp').toUpperCase()}/{detail.port}</span></>}
+                    {detail.cvss != null && <span className="muted"> · CVSS {detail.cvss}</span>}
+                  </>
+                ) : <EventDetail ev={e} />}
+              </span>
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function parseWatchDetail(ev: ChangeEvent): WatchDetail | null {
   if (ev.event_type !== 'cve_watch_match' || !ev.old_value) return null;
   try {

@@ -1,7 +1,10 @@
 import { useLayoutEffect, useState, type RefObject } from 'react';
 
 /**
- * How many row elements matching `rowSelector` fit in the scroll parent of `ref`.
+ * How many row elements matching `rowSelector` fit completely in the scroll parent of `ref`.
+ * Rows are measured where they actually sit, so headers, content above the rows and the body's
+ * bottom padding are accounted for and the last shown row is never cut. Rows not rendered yet
+ * are estimated from the tallest rendered one.
  * Returns null until measured (or when the body has no fixed height yet), and while `disabled`
  * so "Fit height" can measure the widget's full, untruncated content.
  */
@@ -17,15 +20,27 @@ export function useFittingRows(
     const body = el?.closest('.card-body') as HTMLElement | null ?? el?.parentElement;
     if (!el || !body) return;
     const measure = () => {
-      const row = el.querySelector(rowSelector);
-      if (!row) { setFit(null); return; }
-      const pad = getComputedStyle(body);
-      const room = body.clientHeight - parseFloat(pad.paddingTop) - parseFloat(pad.paddingBottom);
-      if (room <= 0) { setFit(null); return; }
-      const gap = parseFloat(getComputedStyle(el).rowGap || getComputedStyle(el).gap) || 0;
-      const rh = row.getBoundingClientRect().height + gap;
-      if (rh <= 0) { setFit(null); return; }
-      setFit(Math.max(1, Math.floor((room + gap) / rh)));
+      const rows = el.querySelectorAll(rowSelector);
+      if (!rows.length) { setFit(null); return; }
+      // Bottom edge of the body's content box, relative to the top of its scrolled content.
+      const limit = body.clientHeight - parseFloat(getComputedStyle(body).paddingBottom);
+      if (limit <= 0) { setFit(null); return; }
+      const top = body.getBoundingClientRect().top + body.clientTop - body.scrollTop;
+      let n = 0;
+      let bottom = 0;
+      let tallest = 0;
+      for (const row of rows) {
+        const r = row.getBoundingClientRect();
+        if (r.bottom - top > limit + 0.5) break;
+        n += 1;
+        bottom = r.bottom - top;
+        tallest = Math.max(tallest, r.height);
+      }
+      if (n === rows.length && tallest > 0) {
+        const gap = parseFloat(getComputedStyle(rows[0].parentElement ?? el).rowGap) || 0;
+        n += Math.floor((limit - bottom) / (tallest + gap));
+      }
+      setFit(Math.max(1, n));
     };
     measure();
     const ro = new ResizeObserver(measure);

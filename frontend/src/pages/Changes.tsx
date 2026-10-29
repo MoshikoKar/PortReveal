@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { EventDetail } from '../components/EventFeed';
-import { Card, Empty, ErrorBox, Pager, SeverityBadge, SkeletonRows } from '../components/ui';
+import { useSearchParams } from 'react-router-dom';
+import { EventTable } from '../components/EventTable';
+import { Card, Empty, ErrorBox, Pager, SkeletonRows } from '../components/ui';
 import type { ChangeEvent, EventType, Paged } from '../types';
-import { EVENT_LABELS, fmtTime, useApi } from '../util';
+import { EVENT_LABELS, useApi } from '../util';
 
 const RANGES: Record<string, number | null> = { '24h': 1, '7d': 7, '30d': 30, all: null };
 const PAGE = 50;
@@ -79,22 +79,9 @@ export default function Changes() {
         </div>
       }>
         <ErrorBox error={error} />
-        {loading && !data ? <SkeletonRows cols={5} /> : !data?.items.length ? <Empty>No changes match these filters.</Empty> : (
+        {loading && !data ? <SkeletonRows cols={6} /> : !data?.items.length ? <Empty>No changes match these filters.</Empty> : (
           <div className="table-wrap">
-            <table>
-              <thead><tr><th>Time</th><th>Change</th><th>Device</th><th>Details</th><th>Scan</th></tr></thead>
-              <tbody>
-                {data.items.map((e) => (
-                  <tr key={e.id}>
-                    <td className="nowrap">{fmtTime(e.created_at)}</td>
-                    <td><SeverityBadge ev={e} /></td>
-                    <td>{e.device_uuid ? <Link to={`/devices/${e.device_uuid}`}>{e.device_label}</Link> : e.device_label}<div className="mono small muted">{e.ip}</div></td>
-                    <td><EventDetail ev={e} />{!e.notify && <div className="muted small">recorded only (outside configured networks)</div>}</td>
-                    <td className="small">#{e.scan_id}{e.notified_at && <div className="muted" title={fmtTime(e.notified_at)}>emailed</div>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <EventTable events={data.items} />
           </div>
         )}
         {data && <Pager page={page} pageSize={PAGE} total={data.total} onPage={(p) => set({ page: String(p) })} />}

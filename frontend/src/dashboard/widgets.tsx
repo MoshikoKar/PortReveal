@@ -2,7 +2,8 @@ import { useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } fr
 import { Link, useNavigate } from 'react-router-dom';
 import { post } from '../api';
 import { useApp } from '../context';
-import { EventFeed } from '../components/EventFeed';
+import { AlertFeed } from '../components/EventFeed';
+import { EventTable } from '../components/EventTable';
 import { Trend } from '../components/Trend';
 import { Empty, Kpi, MockBadge, Progress, ScanStatusBadge, ScoreBadge } from '../components/ui';
 import type { Dashboard as DashboardData, EventType, Network } from '../types';
@@ -100,7 +101,7 @@ function BaselineCell({ n, onStarted }: { n: Network; onStarted: () => void }) {
   const { isAdmin } = useApp();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  if (n.baseline_at) return <>{fmtTime(n.baseline_at)}</>;
+  if (n.baseline_at) return <span className="cell-ellipsis" title={fmtTime(n.baseline_at)}>{fmtTime(n.baseline_at)}</span>;
   const start = async (e: MouseEvent) => {
     e.stopPropagation();
     setBusy(true);
@@ -115,17 +116,20 @@ function BaselineCell({ n, onStarted }: { n: Network; onStarted: () => void }) {
     }
   };
   return (
-    <div className="row wrap" style={{ gap: 8 }}>
-      <span className="badge medium">pending first complete scan</span>
+    <div className="dash-baseline">
+      {/* Labels shorten as the cell narrows (container queries in styles.css); full text in titles. */}
+      <span className="badge medium" title="pending first complete scan">
+        <span className="dash-long">pending first complete scan</span><span className="dash-short">pending</span>
+      </span>
       {n.scan_active ? (
-        <span className="muted small">scan queued / running</span>
+        <span className="muted small" title="scan queued / running">scan queued / running</span>
       ) : isAdmin && (
         <button className="btn sm" disabled={busy} onClick={start}
-          title="Run a standard scan of this network; when it completes, its result becomes the baseline">
-          {busy ? 'Starting…' : 'Run baseline scan'}
+          title="Pending first complete scan. Run a standard scan of this network; when it completes, its result becomes the baseline">
+          {busy ? 'Starting…' : <><span className="dash-long">Run baseline scan</span><span className="dash-short">Run</span></>}
         </button>
       )}
-      {err && <span className="small" style={{ color: 'var(--high)' }}>{err}</span>}
+      {err && <span className="small" style={{ color: 'var(--high)' }} title={err}>Start failed</span>}
     </div>
   );
 }
@@ -273,18 +277,16 @@ function KpisWidget({ data, edit, kpiVisible, onKpisChange, onAutoHeight }: Widg
 }
 
 function RecentChangesWidget({ data, edit, measuring }: WidgetRenderProps) {
-  const listRef = useRef<HTMLDivElement>(null);
-  const fit = useFittingRows(listRef, data.recent_events.length, '.feed > li', measuring);
+  const tableRef = useRef<HTMLTableElement>(null);
+  const fit = useFittingRows(tableRef, data.recent_events.length, 'tbody tr', measuring);
   const events = fit == null ? data.recent_events.slice(0, 10) : data.recent_events.slice(0, fit);
   const hidden = Math.max(0, Math.min(10, data.recent_events.length) - events.length);
   return (
     <WidgetChrome title="Recent changes" edit={edit} flush
-      actions={<Link to="/changes" className="small">All changes →</Link>}>
-      <div ref={listRef} className="dashboard-fit-body">
-        <EventFeed events={events}
-          empty="No changes recorded. The first complete scan of each network is a silent baseline." />
-        {hidden > 0 && <div className="muted small" style={{ padding: '4px 12px' }}>+{hidden} more in feed</div>}
-      </div>
+      actions={<Link to="/changes" className="small">All changes{hidden > 0 ? ` · +${hidden}` : ''} →</Link>}>
+      {events.length === 0
+        ? <Empty>No changes recorded. The first complete scan of each network is a silent baseline.</Empty>
+        : <EventTable events={events} compact tableRef={tableRef} />}
     </WidgetChrome>
   );
 }
@@ -362,7 +364,7 @@ function ExposureScoresWidget({ data, edit, measuring }: WidgetRenderProps) {
   const nav = useNavigate();
   const tableRef = useRef<HTMLTableElement>(null);
   const fit = useFittingRows(tableRef, data.exposure.top.length, 'tbody tr', measuring);
-  const rows = fit == null ? data.exposure.top : data.exposure.top.slice(0, Math.max(0, fit - 1));
+  const rows = fit == null ? data.exposure.top : data.exposure.top.slice(0, fit);
   return (
     <WidgetChrome title="Exposure scores" edit={edit}
       actions={<Link to="/reports" className="small">Reports →</Link>}>
@@ -377,14 +379,14 @@ function ExposureScoresWidget({ data, edit, measuring }: WidgetRenderProps) {
           ))}
         </div>
         {data.exposure.top.length > 0 && (
-          <table ref={tableRef}>
-            <thead><tr><th>IP</th><th>Hostname</th><th>Type</th><th className="right">Score</th></tr></thead>
+          <table ref={tableRef} className="dash-table">
+            <thead><tr><th>IP</th><th className="dash-main dash-split">Hostname</th><th className="dash-shrink">Type</th><th className="right">Score</th></tr></thead>
             <tbody>
               {rows.map((h) => (
                 <tr key={h.uuid} className="clickable" onClick={() => !edit && nav(`/devices/${h.uuid}`)}>
-                  <td className="mono nowrap">{h.ip}</td>
-                  <td className="muted small">{h.hostname || '-'}</td>
-                  <td className="muted small">{h.type || '-'}</td>
+                  <td className="mono">{h.ip}</td>
+                  <td className="dash-main dash-split muted small" title={h.hostname || undefined}>{h.hostname || '-'}</td>
+                  <td className="dash-shrink muted small" title={h.type || undefined}>{h.type || '-'}</td>
                   <td className="right"><ScoreBadge score={h.score} /></td>
                 </tr>
               ))}
@@ -431,7 +433,7 @@ function WatchAlertsWidget({ data, edit, measuring }: WidgetRenderProps) {
     <WidgetChrome title="Watch alerts (7 days)" edit={edit} flush
       actions={<Link to="/watches" className="small">Watches →</Link>}>
       <div ref={listRef}>
-        <EventFeed events={events}
+        <AlertFeed events={events}
           empty="No watch matches or policy violations. Save a search as a watch to be alerted when new hosts match." />
       </div>
     </WidgetChrome>
@@ -464,15 +466,15 @@ function NetworksWidget({ data, edit, measuring, reload }: WidgetRenderProps) {
   }
   return (
     <WidgetChrome title="Networks" edit={edit} flush>
-      <table ref={tableRef}>
-        <thead><tr><th>Network</th><th>Scope</th><th>Active / known</th><th>Baseline</th></tr></thead>
+      <table ref={tableRef} className="dash-table">
+        <thead><tr><th className="dash-main dash-split">Network</th><th>Scope</th><th title="Active / known hosts">Hosts</th><th className="dash-shrink">Baseline</th></tr></thead>
         <tbody>
           {rows.map((n) => (
             <tr key={n.id} className="clickable" onClick={() => !edit && nav(`/devices?network_id=${n.id}`)}>
-              <td>{n.name}</td>
+              <td className="dash-main dash-split" title={n.name}>{n.name}</td>
               <td className="mono">{n.cidr}</td>
-              <td>{n.active_count} / {n.device_count}</td>
-              <td><BaselineCell n={n} onStarted={reload} /></td>
+              <td title={`${n.active_count} active / ${n.device_count} known`}>{n.active_count} / {n.device_count}</td>
+              <td className="dash-shrink"><BaselineCell n={n} onStarted={reload} /></td>
             </tr>
           ))}
         </tbody>
@@ -491,12 +493,12 @@ function TopPortsWidget({ data, edit, measuring }: WidgetRenderProps) {
     <WidgetChrome title="Most exposed ports" edit={edit} flush
       actions={<Link to="/ports" className="small">See all{data.exposed_ports_total ? ` ${data.exposed_ports_total}` : ''}{hiddenN ? ` · +${hiddenN}` : ''} →</Link>}>
       {data.top_ports.length === 0 ? <Empty>No open ports known yet.</Empty> : (
-        <table ref={tableRef}>
+        <table ref={tableRef} className="dash-table">
           <tbody>
             {rows.map((p) => (
               <tr key={`${p.protocol}${p.port}`} className="clickable" onClick={() => !edit && nav(`/devices?port=${p.port}`)}>
                 <td className="mono">{p.protocol.toUpperCase()}/{p.port}</td>
-                <td className="muted">{p.service ?? ''}</td>
+                <td className="dash-main muted" title={p.service ?? undefined}>{p.service ?? ''}</td>
                 <td className="right">{p.count} host{p.count === 1 ? '' : 's'}</td>
               </tr>
             ))}

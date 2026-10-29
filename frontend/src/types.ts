@@ -430,6 +430,34 @@ export interface WebService {
   page: WebPage;
 }
 
+/**
+ * GET /web-previews: one Web gallery card. `ok` = usable service with a screenshot, `no_preview` = usable
+ * service without one (failed / timed out / skipped), `error` = host with no usable service (its best page).
+ */
+export interface WebPreviewCard {
+  key: string;
+  device_uuid: string;
+  hostname: string | null;
+  ip: string;
+  status: 'ok' | 'no_preview' | 'error';
+  scheme: string;
+  port: number;
+  ports: number[];
+  page_count: number;
+  has_login: boolean;
+  captured_at: string;
+  page: WebPage;
+}
+
+export interface WebPreviewPage {
+  items: WebPreviewCard[];
+  total: number;
+  page: number;
+  page_size: number;
+  /** Cards per status under the other filters. */
+  counts: Record<WebPreviewCard['status'], number>;
+}
+
 export interface WebCapture {
   id: number;
   uuid: string;
