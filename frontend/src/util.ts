@@ -101,6 +101,37 @@ export const EVENT_LABELS: Record<EventType, string> = {
   zone_transfer_open: 'Zone transfer open',
 };
 
+/** Event column badges (Changes table, dashboard Recent changes): short enough that a badge is never
+ *  cut; the full EVENT_LABELS text goes in the cell's title. */
+export const EVENT_SHORT_LABELS: Record<EventType, string> = {
+  device_discovered: 'New device',
+  device_disappeared: 'Not detected',
+  device_reappeared: 'Reappeared',
+  ip_changed: 'IP changed',
+  port_opened: 'Port opened',
+  port_closed: 'Port closed',
+  service_detected: 'New service',
+  service_changed: 'Service',
+  version_changed: 'Version',
+  tag_added: 'Tag added',
+  tag_removed: 'Tag removed',
+  watch_match: 'Watch match',
+  policy_violation: 'Policy',
+  banner_changed: 'Banner',
+  os_changed: 'OS',
+  monitor_change: 'Monitor',
+  geo_mismatch: 'Geo mismatch',
+  cve_watch_match: 'CVE watch',
+  subdomain_new: 'New subdomain',
+  subdomain_gone: 'Subdomain gone',
+  subdomain_ip_changed: 'Subdomain IP',
+  subdomain_exposure_changed: 'Exposure',
+  internal_name_exposed: 'Name exposed',
+  wildcard_detected: 'Wildcard',
+  wildcard_removed: 'Wildcard gone',
+  zone_transfer_open: 'AXFR open',
+};
+
 export const SCAN_TYPE_LABELS = { discovery: 'Discovery', standard: 'Standard', full: 'Full port' } as const;
 
 /** Mirrors backend NETWORK_ZONES / CRITICALITY_LEVELS / exposure thresholds. */

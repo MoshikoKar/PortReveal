@@ -185,14 +185,17 @@ inventory, per-scan snapshot and diff → port scan of new addresses.
 | External / Internal / Both | Resolves on the public resolvers only / internal only / both (split DNS) |
 | Internal (authorized) | Found only through the authorized zone transfer: an outsider did not find it |
 | Internal name exposed | In the zone transfer, also visible publicly (passive sources or public DNS) while resolving to internal ranges |
-| Private IP in public DNS | The public answer holds a private address or one inside a configured network |
+| Private IP in public DNS | The public answer holds a private (RFC1918 / non-global) address |
+| Internal network IP | The public answer holds a public address inside a configured network |
 | Wildcard | Answer equals the domain's wildcard answer. Marked, never filtered |
 | Zone transfer open | A public authoritative server answered AXFR from the scan host (critical) |
 
 Hosting per address: inside a configured network (linked to its device), a private range you do
-not manage, or external (ASN / provider from the local DB-IP database when present). **Lookup**
-resolves one host name inside a configured domain right now (also hosts outside your networks),
-with **Add to inventory** and **Port scan now**; audit-logged.
+not manage, or external (ASN / provider from the local DB-IP database when present). Click a name
+in the inventory for its detail page (current and per-scan DNS, addresses with open ports /
+vulnerabilities, web captures, change events). Device pages list domain names that resolve to
+that host. **Lookup** resolves one host name inside a configured domain right now (also hosts
+outside your networks), with **Add to inventory** and **Port scan now**; audit-logged.
 
 - **Own queue.** Domain scans never use the network-scan worker; *Settings → Domain discovery*
   sets their concurrency (default 1), a DNS query rate limit for the whole scan (default 20/s),

@@ -30,11 +30,13 @@ export const FLAG_LABELS: Record<SubdomainFlag, string> = {
   internal_authorized: 'Internal (authorized)',
   internal_name_exposed: 'Internal name exposed',
   private_ip_public: 'Private IP in public DNS',
+  internal_ip_public: 'Internal network IP',
 };
 export const FLAG_TIPS: Record<SubdomainFlag, string> = {
   internal_authorized: 'Found only through the authorized zone transfer: an outside attacker did not find it',
   internal_name_exposed: 'In the zone transfer and visible publicly while it resolves to internal ranges',
-  private_ip_public: 'The public answer contains a private address or one inside a configured network',
+  private_ip_public: 'The public DNS answer contains a private address (RFC1918 / CGNAT / ULA / loopback): it leaks internal addressing',
+  internal_ip_public: 'The public DNS answer is a public address inside one of your configured networks: it points outsiders at a managed host',
 };
 /** Inventory cell text: up to two sources, then "+N" (the full list is in the cell's title). */
 export function sourcesText(sources: SubdomainSource[]): string {
@@ -43,13 +45,53 @@ export function sourcesText(sources: SubdomainSource[]): string {
   return sources.length > 2 ? `${shown} +${sources.length - 2}` : shown;
 }
 
-/** Compact flag labels for the inventory table (full label in the title). */
-export const FLAG_SHORT: Record<SubdomainFlag, string> = {
-  internal_authorized: 'Authorized', internal_name_exposed: 'Exposed', private_ip_public: 'Private IP',
-};
 export const FLAG_BADGE: Record<SubdomainFlag, string> = {
-  internal_authorized: 'outline', internal_name_exposed: 'high', private_ip_public: 'high',
+  internal_authorized: 'outline', internal_name_exposed: 'high', private_ip_public: 'high', internal_ip_public: 'high',
 };
+
+export interface Finding { key: SubdomainFlag | 'wildcard'; label: string; badge: string; tip: string }
+
+const FINDING_ORDER: Finding['key'][] = ['internal_name_exposed', 'private_ip_public', 'internal_ip_public', 'wildcard', 'internal_authorized'];
+
+/** Finding badges of one row, most severe first (Findings column, detail page). */
+export function subdomainFindings(s: Pick<Subdomain, 'flags' | 'wildcard'>, wildcardTipText = 'Answer matches the wildcard; the name may not really exist.'): Finding[] {
+  return FINDING_ORDER.filter((k) => (k === 'wildcard' ? s.wildcard : s.flags.includes(k))).map((k) => (k === 'wildcard'
+    ? { key: k, label: 'Wildcard', badge: 'medium', tip: wildcardTipText }
+    : { key: k, label: FLAG_LABELS[k], badge: FLAG_BADGE[k], tip: FLAG_TIPS[k] }));
+}
+
+/** IPs cell: the first address plus "+N" (the full list goes in the title). */
+export function ipsCell(ips: string[]): { first: string | null; more: number; title: string } {
+  return { first: ips[0] ?? null, more: Math.max(0, ips.length - 1), title: ips.join('\n') };
+}
+
+/** Hosting cell: the network name or the provider only (full detail in the title). */
+export function hostingShort(h: HostingEntry): string {
+  if (h.kind === 'network') return h.network ?? 'configured network';
+  if (h.kind === 'private') return 'private range';
+  return h.as_org || (h.asn ? `AS${h.asn}` : 'external');
+}
+
+/** Inventory columns in display order; `sort` = server-side sort key. */
+export const SUBDOMAIN_COLUMNS: { key: string; label: string; className: string; sort?: string }[] = [
+  { key: 'name', label: 'Name', className: 'sd-name', sort: 'name' },
+  { key: 'exposure', label: 'Exposure', className: 'sd-fit sd-exposure', sort: 'exposure' },
+  { key: 'findings', label: 'Findings', className: 'sd-fit' },
+  { key: 'ips', label: 'IPs', className: 'sd-flex sd-ips' },
+  { key: 'records', label: 'Records', className: 'sd-flex' },
+  { key: 'hosting', label: 'Hosting', className: 'sd-flex sd-hosting' },
+  { key: 'sources', label: 'Sources', className: 'sd-fit' },
+  { key: 'last_seen', label: 'Last seen', className: 'sd-fit', sort: 'last_seen' },
+  { key: 'status', label: 'Status', className: 'sd-fit', sort: 'status' },
+];
+
+/** Inventory page sizes; the page size lives in the URL (?page_size=). */
+export const PAGE_SIZES = [25, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 50;
+export function pageSizeParam(sp: URLSearchParams): number {
+  const n = Number(sp.get('page_size'));
+  return (PAGE_SIZES as readonly number[]).includes(n) ? n : DEFAULT_PAGE_SIZE;
+}
 
 export const DEFAULT_PUBLIC_RESOLVERS = ['1.1.1.1', '8.8.8.8'];
 
@@ -114,10 +156,11 @@ export function hostingLabel(h: HostingEntry): string {
 }
 
 // --- inventory filters (URL search params <-> API params) -----------------------------------------
-export const SUBDOMAIN_FILTER_KEYS = ['q', 'exposure', 'status', 'source', 'flag', 'wildcard', 'sort', 'page'] as const;
+export const SUBDOMAIN_FILTER_KEYS = ['q', 'exposure', 'status', 'source', 'flag', 'wildcard', 'sort', 'page', 'page_size'] as const;
 export type SubdomainFilterKey = (typeof SUBDOMAIN_FILTER_KEYS)[number];
 
-export function subdomainQuery(sp: URLSearchParams, pageSize: number): Record<string, string | number | boolean | undefined> {
+/** `pageSize` is the default; a valid ?page_size= in the URL wins. */
+export function subdomainQuery(sp: URLSearchParams, pageSize: number = DEFAULT_PAGE_SIZE): Record<string, string | number | boolean | undefined> {
   const val = (k: SubdomainFilterKey) => sp.get(k) || undefined;
   return {
     q: val('q'),
@@ -128,7 +171,7 @@ export function subdomainQuery(sp: URLSearchParams, pageSize: number): Record<st
     wildcard: val('wildcard') === '1' ? true : undefined,
     sort: val('sort') ?? 'name',
     page: Number(sp.get('page') || 1),
-    page_size: pageSize,
+    page_size: sp.has('page_size') ? pageSizeParam(sp) : pageSize,
   };
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { post } from '../api';
 import { DomainDialog } from '../components/DomainDialog';
@@ -7,15 +7,14 @@ import { DomainScanProgress } from '../components/DomainScanProgress';
 import { Card, Empty, ErrorBox, Kpi, Loading, Pager, ScanStatusBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import {
-  EXPOSURE_BADGE, EXPOSURE_LABELS, EXPOSURE_TIPS, FLAG_BADGE, FLAG_LABELS, FLAG_SHORT, FLAG_TIPS, ROW_STATUS, SOURCE_LABELS,
-  SOURCE_TIPS, sourcesText, subdomainStatus, subdomainStatusTip,
-  type DomainDraft, type SubdomainFilterKey, activeFilterCount, draftFromDomain, hostingLabel, patchParams,
-  phaseSummaryTip, problemPhases, scanPollMs, subdomainQuery, wildcardTip, wordlistTruncationNote,
+  EXPOSURE_BADGE, EXPOSURE_LABELS, EXPOSURE_TIPS, FLAG_LABELS, PAGE_SIZES, ROW_STATUS, SOURCE_LABELS, SOURCE_TIPS,
+  SUBDOMAIN_COLUMNS, sourcesText, subdomainStatus, subdomainStatusTip,
+  type DomainDraft, type SubdomainFilterKey, activeFilterCount, draftFromDomain, hostingLabel, hostingShort, ipsCell,
+  pageSizeParam, patchParams, phaseSummaryTip, problemPhases, scanPollMs, subdomainFindings, subdomainQuery, wildcardTip,
+  wordlistTruncationNote,
 } from '../domains';
-import type { Domain, DomainScanJob, Exposure, Paged, Subdomain, SubdomainFlag, SubdomainSource } from '../types';
+import type { Domain, DomainScanJob, Exposure, Paged, Subdomain, SubdomainCounts, SubdomainFlag, SubdomainSource } from '../types';
 import { duration, fmtTime, relTime, useApi, useInFlight } from '../util';
-
-const PAGE = 100;
 
 function scanSummary(j: DomainScanJob): string {
   const s = j.stats;
@@ -32,43 +31,56 @@ function scanSummary(j: DomainScanJob): string {
 
 function HostingCell({ s }: { s: Subdomain }) {
   if (!s.hosting.length) return <span className="muted">-</span>;
-  const first = s.hosting.find((h) => h.kind === 'network') ?? s.hosting[0];
+  const first = s.hosting.find((h) => h.device_uuid) ?? s.hosting.find((h) => h.kind === 'network') ?? s.hosting[0];
   const title = s.hosting.map((h) => `${h.ip}: ${hostingLabel(h)}`).join('\n');
   return (
     <span className="cell-ellipsis" title={title}>
-      {first.device_uuid ? <Link to={`/devices/${first.device_uuid}`} onClick={(e) => e.stopPropagation()}>{hostingLabel(first)}</Link> : hostingLabel(first)}
+      {first.device_uuid ? <Link to={`/devices/${first.device_uuid}`}>{hostingShort(first)}</Link> : hostingShort(first)}
       {s.hosting.length > 1 && <span className="muted"> +{s.hosting.length - 1}</span>}
     </span>
   );
 }
 
-function SubdomainRow({ s, domain, showWildcard, hostingFlex }: {
-  s: Subdomain; domain: Domain; showWildcard: boolean; hostingFlex: boolean;
-}) {
+function IpsCell({ s }: { s: Subdomain }) {
+  const c = ipsCell(s.ips);
+  if (!c.first) return <span className="muted">-</span>;
+  const dev = s.hosting.find((h) => h.ip === c.first)?.device_uuid;
+  return (
+    <span className="sd-ips-cell" title={c.title}>
+      <span className="mono small">{dev ? <Link to={`/devices/${dev}`}>{c.first}</Link> : c.first}</span>
+      {c.more > 0 && <span className="muted small">+{c.more}</span>}
+    </span>
+  );
+}
+
+function SubdomainRow({ s, domain }: { s: Subdomain; domain: Domain }) {
   const st = ROW_STATUS[subdomainStatus(s)];
-  const authorized = s.flags.includes('internal_authorized');
+  const findings = subdomainFindings(s, wildcardTip(domain.name, domain.wildcard));
   return (
     <tr className={s.status === 'gone' ? 'dim' : undefined}>
-      <td className="sd-name"><span className="cell-ellipsis mono" title={s.name}>{s.name}</span></td>
-      <td className="sd-fit">
-        <span className={`badge ${EXPOSURE_BADGE[s.exposure]}`} title={EXPOSURE_TIPS[s.exposure]}>
-          {authorized && s.exposure === 'internal' ? 'Internal (authorized)' : EXPOSURE_LABELS[s.exposure]}
-        </span>
-        {s.flags.filter((f) => f !== 'internal_authorized' || s.exposure !== 'internal').map((f) => (
-          <span key={f} className={`badge ${FLAG_BADGE[f]}`} title={`${FLAG_LABELS[f]}: ${FLAG_TIPS[f]}`} style={{ marginLeft: 4 }}>{FLAG_SHORT[f]}</span>
-        ))}
+      <td className="sd-name">
+        <Link className="cell-ellipsis mono" title={s.name} to={`/domains/${domain.id}/subdomains/${s.id}`}>{s.name}</Link>
       </td>
+      <td className="sd-fit sd-exposure">
+        <span className={`badge ${EXPOSURE_BADGE[s.exposure]}`} title={EXPOSURE_TIPS[s.exposure]}>{EXPOSURE_LABELS[s.exposure]}</span>
+      </td>
+      <td className="sd-fit" data-testid="subdomain-findings">
+        {findings.length ? (
+          <span className="sd-findings" title={findings.map((f) => `${f.label}: ${f.tip}`).join('\n')}>
+            <span className={`badge ${findings[0].badge}`}>{findings[0].label}</span>
+            {findings.length > 1 && <span className="muted small">+{findings.length - 1}</span>}
+          </span>
+        ) : <span className="muted">-</span>}
+      </td>
+      <td className="sd-flex sd-ips"><IpsCell s={s} /></td>
       <td className="small sd-flex"><span className="cell-ellipsis" title={[
         s.records.internal && `internal: ${[...s.records.internal.a, ...s.records.internal.aaaa, ...s.records.internal.cname].join(', ') || '-'}`,
         s.records.public && `public: ${[...s.records.public.a, ...s.records.public.aaaa, ...s.records.public.cname].join(', ') || '-'}`,
       ].filter(Boolean).join('\n')}>{s.records_summary}</span></td>
-      <td className="sd-flex sd-ips"><span className="cell-ellipsis mono small" title={s.ips.join('\n')}>{s.ips.join(', ') || '-'}</span></td>
-      <td className={`small ${hostingFlex ? 'sd-flex sd-hosting' : 'sd-fit'}`}><HostingCell s={s} /></td>
+      <td className="small sd-flex sd-hosting"><HostingCell s={s} /></td>
       <td className="small sd-fit" title={s.sources.map((src) => `${SOURCE_LABELS[src]}: ${SOURCE_TIPS[src]}`).join('\n')}>
         {sourcesText(s.sources)}
       </td>
-      {showWildcard && <td className="sd-fit">{s.wildcard ? <span className="badge medium" title={wildcardTip(domain.name, domain.wildcard)}>Wildcard</span> : null}</td>}
-      <td className="small sd-fit" title={fmtTime(s.first_seen)}>{relTime(s.first_seen)}</td>
       <td className="small sd-fit" title={fmtTime(s.last_seen)}>{relTime(s.last_seen)}</td>
       <td className="sd-fit"><span className={`badge ${st.badge}`} title={subdomainStatusTip(s, fmtTime)} data-testid="subdomain-status">{st.label}</span></td>
     </tr>
@@ -83,19 +95,23 @@ export default function DomainDetail() {
   const [draft, setDraft] = useState<DomainDraft | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const { pending, track } = useInFlight();
-  // Poll only while a scan is queued / running (useApi also skips ticks while the tab is hidden).
+  // Poll only while a scan is queued / running (useApi also skips ticks while the tab is hidden); only
+  // the current inventory page and the counters refresh, the scan history once the scan ends.
   const [pollMs, setPollMs] = useState<number | undefined>(undefined);
+  const pageSize = pageSizeParam(sp);
   const domain = useApi<Domain>(`/domains/${id}`, undefined, pollMs);
-  const subs = useApi<Paged<Subdomain>>(`/domains/${id}/subdomains`, subdomainQuery(sp, PAGE), pollMs);
-  const scans = useApi<Paged<DomainScanJob>>(`/domains/${id}/scans`, { page_size: 20 }, pollMs);
+  const counts = useApi<SubdomainCounts>(`/domains/${id}/subdomains/counts`, undefined, pollMs);
+  const subs = useApi<Paged<Subdomain>>(`/domains/${id}/subdomains`, subdomainQuery(sp, pageSize), pollMs);
+  const scans = useApi<Paged<DomainScanJob>>(`/domains/${id}/scans`, { page_size: 20 });
   const wasActive = useRef(false);
   const lastStatus = domain.data?.last_scan?.status;
   useEffect(() => {
     const next = scanPollMs(domain.data?.last_scan);
     setPollMs(next);
     if (wasActive.current && next === undefined) {
-      // The scan just ended: one last refresh of the final inventory and history.
+      // The scan just ended: one last refresh of the final inventory, counters and history.
       subs.reload();
+      counts.reload();
       scans.reload();
     }
     wasActive.current = next !== undefined;
@@ -117,10 +133,7 @@ export default function DomainDetail() {
   const last = d.last_scan;
   const active = !!last && (last.status === 'queued' || last.status === 'running');
   const sort = sp.get('sort') ?? 'name';
-  // The Wildcard column only when a listed row is wildcard (the "Wildcard only" filter stays); Hosting
-  // shrinks to a compact "-" column when no listed row has hosting data.
-  const showWildcard = !!subs.data?.items.some((s) => s.wildcard);
-  const hostingFlex = !!subs.data?.items.some((s) => s.hosting.length);
+  const c = counts.data ?? d.counts;
   const sortTh = (key: string, label: string, className?: string) => (
     <SortTh className={className} active={sort.replace('-', '') === key} desc={sort.startsWith('-')}
       onSort={() => set({ sort: sort === key ? `-${key}` : key })}>{label}</SortTh>
@@ -146,7 +159,7 @@ export default function DomainDetail() {
       setActionError(e.message);
     }
   });
-  const reloadAll = () => { domain.reload(); subs.reload(); scans.reload(); };
+  const reloadAll = () => { domain.reload(); counts.reload(); subs.reload(); scans.reload(); };
 
   return (
     <>
@@ -182,12 +195,12 @@ export default function DomainDetail() {
       )}
       {active && last && <DomainScanProgress scan={last} />}
       <div className="grid kpis five">
-        <Kpi label="Subdomains" value={d.counts.active} onClick={() => set({ exposure: undefined, status: undefined })} />
+        <Kpi label="Subdomains" value={c.active} onClick={() => set({ exposure: undefined, status: undefined })} />
         {(['external', 'internal', 'both'] as Exposure[]).map((e) => (
-          <Kpi key={e} label={EXPOSURE_LABELS[e]} value={d.counts[e]} active={sp.get('exposure') === e}
+          <Kpi key={e} label={EXPOSURE_LABELS[e]} value={c[e]} active={sp.get('exposure') === e}
             onClick={() => set({ exposure: sp.get('exposure') === e ? undefined : e })} />
         ))}
-        <Kpi label="Wildcard" value={d.counts.wildcard} active={sp.get('wildcard') === '1'}
+        <Kpi label="Wildcard" value={c.wildcard} active={sp.get('wildcard') === '1'}
           sub={d.wildcard.public.length || d.wildcard.internal.length ? 'wildcard DNS detected' : undefined}
           onClick={() => set({ wildcard: sp.get('wildcard') === '1' ? undefined : '1' })} />
       </div>
@@ -211,34 +224,30 @@ export default function DomainDetail() {
             <option value="active">Active</option><option value="gone">Gone</option><option value="all">All</option>
           </select>
           <label className="check small"><input type="checkbox" checked={sp.get('wildcard') === '1'} onChange={(e) => set({ wildcard: e.target.checked ? '1' : undefined })} />Wildcard only</label>
-          {activeFilterCount(sp) > 0 && <button className="btn sm ghost" onClick={() => { setQInput(''); setSp(new URLSearchParams()); }}>Clear</button>}
+          {activeFilterCount(sp) > 0 && <button className="btn sm ghost" onClick={() => { setQInput(''); setSp(patchParams(new URLSearchParams(), { page_size: sp.get('page_size') ?? undefined })); }}>Clear</button>}
         </div>
       }>
         <ErrorBox error={subs.error} />
-        {subs.loading && !subs.data ? <SkeletonRows cols={10} /> : !subs.data?.items.length ? (
+        {subs.loading && !subs.data ? <SkeletonRows cols={SUBDOMAIN_COLUMNS.length} /> : !subs.data?.items.length ? (
           <Empty>{d.last_scan ? 'No subdomains match these filters.' : 'No scan yet. Run a scan to build the inventory.'}</Empty>
         ) : (
           <div className="table-wrap">
             <table className="domain-table subdomain-table" data-testid="subdomain-table">
               <thead>
                 <tr>
-                  {sortTh('name', 'Name', 'sd-name')}
-                  {sortTh('exposure', 'Exposure', 'sd-fit')}
-                  <th className="sd-flex">Records</th>
-                  <th className="sd-flex sd-ips">IPs</th>
-                  <th className={hostingFlex ? 'sd-flex sd-hosting' : 'sd-fit'}>Hosting</th>
-                  <th className="sd-fit">Sources</th>
-                  {showWildcard && <th className="sd-fit">Wildcard</th>}
-                  {sortTh('first_seen', 'First seen', 'sd-fit')}
-                  {sortTh('last_seen', 'Last seen', 'sd-fit')}
-                  {sortTh('status', 'Status', 'sd-fit')}
+                  {SUBDOMAIN_COLUMNS.map((col) => (col.sort
+                    ? <Fragment key={col.key}>{sortTh(col.sort, col.label, col.className)}</Fragment>
+                    : <th key={col.key} className={col.className}>{col.label}</th>))}
                 </tr>
               </thead>
-              <tbody>{subs.data.items.map((s) => <SubdomainRow key={s.id} s={s} domain={d} showWildcard={showWildcard} hostingFlex={hostingFlex} />)}</tbody>
+              <tbody>{subs.data.items.map((s) => <SubdomainRow key={s.id} s={s} domain={d} />)}</tbody>
             </table>
           </div>
         )}
-        {subs.data && <Pager page={Number(sp.get('page') || 1)} pageSize={PAGE} total={subs.data.total} onPage={(p) => set({ page: String(p) })} />}
+        {subs.data && (
+          <Pager page={Number(sp.get('page') || 1)} pageSize={pageSize} total={subs.data.total} onPage={(p) => set({ page: String(p) })}
+            pageSizes={PAGE_SIZES} onPageSize={(n) => set({ page_size: String(n) })} />
+        )}
       </Card>
       <Card title="Scan history" flush>
         <ErrorBox error={scans.error} />

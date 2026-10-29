@@ -7,7 +7,8 @@ Exposure (per name, from the two resolver views):
   unresolved resolves nowhere (kept only when AXFR or an operator vouches for the name)
 
 Flags:
-  private_ip_public      the public answer contains a private address or one inside a configured network
+  private_ip_public      the public answer contains a private (RFC1918 / non-global) address
+  internal_ip_public     the public answer contains a public address inside a configured network
   internal_authorized    the name was found only through the authorized zone transfer (ground truth)
   internal_name_exposed  an AXFR name that is also visible publicly (passive sources or public DNS)
                          while it resolves to internal ranges
@@ -25,6 +26,7 @@ from ...models import (
     EXPOSURE_INTERNAL,
     EXPOSURE_UNRESOLVED,
     FLAG_INTERNAL_AUTHORIZED,
+    FLAG_INTERNAL_IP_PUBLIC,
     FLAG_INTERNAL_NAME_EXPOSED,
     FLAG_PRIVATE_IP_PUBLIC,
     SOURCE_AXFR,
@@ -99,14 +101,17 @@ def compute_flags(sources: Iterable[str], exposure: str, internal_ips: Iterable[
     srcs = set(sources)
     internal_ips, public_ips = list(internal_ips), list(public_ips)
     flags: list[str] = []
-    private_public = any(is_internal_ip(ip, in_networks) for ip in public_ips)
+    private_public = any(is_private_ip(ip) for ip in public_ips)
+    network_public = bool(in_networks) and any(not is_private_ip(ip) and in_networks(ip) for ip in public_ips)
     if private_public:
         flags.append(FLAG_PRIVATE_IP_PUBLIC)
+    if network_public:
+        flags.append(FLAG_INTERNAL_IP_PUBLIC)
     if srcs == {SOURCE_AXFR}:
         flags.append(FLAG_INTERNAL_AUTHORIZED)
     if SOURCE_AXFR in srcs and (SOURCE_PASSIVE in srcs or public_ips):
         internal_only = exposure == EXPOSURE_INTERNAL and any(is_internal_ip(ip, in_networks) for ip in internal_ips)
-        if private_public or internal_only:
+        if private_public or network_public or internal_only:
             flags.append(FLAG_INTERNAL_NAME_EXPOSED)
     return flags
 
@@ -114,7 +119,7 @@ def compute_flags(sources: Iterable[str], exposure: str, internal_ips: Iterable[
 def exposed_publicly(flags: Iterable[str]) -> bool:
     """The critical condition: an internal name / address is visible from the outside."""
     f = set(flags)
-    return FLAG_INTERNAL_NAME_EXPOSED in f or FLAG_PRIVATE_IP_PUBLIC in f
+    return FLAG_INTERNAL_NAME_EXPOSED in f or FLAG_PRIVATE_IP_PUBLIC in f or FLAG_INTERNAL_IP_PUBLIC in f
 
 
 def hosting_entry(ip: str, *, in_networks: InNetworks, network_name: str | None = None,

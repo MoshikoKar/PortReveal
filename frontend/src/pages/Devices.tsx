@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
-import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, macSourceTitle, NO_NAME_TIP, NO_NAME_VPN_TIP, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
+import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, NO_NAME_TIP, NO_NAME_VPN_TIP, Pager, PortChips, RiskBadge, ScoreBadge, SkeletonRows, SortTh } from '../components/ui';
 import { useApp } from '../context';
 import type { DeviceSummary, Network, Paged } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
@@ -252,7 +252,7 @@ export default function Devices() {
         )}
         {loading && !data ? <SkeletonRows cols={isAdmin ? 13 : 12} /> : !items.length ? <Empty>No devices match.</Empty> : (
           <div className="table-wrap">
-            <table>
+            <table className="devices-table">
               <thead>
                 <tr>
                   {isAdmin && (
@@ -264,7 +264,7 @@ export default function Devices() {
                   {sortTh('ip', 'IP address')}
                   {sortTh('hostname', 'Hostname')}
                   <th>Services</th>
-                  <th>MAC / vendor</th>
+                  <th>Vendor</th>
                   {sortTh('open_ports', 'Open ports')}
                   {showOs && sortTh('os', 'OS')}
                   {showRtt && <th title="Last measured round-trip time">RTT</th>}
@@ -284,10 +284,12 @@ export default function Devices() {
                   <tr className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
                     {isAdmin && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(d.uuid)} onChange={() => toggle(d.uuid)} /></td>}
                     <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} scannerHost={d.scanner_host} supersededBy={d.superseded_by} /></td>
-                    <td className="mono">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></td>
-                    <td>
-                      {d.hostname ?? d.discovery_name ?? <span className="muted" title={vpn ? NO_NAME_VPN_TIP : NO_NAME_TIP}>-</span>}
-                      {!d.hostname && d.discovery_name && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
+                    <td className="mono nowrap">{d.current_ip} <IpAssignmentBadge value={d.ip_assignment} /></td>
+                    <td className="dev-fluid dev-host" title={d.hostname ?? d.discovery_name ?? undefined}>
+                      <span className="cell-ellipsis">
+                        {d.hostname ?? d.discovery_name ?? <span className="muted" title={vpn ? NO_NAME_VPN_TIP : NO_NAME_TIP}>-</span>}
+                        {!d.hostname && d.discovery_name && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
+                      </span>
                     </td>
                     <td className="nowrap">
                       {d.open_ports.length > 0 && (
@@ -298,7 +300,10 @@ export default function Devices() {
                         </button>
                       )}
                     </td>
-                    <td>{d.mac && <span className="mono" title={macSourceTitle(d.mac_source)}>{d.mac}</span>}{d.vendor && <div className="muted small">{d.vendor}</div>}</td>
+                    {/* Vendor only, one line (the MAC is on the device page). */}
+                    <td className="small dev-fluid dev-vendor" title={d.vendor ?? undefined}>
+                      {d.vendor ? <span className="cell-ellipsis">{d.vendor}</span> : <span className="muted">-</span>}
+                    </td>
                     <td className="nowrap"><PortChips ports={d.open_ports} max={portChipMax} /></td>
                     {showOs && (
                       <td className="small nowrap fluid-ellipsis" title={d.os_name ? `${d.os_name}${d.os_accuracy != null ? ` (${d.os_accuracy}% confidence)` : ''}` : undefined}>
@@ -313,7 +318,9 @@ export default function Devices() {
                     {showRtt && (
                       <td className="mono small nowrap">{d.last_rtt_ms != null ? `${d.last_rtt_ms.toFixed(1)} ms` : <span className="muted">-</span>}</td>
                     )}
-                    <td className="small">{d.network_name ?? <span className="muted">-</span>}</td>
+                    <td className="small dev-fluid dev-network" title={d.network_name ?? undefined}>
+                      {d.network_name ? <span className="cell-ellipsis">{d.network_name}</span> : <span className="muted">-</span>}
+                    </td>
                     <td>{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">-</span>}</td>
                     <td>{d.risk_scored_at != null ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">-</span>}</td>
                     <td>{d.risk_scored_at != null ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">-</span>}</td>

@@ -296,8 +296,8 @@ def test_flags_private_ip_exposed_and_ground_truth():
     assert is_private_ip("10.1.2.3") and is_private_ip("fd00::1") and not is_private_ip("198.51.100.1")
     # Split DNS answering a private address publicly
     assert compute_flags(["passive"], "both", ["10.1.2.3"], ["10.1.2.3"]) == ["private_ip_public"]
-    # Public answer inside a configured network counts as internal too
-    assert "private_ip_public" in compute_flags(["passive"], "external", [], ["192.0.2.9"], in_lab)
+    # Public answer inside a configured network: its own finding (not "private IP")
+    assert compute_flags(["passive"], "external", [], ["192.0.2.9"], in_lab) == ["internal_ip_public"]
     # Ordinary split DNS (public address outside): nothing to flag
     assert compute_flags(["passive", "axfr"], "both", ["192.0.2.9"], ["198.51.100.9"], in_lab) == []
     # AXFR only -> internal (authorized)

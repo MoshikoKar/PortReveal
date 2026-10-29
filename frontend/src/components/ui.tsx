@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { ChangeEvent, DeviceStatus, ScanStatus } from '../types';
-import { EVENT_LABELS, scoreLevel } from '../util';
+import { EVENT_LABELS, EVENT_SHORT_LABELS, scoreLevel } from '../util';
 
 export function Card({ title, actions, children, flush, className, id }: {
   title?: ReactNode; actions?: ReactNode; children: ReactNode; flush?: boolean; className?: string; id?: string;
@@ -86,8 +86,8 @@ export function ScanStatusBadge({ status }: { status: ScanStatus }) {
   );
 }
 
-export function SeverityBadge({ ev }: { ev: ChangeEvent }) {
-  return <span className={`badge ${ev.severity}`}>{EVENT_LABELS[ev.event_type] ?? ev.event_type}</span>;
+export function SeverityBadge({ ev, short }: { ev: ChangeEvent; short?: boolean }) {
+  return <span className={`badge ${ev.severity}`}>{(short ? EVENT_SHORT_LABELS : EVENT_LABELS)[ev.event_type] ?? ev.event_type}</span>;
 }
 
 const SCORE_CLASS = { high: 'high', medium: 'medium', low: 'ok' } as const;
@@ -248,17 +248,25 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
-export function Pager({ page, pageSize, total, onPage }: {
+export function Pager({ page, pageSize, total, onPage, pageSizes, onPageSize }: {
   page: number; pageSize: number; total: number; onPage: (p: number) => void;
+  /** Optional rows-per-page choice (shown with onPageSize). */
+  pageSizes?: readonly number[]; onPageSize?: (n: number) => void;
 }) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
-  if (total <= pageSize) return <div className="pager"><span>{total} item{total === 1 ? '' : 's'}</span></div>;
+  const sizeSelect = pageSizes && onPageSize && (
+    <select value={pageSize} onChange={(e) => onPageSize(Number(e.target.value))} aria-label="Rows per page">
+      {pageSizes.map((n) => <option key={n} value={n}>{n} / page</option>)}
+    </select>
+  );
+  if (total <= pageSize) return <div className="pager"><span>{total} item{total === 1 ? '' : 's'}</span>{sizeSelect}</div>;
   return (
     <div className="pager">
       <span>
         {(page - 1) * pageSize + 1}-{Math.min(page * pageSize, total)} of {total}
       </span>
       <div className="row">
+        {sizeSelect}
         <button className="btn sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
         <span>Page {page} / {pages}</span>
         <button className="btn sm" disabled={page >= pages} onClick={() => onPage(page + 1)}>Next</button>

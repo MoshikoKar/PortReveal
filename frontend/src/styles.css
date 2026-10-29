@@ -595,12 +595,13 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .event-table .event-change { width: 65%; max-width: 0; min-width: 120px; }
 .event-table.compact .event-device { min-width: 64px; }
 .event-table.compact .event-change { min-width: 80px; }
-/* Dashboard Recent changes: Time / Event / Port take only what they need (the event badge is capped,
-   full label in the title); Device and Change share the rest. */
+/* Dashboard Recent changes: Time / Event / Port take only what they need (the event badge shows a short
+   label, never cut; full label in the title); Device and Change share the rest. */
 .event-table.compact th, .event-table.compact td { padding-left: 6px; padding-right: 6px; }
 .event-table.compact .event-time, .event-table.compact .event-port { width: 1%; }
-.event-table.compact .event-type { width: 1%; max-width: 104px; }
-.event-table.compact .event-type .badge { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; line-height: 22px; }
+.event-table .event-type { width: 1%; }
+/* line-height 0: the line box is exactly the badge, so the cell's vertical-align: middle centers it. */
+.event-table td.event-type { line-height: 0; }
 .event-device-cell { display: flex; flex-direction: column; justify-content: center; min-width: 0; min-height: 36px; }
 .event-device-cell .small { line-height: 1.3; }
 .event-table.compact .event-device-cell { min-height: 32px; }
@@ -639,6 +640,13 @@ table.heatmap col.heatmap-label { width: 180px; }
 .heatmap-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* One-line table cell text (e.g. Devices OS column): the full value lives in the cell's title. */
 .cell-ellipsis { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Devices list: one line per row and no horizontal scroll. Hostname / Vendor / Network share the
+   width left by the fixed columns and truncate (full text in the title); max-width: 0 lets the auto
+   table layout shrink them below their content width. */
+.devices-table td.dev-fluid { max-width: 0; }
+.devices-table td.dev-host { width: 20%; min-width: 90px; }
+.devices-table td.dev-vendor { width: 10%; min-width: 60px; }
+.devices-table td.dev-network { width: 8%; min-width: 60px; }
 /* Fluid column: takes the table's leftover width and truncates instead of forcing a horizontal scroll
    (max-width: 0 drops the cell's min-content width so the auto table layout can shrink it). */
 td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
@@ -647,16 +655,22 @@ td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 .domain-table th, .domain-table td { white-space: nowrap; }
 .domain-table .domain-col-name { width: 30%; max-width: 0; min-width: 160px; }
 .domain-table .domain-col-fluid { width: 18%; max-width: 0; min-width: 110px; }
-/* Subdomain inventory: one line per row, never wider than the card. Short columns (exposure, sources,
-   wildcard, seen, status) take their content width; Name gets the most of the rest, Records / IPs /
-   Hosting share what remains. Shrinkable cells truncate with the full value in the title
-   (max-width: 0 drops their min-content width so the auto layout can shrink them). */
+/* Subdomain inventory: one line per row (same height on every row), never wider than the card. Short
+   columns (exposure, findings, sources, last seen, status) take their content width; Name gets the most
+   of the rest, IPs / Records / Hosting share what remains. Shrinkable cells truncate with the full value
+   in the title (max-width: 0 drops their min-content width so the auto layout can shrink them). */
 .subdomain-table th, .subdomain-table td { white-space: nowrap; padding-left: 8px; padding-right: 8px; }
+.subdomain-table td { height: 38px; }
 .subdomain-table .sd-fit { width: 1%; }
-.subdomain-table .sd-name { width: 40%; max-width: 0; min-width: 100px; }
+.subdomain-table .sd-name { width: 34%; max-width: 0; min-width: 100px; }
 .subdomain-table .sd-flex { width: 10%; max-width: 0; min-width: 48px; }
-.subdomain-table .sd-ips { width: 16%; }
+.subdomain-table .sd-ips { width: 14%; }
 .subdomain-table .sd-hosting { width: 12%; }
+.subdomain-table .sd-exposure { text-align: center; }
+.subdomain-table .sd-exposure .badge { width: 84px; }
+.sd-ips-cell { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sd-ips-cell > .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sd-findings { display: inline-flex; align-items: center; gap: 4px; }
 
 /* Scan history summary: up to two lines, then an ellipsis (full text in the title). */
 .cell-clamp-2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; white-space: normal; overflow-wrap: anywhere; }

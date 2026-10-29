@@ -60,7 +60,7 @@ export function EventTable({ events, compact, tableRef }: {
           return (
             <tr key={e.id}>
               <td className="muted event-time" title={fmtTime(e.created_at, true)}>{compact ? fmtShortTime(e.created_at) : fmtTime(e.created_at)}</td>
-              <td className="event-type" title={EVENT_LABELS[e.event_type] ?? e.event_type}><SeverityBadge ev={e} /></td>
+              <td className="event-type" title={EVENT_LABELS[e.event_type] ?? e.event_type}><SeverityBadge ev={e} short /></td>
               <td className="event-device">
                 <div className="event-device-cell">
                   <span className="cell-ellipsis" title={e.device_label ?? undefined}>

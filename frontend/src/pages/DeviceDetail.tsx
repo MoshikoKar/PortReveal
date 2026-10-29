@@ -8,7 +8,8 @@ import { WebCaptureDialog } from '../components/WebCaptureDialog';
 import { ShotTile } from '../components/WebShots';
 import { Card, DeviceStatusBadge, Empty, ErrorBox, IpAssignmentBadge, Loading, MacSourceBadge, MockBadge, NO_NAME_TIP, NO_NAME_VPN_TIP, Pager, RiskBadge, ScanStatusBadge, ScoreBadge, VulnJobBadge } from '../components/ui';
 import { useApp } from '../context';
-import type { ChangeEvent, DeviceDetail as Detail, DeviceWebInterfaces, Paged } from '../types';
+import { EXPOSURE_BADGE, EXPOSURE_LABELS, EXPOSURE_TIPS } from '../domains';
+import type { ChangeEvent, DeviceDetail as Detail, DeviceDomainName, DeviceWebInterfaces, Paged } from '../types';
 import { SCAN_TYPE_LABELS, fmtTime, httpTitleDisplay, relTime, useApi } from '../util';
 
 const PREVIEW_ROWS = 10;
@@ -70,6 +71,7 @@ export default function DeviceDetail() {
   const events = useApi<Paged<ChangeEvent>>(`/devices/${uuid}/events`, { page: evPage, page_size: 15 }, 15000);
   const scans = useApi<Paged<ScanRow>>(`/devices/${uuid}/scans`, { page: scPage, page_size: 15 });
   const webIf = useApi<DeviceWebInterfaces>(`/devices/${uuid}/web-interfaces`, undefined, 15000);
+  const domainNames = useApi<DeviceDomainName[]>(`/devices/${uuid}/domain-names`);
 
   if (!d) return <>{error ? <ErrorBox error={error} /> : <Loading />}</>;
   const open = d.ports.filter((p) => p.is_open);
@@ -333,6 +335,27 @@ export default function DeviceDetail() {
           );
         })()}
       </Card>
+
+      {!!domainNames.data?.length && (
+        <Card title={`Domain names - ${domainNames.data.length}`} flush>
+          <div className="table-wrap">
+            <table className="domain-table" data-testid="device-domain-names">
+              <thead><tr><th className="domain-col-name">Name</th><th>Domain</th><th>Exposure</th><th>Status</th><th>Last seen</th></tr></thead>
+              <tbody>
+                {domainNames.data.map((n) => (
+                  <tr key={n.id} className={n.status === 'gone' ? 'dim' : undefined}>
+                    <td className="domain-col-name"><Link className="cell-ellipsis mono" title={n.name} to={`/domains/${n.domain_id}/subdomains/${n.id}`}>{n.name}</Link></td>
+                    <td className="small"><Link to={`/domains/${n.domain_id}`}>{n.domain_name}</Link></td>
+                    <td><span className={`badge ${EXPOSURE_BADGE[n.exposure]}`} title={EXPOSURE_TIPS[n.exposure]}>{EXPOSURE_LABELS[n.exposure]}</span></td>
+                    <td className="small">{n.status === 'gone' ? 'Gone' : 'Active'}</td>
+                    <td className="small" title={fmtTime(n.last_seen)}>{relTime(n.last_seen)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       <div className="grid halves">
         <Card title="Change history" flush>

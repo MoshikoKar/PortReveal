@@ -263,7 +263,9 @@ WORDLIST_MODES = (WORDLIST_MODE_NONE, WORDLIST_MODE_LIBRARY, WORDLIST_MODE_CUSTO
 # Subdomain flags (attacker view vs ground truth)
 FLAG_INTERNAL_AUTHORIZED = "internal_authorized"  # found only through the authorized AXFR
 FLAG_INTERNAL_NAME_EXPOSED = "internal_name_exposed"  # AXFR name also public, resolving to internal ranges
-FLAG_PRIVATE_IP_PUBLIC = "private_ip_public"  # public answer contains a private / configured-network IP
+FLAG_PRIVATE_IP_PUBLIC = "private_ip_public"  # public answer contains a private (RFC1918 / non-global) IP
+FLAG_INTERNAL_IP_PUBLIC = "internal_ip_public"  # public answer contains a public IP inside a configured network
+SUBDOMAIN_FLAGS = (FLAG_INTERNAL_AUTHORIZED, FLAG_INTERNAL_NAME_EXPOSED, FLAG_PRIVATE_IP_PUBLIC, FLAG_INTERNAL_IP_PUBLIC)
 
 # Closed value sets the database enforces with CHECK constraints (NULL stays allowed where the
 # column is nullable); data import validates against the same sets. Adding a value here needs a
@@ -1189,6 +1191,11 @@ class Subdomain(Base):
     __table_args__ = (
         UniqueConstraint("domain_id", "name", name="uq_subdomain_name"),
         Index("ix_subdomains_domain_status", "domain_id", "status"),
+        # Inventory sort / filter columns (paged per domain) and the device page's "Domain names".
+        Index("ix_subdomains_domain_exposure", "domain_id", "exposure"),
+        Index("ix_subdomains_domain_wildcard", "domain_id", "wildcard"),
+        Index("ix_subdomains_domain_last_seen", "domain_id", "last_seen"),
+        Index("ix_subdomains_device_id", "device_id"),
         one_of("subdomains", "exposure"),
         one_of("subdomains", "status"),
     )

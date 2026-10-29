@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_PAGE_SIZE, FLAG_LABELS, FLAG_TIPS, SUBDOMAIN_COLUMNS, hostingShort, ipsCell, pageSizeParam, subdomainFindings,
   activeFilterCount, checkLookupInput, currentPhase, domainBody, draftFromDomain, emptyDraft, formatDuration, formatEta,
   formatPercent, formatRate, hostingLabel, progressWidth, keyPayload, keyPlaceholder, lookupView, patchParams, phaseCounter,
   phaseSummaryTip, problemPhases, SCAN_POLL_MS, scanPollMs, splitList, stepperItems, subdomainQuery, wildcardTip,
@@ -244,5 +245,54 @@ describe('inventory row status (one badge per row)', () => {
     expect(sourcesText([])).toBe('-');
     expect(sourcesText(['axfr', 'passive'])).toBe('AXFR, Passive');
     expect(sourcesText(['axfr', 'manual', 'passive', 'wordlist'])).toBe('AXFR, Manual +2');
+  });
+});
+
+describe('subdomain inventory columns', () => {
+  it('renders the columns in the agreed order (first seen lives on the detail page)', () => {
+    expect(SUBDOMAIN_COLUMNS.map((c) => c.label)).toEqual(
+      ['Name', 'Exposure', 'Findings', 'IPs', 'Records', 'Hosting', 'Sources', 'Last seen', 'Status']);
+    expect(SUBDOMAIN_COLUMNS.filter((c) => c.sort).map((c) => c.sort)).toEqual(['name', 'exposure', 'last_seen', 'status']);
+  });
+
+  it('splits the private-IP finding from the configured-network one, most severe first', () => {
+    expect(FLAG_LABELS.private_ip_public).toBe('Private IP in public DNS');
+    expect(FLAG_LABELS.internal_ip_public).toBe('Internal network IP');
+    expect(FLAG_TIPS.private_ip_public).toMatch(/private address/);
+    expect(FLAG_TIPS.internal_ip_public).toMatch(/configured networks/);
+    const f = subdomainFindings({ flags: ['internal_authorized', 'internal_ip_public', 'internal_name_exposed'], wildcard: true });
+    expect(f.map((x) => x.key)).toEqual(['internal_name_exposed', 'internal_ip_public', 'wildcard', 'internal_authorized']);
+    expect(subdomainFindings({ flags: [], wildcard: false })).toEqual([]);
+  });
+
+  it('shows the first IP plus "+N" and a short hosting label', () => {
+    expect(ipsCell(['192.0.2.10', '198.51.100.10', '2001:db8::1'])).toEqual(
+      { first: '192.0.2.10', more: 2, title: '192.0.2.10\n198.51.100.10\n2001:db8::1' });
+    expect(ipsCell([])).toEqual({ first: null, more: 0, title: '' });
+    const base = { ip: '198.51.100.1', network: null, device_uuid: null, device_label: null, asn: null, as_org: null };
+    expect(hostingShort({ ...base, kind: 'network', network: 'Lab' })).toBe('Lab');
+    expect(hostingShort({ ...base, kind: 'external', asn: 64500, as_org: 'Example Hosting' })).toBe('Example Hosting');
+    expect(hostingShort({ ...base, kind: 'external', asn: 64500 })).toBe('AS64500');
+    expect(hostingShort({ ...base, kind: 'private' })).toBe('private range');
+  });
+});
+
+describe('inventory page state in the URL', () => {
+  it('reads the page size from the URL (25/50/100, default 50)', () => {
+    expect(pageSizeParam(new URLSearchParams(''))).toBe(DEFAULT_PAGE_SIZE);
+    expect(DEFAULT_PAGE_SIZE).toBe(50);
+    expect(pageSizeParam(new URLSearchParams('page_size=25'))).toBe(25);
+    expect(pageSizeParam(new URLSearchParams('page_size=999'))).toBe(50);
+    expect(subdomainQuery(new URLSearchParams('page_size=100&page=2&flag=internal_ip_public'))).toMatchObject(
+      { page_size: 100, page: 2, flag: 'internal_ip_public' });
+  });
+
+  it('a page-size change resets the page but keeps the filters', () => {
+    const sp = new URLSearchParams('exposure=external&page=3&page_size=25');
+    const next = patchParams(sp, { page_size: '100' });
+    expect(next.get('page')).toBeNull();
+    expect(next.get('page_size')).toBe('100');
+    expect(next.get('exposure')).toBe('external');
+    expect(activeFilterCount(next)).toBe(1); // page size is not a filter
   });
 });

@@ -1107,7 +1107,7 @@ export interface DomainToolStatus {
 
 export type Exposure = 'external' | 'internal' | 'both' | 'unresolved';
 export type SubdomainSource = 'passive' | 'wordlist' | 'axfr' | 'manual';
-export type SubdomainFlag = 'internal_authorized' | 'internal_name_exposed' | 'private_ip_public';
+export type SubdomainFlag = 'internal_authorized' | 'internal_name_exposed' | 'private_ip_public' | 'internal_ip_public';
 export type DomainWordlistMode = 'none' | 'library' | 'custom';
 
 export interface DomainSchedule { enabled: boolean; time: string; days: number[] }
@@ -1217,6 +1217,48 @@ export interface Subdomain {
   /** When a scan last verified the name; null = never verified. */
   last_verified_at: string | null;
   first_seen: string;
+  last_seen: string;
+}
+
+export type SubdomainCounts = Domain['counts'];
+
+/** GET /domains/:id/subdomains/:sid - the row plus linked inventory devices and Web capture pages. */
+export interface SubdomainDetail extends Subdomain {
+  domain_name: string;
+  devices: {
+    uuid: string;
+    label: string;
+    ip: string;
+    open_ports: { port: number; protocol: string; service: string | null; product: string | null; version: string | null }[];
+    vulnerabilities: number;
+  }[];
+  web_pages: { url: string; title: string | null; http_status: number | null; captured_at: string; device_uuid: string | null }[];
+  last_scan: { id: number; finished_at: string | null; port_scan_id: number | null } | null;
+}
+
+/** One per-scan snapshot of a subdomain (GET /domains/:id/subdomains/:sid/history). */
+export interface SubdomainHistoryRow {
+  scan_id: number;
+  scan_status: string;
+  at: string;
+  exposure: Exposure;
+  records: { internal?: DnsView; public?: DnsView };
+  ips: string[];
+  sources: SubdomainSource[];
+  wildcard: boolean;
+  flags: SubdomainFlag[];
+}
+
+/** GET /devices/:uuid/domain-names */
+export interface DeviceDomainName {
+  id: number;
+  domain_id: number;
+  domain_name: string;
+  name: string;
+  exposure: Exposure;
+  status: 'active' | 'gone';
+  flags: SubdomainFlag[];
+  wildcard: boolean;
   last_seen: string;
 }
 
