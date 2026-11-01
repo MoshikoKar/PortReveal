@@ -208,12 +208,13 @@ export function SkeletonRows({ cols, rows = 6 }: { cols: number; rows?: number }
   );
 }
 
-/** Sortable column header: a real button (keyboard focusable) inside the `th`, which carries `aria-sort`. */
-export function SortTh({ active, desc, onSort, className, children }: {
-  active: boolean; desc: boolean; onSort: () => void; className?: string; children: ReactNode;
+/** Sortable column header: a real button (keyboard focusable) inside the `th`, which carries `aria-sort`.
+ *  `title` is required when the header can truncate (fluid columns), so the full name stays available. */
+export function SortTh({ active, desc, onSort, className, title, children }: {
+  active: boolean; desc: boolean; onSort: () => void; className?: string; title?: string; children: ReactNode;
 }) {
   return (
-    <th className={className} aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}>
+    <th className={className} title={title} aria-sort={active ? (desc ? 'descending' : 'ascending') : 'none'}>
       <button type="button" className="th-sort" onClick={onSort}>
         {children}{active && <span aria-hidden>{desc ? '↓' : '↑'}</span>}
       </button>
@@ -255,7 +256,8 @@ export function useClientSort<T, K extends string>(
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `keys` is a fresh literal each render; its getters are pure
   }, [rows, sort]);
   const th = (key: K, label: ReactNode, className?: string) => (
-    <SortTh key={key} className={className} active={sort?.key === key} desc={!!sort?.desc}
+    <SortTh key={key} className={className} title={typeof label === 'string' ? label : undefined}
+      active={sort?.key === key} desc={!!sort?.desc}
       onSort={() => setSort((s) => (s?.key === key ? { key, desc: !s.desc } : { key, desc: descFirst.includes(key) }))}>
       {label}
     </SortTh>

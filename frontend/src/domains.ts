@@ -91,8 +91,8 @@ export const SUBDOMAIN_COLUMNS: { key: string; label: string; className: string;
   { key: 'records', label: 'Records', className: 'sd-flex sd-records' },
   { key: 'hosting', label: 'Hosting', className: 'sd-flex sd-hosting' },
   { key: 'sources', label: 'Sources', className: 'sd-flex sd-sources' },
-  { key: 'last_seen', label: 'Last seen', className: 'sd-fit', sort: 'last_seen' },
-  { key: 'status', label: 'Status', className: 'sd-fit', sort: 'status' },
+  { key: 'last_seen', label: 'Last seen', className: 'sd-fit sd-last-seen', sort: 'last_seen' },
+  { key: 'status', label: 'Status', className: 'sd-fit sd-status', sort: 'status' },
 ];
 
 /** Inventory page sizes; the page size lives in the URL (?page_size=). */

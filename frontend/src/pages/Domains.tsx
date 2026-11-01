@@ -17,6 +17,35 @@ function scheduleText(d: Domain): string {
   return `${days} ${s.time}`;
 }
 
+function IconScan({ spinning }: { spinning?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+      style={spinning ? { animation: 'nf-spin 0.8s linear infinite' } : undefined} aria-hidden>
+      <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+      <polyline points="21 3 21 9 15 9" />
+    </svg>
+  );
+}
+
+function IconEdit() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function IconDelete() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+    </svg>
+  );
+}
+
 /** Tools status line: Domain scans still run without them (resolution, AXFR), just with fewer sources. */
 function ToolsNotice() {
   const { system } = useApp();
@@ -85,23 +114,27 @@ export default function Domains() {
               <thead>
                 <tr>
                   <th className="domain-col-name">Domain</th>
-                  <th className="right">Subdomains</th>
-                  <th className="right" title="Resolves publicly only">External</th>
-                  <th className="right" title="Resolves internally only">Internal</th>
-                  <th className="right" title="Split DNS: resolves on both">Both</th>
-                  <th className="right">Wildcard</th>
-                  <th title="Highest combined score among the active subdomains (from their linked devices)">Top risk</th>
-                  <th className="right" title="Active subdomains with a high combined score">High risk</th>
-                  <th className="right" title="Active subdomains whose linked devices have open ports">With ports</th>
-                  <th>Last scan</th>
-                  <th>Schedule</th>
-                  {isAdmin && <th />}
+                  <th className="right dl-fit">Subdomains</th>
+                  <th className="right dl-fit" title="Resolves publicly only">External</th>
+                  <th className="right dl-fit" title="Resolves internally only">Internal</th>
+                  <th className="right dl-fit" title="Split DNS: resolves on both">Both</th>
+                  <th className="right dl-fit">Wildcard</th>
+                  <th className="dl-fit" title="Highest combined score among the active subdomains (from their linked devices)">Top risk</th>
+                  <th className="right dl-fit" title="Active subdomains with a high combined score">High risk</th>
+                  <th className="right dl-fit" title="Active subdomains whose linked devices have open ports">With ports</th>
+                  <th className="dl-fluid" title="Last scan">Last scan</th>
+                  <th className="dl-fluid" title="Schedule">Schedule</th>
+                  {isAdmin && <th className="dl-fit" />}
                 </tr>
               </thead>
               <tbody>
                 {data.map((d) => {
                   const last = d.last_scan;
                   const active = last && (last.status === 'queued' || last.status === 'running');
+                  const lastAt = last ? (last.finished_at ?? last.created_at) : null;
+                  const lastTitle = last ? `${last.status}${lastAt ? ` · ${fmtTime(lastAt)}` : ''}` : 'never';
+                  const sched = scheduleText(d);
+                  const scanBusy = !!active || pending(`scan-${d.id}`);
                   return (
                     <tr key={d.id} className={`clickable${d.enabled ? '' : ' dim'}`} onClick={() => nav(`/domains/${d.id}`)}>
                       <td className="domain-col-name">
@@ -113,28 +146,36 @@ export default function Domains() {
                           )}
                         </span>
                       </td>
-                      <td className="right">{d.counts.active.toLocaleString()}</td>
-                      <td className="right">{d.counts.external.toLocaleString()}</td>
-                      <td className="right">{d.counts.internal.toLocaleString()}</td>
-                      <td className="right">{d.counts.both.toLocaleString()}</td>
-                      <td className="right">{d.counts.wildcard ? d.counts.wildcard.toLocaleString() : <span className="muted">-</span>}</td>
-                      <td data-testid="domain-top-risk"><ScoreCell score={d.risk.max_combined_score} kind="combined" /></td>
-                      <td className="right">
+                      <td className="right dl-fit">{d.counts.active.toLocaleString()}</td>
+                      <td className="right dl-fit">{d.counts.external.toLocaleString()}</td>
+                      <td className="right dl-fit">{d.counts.internal.toLocaleString()}</td>
+                      <td className="right dl-fit">{d.counts.both.toLocaleString()}</td>
+                      <td className="right dl-fit">{d.counts.wildcard ? d.counts.wildcard.toLocaleString() : <span className="muted">-</span>}</td>
+                      <td className="dl-fit" data-testid="domain-top-risk"><ScoreCell score={d.risk.max_combined_score} kind="combined" /></td>
+                      <td className="right dl-fit">
                         {d.risk.high_risk ? <Link className="badge high" to={`/domains/${d.id}?score=high`} onClick={(e) => e.stopPropagation()}>{d.risk.high_risk.toLocaleString()}</Link> : <span className="muted">0</span>}
                       </td>
-                      <td className="right">
+                      <td className="right dl-fit">
                         {d.risk.with_open_ports ? <Link to={`/domains/${d.id}?has_ports=1&sort=-open_ports_count`} onClick={(e) => e.stopPropagation()}>{d.risk.with_open_ports.toLocaleString()}</Link> : <span className="muted">0</span>}
                       </td>
-                      <td className="nowrap">
-                        {last ? <><ScanStatusBadge status={last.status} /> <span className="muted small" title={fmtTime(last.finished_at ?? last.created_at)}>{relTime(last.finished_at ?? last.created_at)}</span></>
-                          : <span className="muted">never</span>}
+                      <td className="dl-fluid" title={lastTitle}>
+                        <span className="cell-ellipsis">
+                          {last ? <><ScanStatusBadge status={last.status} /> <span className="muted small">{relTime(lastAt)}</span></>
+                            : <span className="muted">never</span>}
+                        </span>
                       </td>
-                      <td className="nowrap small">{scheduleText(d)}</td>
+                      <td className="dl-fluid small" title={sched}><span className="cell-ellipsis">{sched}</span></td>
                       {isAdmin && (
-                        <td className="right nowrap" onClick={(e) => e.stopPropagation()}>
-                          <button className="btn sm" disabled={!!active || pending(`scan-${d.id}`)} onClick={() => scan(d)}>{active ? 'Scanning…' : 'Scan now'}</button>
-                          <button className="btn ghost sm" onClick={() => setDraft(draftFromDomain(d))}>Edit</button>
-                          <button className="btn danger sm" disabled={pending(`del-${d.id}`)} onClick={() => remove(d)}>Delete</button>
+                        <td className="right nowrap dl-fit" onClick={(e) => e.stopPropagation()}>
+                          <button className="btn icon sm" title={active ? 'Scanning…' : 'Scan now'} aria-label={active ? 'Scanning…' : 'Scan now'} disabled={scanBusy} onClick={() => scan(d)}>
+                            <IconScan spinning={scanBusy} />
+                          </button>
+                          <button className="btn ghost icon sm" title="Edit" aria-label="Edit" onClick={() => setDraft(draftFromDomain(d))}>
+                            <IconEdit />
+                          </button>
+                          <button className="btn danger icon sm" title="Delete" aria-label="Delete" disabled={pending(`del-${d.id}`)} onClick={() => remove(d)}>
+                            <IconDelete />
+                          </button>
                         </td>
                       )}
                     </tr>

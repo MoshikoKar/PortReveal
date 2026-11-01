@@ -57,11 +57,19 @@ function IpsCell({ s }: { s: Subdomain }) {
 function SubdomainRow({ s, domain }: { s: Subdomain; domain: Domain }) {
   const st = ROW_STATUS[subdomainStatus(s)];
   const findings = subdomainFindings(s, wildcardTip(domain.name, domain.wildcard));
+  // Narrow tables hide Records / Sources / Hosting / Last seen (styles.css); keep those values here.
+  const nameTip = [
+    s.name,
+    `Records: ${s.records_summary}`,
+    `Sources: ${sourcesText(s.sources)}`,
+    s.hosting.length ? `Hosting: ${s.hosting.map((h) => `${h.ip}: ${hostingLabel(h)}`).join('; ')}` : null,
+    `Last seen: ${fmtTime(s.last_seen)}`,
+    `Status: ${st.label}`,
+  ].filter(Boolean).join('\n');
   return (
     <tr className={s.status === 'gone' ? 'dim' : undefined}>
       <td className="sd-name">
-        {/* Records and Sources drop out of narrow tables (styles.css): the name's title carries them too. */}
-        <Link className="cell-ellipsis mono" title={`${s.name}\nRecords: ${s.records_summary}\nSources: ${sourcesText(s.sources)}`}
+        <Link className="cell-ellipsis mono" title={nameTip}
           to={`/domains/${domain.id}/subdomains/${s.id}`}>{s.name}</Link>
       </td>
       <td className="sd-fit sd-exposure">
@@ -88,8 +96,8 @@ function SubdomainRow({ s, domain }: { s: Subdomain; domain: Domain }) {
       <td className="small sd-flex sd-sources">
         <span className="cell-ellipsis" title={s.sources.map((src) => `${SOURCE_LABELS[src]}: ${SOURCE_TIPS[src]}`).join('\n')}>{sourcesText(s.sources)}</span>
       </td>
-      <td className="small sd-fit" title={fmtTime(s.last_seen)}>{relTime(s.last_seen)}</td>
-      <td className="sd-fit"><span className={`badge ${st.badge}`} title={subdomainStatusTip(s, fmtTime)} data-testid="subdomain-status">{st.label}</span></td>
+      <td className="small sd-fit sd-last-seen" title={fmtTime(s.last_seen)}>{relTime(s.last_seen)}</td>
+      <td className="sd-fit sd-status"><span className={`badge ${st.badge}`} title={subdomainStatusTip(s, fmtTime)} data-testid="subdomain-status">{st.label}</span></td>
     </tr>
   );
 }
@@ -144,9 +152,9 @@ export default function DomainDetail() {
   // Scores and counts start largest-first, like the Devices list.
   const descFirst = ['combined_score', 'exposure_score', 'open_ports_count'];
   const sortTh = (key: string, label: string, className?: string, title?: string) => (
-    <SortTh className={className} active={sort.replace('-', '') === key} desc={sort.startsWith('-')}
+    <SortTh className={className} title={title ?? label} active={sort.replace('-', '') === key} desc={sort.startsWith('-')}
       onSort={() => set({ sort: sort === key ? `-${key}` : sort === `-${key}` || !descFirst.includes(key) ? key : `-${key}` })}>
-      <span title={title}>{label}</span>
+      {label}
     </SortTh>
   );
 
@@ -175,10 +183,10 @@ export default function DomainDetail() {
   return (
     <>
       <div className="page-head">
-        <div>
+        <div className="page-head-main">
           <div className="small muted"><Link to="/domains">Domains</Link></div>
           <h1 className="page-title-ellipsis"><span className="mono" title={d.name}>{d.name}</span></h1>
-          <p>
+          <p className="page-head-meta">
             {d.passive_enabled ? 'Passive' : 'No passive'} · {d.wordlist_mode === 'none' ? 'no wordlist' : d.wordlist_mode === 'library' ? `wordlist ${d.wordlist_name ?? '(missing)'}` : `${d.custom_words.length} typed subdomains`}
             {d.wordlist_mode !== 'none' && wordlistTruncationNote(d.wordlist_entries, d.wordlist_limit) && (
               <span className="badge medium" style={{ marginLeft: 6 }} data-testid="wordlist-truncated">
@@ -190,10 +198,13 @@ export default function DomainDetail() {
           </p>
         </div>
         {isAdmin && (
-          <div className="row">
+          <div className="row wrap gap-2 page-head-actions">
             {active
-              ? <button className="btn warn" disabled={pending('cancel')} onClick={cancel}>Cancel scan</button>
-              : <button className="btn primary" disabled={pending('scan')} onClick={scanNow} data-testid="domain-scan-now">Scan now</button>}
+              ? (
+                <button className="btn warn" disabled={pending('cancel')} onClick={cancel}>Cancel scan</button>
+              ) : (
+                <button className="btn primary" disabled={pending('scan')} onClick={scanNow} data-testid="domain-scan-now">Scan now</button>
+              )}
             <button className="btn" onClick={() => setDraft(draftFromDomain(d))}>Edit</button>
           </div>
         )}
@@ -218,7 +229,7 @@ export default function DomainDetail() {
       {isAdmin && <DomainLookup domains={[d.name]} onChanged={reloadAll} />}
       <Card flush title={
         <div className="row wrap" style={{ gap: 8, flex: 1 }}>
-          <input type="search" placeholder="Search name or IP…" value={qInput} onChange={(e) => setQInput(e.target.value)} style={{ minWidth: 220, flex: 1 }} aria-label="Search subdomains" />
+          <input type="search" placeholder="Search name or IP…" value={qInput} onChange={(e) => setQInput(e.target.value)} style={{ minWidth: 0, flex: '1 1 160px' }} aria-label="Search subdomains" />
           <select value={sp.get('exposure') ?? ''} onChange={(e) => set({ exposure: e.target.value || undefined })} aria-label="Exposure">
             <option value="">All exposures</option>
             {(Object.keys(EXPOSURE_LABELS) as Exposure[]).map((e) => <option key={e} value={e}>{EXPOSURE_LABELS[e]}</option>)}
@@ -270,29 +281,35 @@ export default function DomainDetail() {
         <ErrorBox error={scans.error} />
         {!scans.data?.items.length ? <Empty>No scans yet.</Empty> : (
           <div className="table-wrap">
-            <table className="domain-table">
-              <thead><tr><th>#</th><th>Status</th><th>Trigger</th><th>Started</th><th>Duration</th><th className="domain-col-fluid">Summary</th><th>Port scan</th></tr></thead>
+            <table className="domain-table fit-table">
+              <thead><tr><th>#</th><th>Status</th><th>Trigger</th><th>Started</th><th>Duration</th><th className="domain-col-fluid" title="Summary">Summary</th><th>Port scan</th></tr></thead>
               <tbody>
-                {scans.data.items.map((j) => (
-                  <tr key={j.id}>
-                    <td>{j.id}</td>
-                    <td className="nowrap">
-                      <ScanStatusBadge status={j.status} />
-                      {problemPhases(j.phases).length > 0 && (
-                        <span className="badge high" style={{ marginLeft: 4 }} title={problemPhases(j.phases).map((p) => `${p.label}: ${p.reason ?? p.status}`).join('\n')}>
-                          {problemPhases(j.phases).length} phase(s)
-                        </span>
-                      )}
-                    </td>
-                    <td className="small">{j.trigger}{j.requested_by ? ` · ${j.requested_by}` : ''}</td>
-                    <td className="nowrap small" title={fmtTime(j.started_at ?? j.created_at)}>{relTime(j.started_at ?? j.created_at)}</td>
-                    <td className="nowrap small" title={phaseSummaryTip(j.phases) || undefined}>{j.started_at ? duration(j.started_at, j.finished_at) : '-'}</td>
-                    <td className="domain-col-fluid small">
-                      <span className="cell-clamp-2" title={[scanSummary(j), j.notes].filter(Boolean).join('\n')}>{scanSummary(j)}</span>
-                    </td>
-                    <td className="small">{j.port_scan_id ? <Link to="/scans">#{j.port_scan_id}</Link> : <span className="muted">-</span>}</td>
-                  </tr>
-                ))}
+                {scans.data.items.map((j) => {
+                  const problems = problemPhases(j.phases);
+                  const summary = scanSummary(j);
+                  const summaryTip = [summary, j.notes].filter(Boolean).join('\n');
+                  const trigger = `${j.trigger}${j.requested_by ? ` · ${j.requested_by}` : ''}`;
+                  return (
+                    <tr key={j.id}>
+                      <td>{j.id}</td>
+                      <td>
+                        <ScanStatusBadge status={j.status} />
+                        {problems.length > 0 && (
+                          <span className="badge high" style={{ marginLeft: 4 }} title={problems.map((p) => `${p.label}: ${p.reason ?? p.status}`).join('\n')}>
+                            {problems.length} ph
+                          </span>
+                        )}
+                      </td>
+                      <td className="small domain-col-fluid"><span className="cell-ellipsis" title={trigger}>{trigger}</span></td>
+                      <td className="small" title={fmtTime(j.started_at ?? j.created_at)}>{relTime(j.started_at ?? j.created_at)}</td>
+                      <td className="small" title={phaseSummaryTip(j.phases) || undefined}>{j.started_at ? duration(j.started_at, j.finished_at) : '-'}</td>
+                      <td className="domain-col-fluid small">
+                        <span className="cell-ellipsis" title={summaryTip}>{summary}</span>
+                      </td>
+                      <td className="small">{j.port_scan_id ? <Link to="/scans">#{j.port_scan_id}</Link> : <span className="muted">-</span>}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

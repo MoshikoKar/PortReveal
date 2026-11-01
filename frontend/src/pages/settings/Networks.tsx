@@ -316,34 +316,59 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
       <ErrorBox error={error || actionError} />
       {loading && !data ? <SkeletonRows cols={isAdmin ? 7 : 6} /> : !data?.length ? <Empty>No networks yet.</Empty> : (
         <div className="table-wrap">
-          <table>
-            <thead><tr><th>Name</th><th>CIDR</th><th>Zone</th><th>Devices</th><th>Baseline</th><th>Schedule</th>{isAdmin && <th />}</tr></thead>
+          <table className="domain-table fit-table compact">
+            <thead><tr><th className="domain-col-fluid" title="Name">Name</th><th>CIDR</th><th>Zone</th><th>Devices</th><th>Baseline</th><th>Schedule</th>{isAdmin && <th />}</tr></thead>
             <tbody>
-              {data.map((n) => (
-                <tr key={n.id} className={n.archived_at ? 'dim' : undefined}>
-                  <td><strong>{n.name}</strong>{n.vpn_s2s && <> <span className="badge outline" title={VPN_S2S_TIP}>VPN</span></>}{n.arp_snmp && <> <span className="badge outline" title={`MACs from the ARP table of ${n.arp_snmp.host} (SNMPv${n.arp_snmp.version})`}>ARP via SNMP</span></>}{(n.expected_countries ?? []).length > 0 && <> <span className="badge outline" title="Expected countries for geo mismatch checks">{n.expected_countries.map(countryLabel).join(', ')}</span></>}{n.description && <div className="muted small">{n.description}</div>}</td>
-                  <td className="mono">{n.cidr}</td>
-                  <td>{n.zone ?? <span className="muted">-</span>}</td>
-                  <td>{n.active_count ?? 0} active / {n.device_count ?? 0}</td>
-                  <td>{n.archived_at ? <span className="muted">-</span> : n.baseline_at ? fmtTime(n.baseline_at) : <span className="badge medium">pending</span>}</td>
-                  <td>{n.archived_at
-                    ? <span className="badge outline" title={`Archived ${fmtTime(n.archived_at)}`}>archived</span>
-                    : n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
-                  {isAdmin && (
-                    <td className="right nowrap">
-                      {n.archived_at ? (
-                        <button className="btn sm" disabled={pending(`net-${n.id}`)} onClick={() => restore(n)}>Restore</button>
-                      ) : (
-                        <>
-                          <button className="btn ghost sm" onClick={() => openDraft(draftOf(n))}>Edit</button>
-                          {n.baseline_at && <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => resetBaseline(n)}>Reset baseline</button>}
-                          <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => remove(n)}>Archive</button>
-                        </>
-                      )}
+              {data.map((n) => {
+                const countries = n.expected_countries ?? [];
+                const arpTip = n.arp_snmp ? `MACs from the ARP table of ${n.arp_snmp.host} (SNMPv${n.arp_snmp.version})` : null;
+                const nameTip = [
+                  n.name,
+                  n.description || null,
+                  n.vpn_s2s ? `VPN: ${VPN_S2S_TIP}` : null,
+                  arpTip,
+                  countries.length ? `Expected countries: ${countries.map(countryLabel).join(', ')}` : null,
+                ].filter(Boolean).join('\n');
+                const devices = `${n.active_count ?? 0} / ${n.device_count ?? 0}`;
+                return (
+                  <tr key={n.id} className={n.archived_at ? 'dim' : undefined}>
+                    <td className="domain-col-fluid">
+                      <span className="cell-ellipsis" title={nameTip}>
+                        <strong>{n.name}</strong>
+                        {n.vpn_s2s && <span className="badge outline" style={{ marginLeft: 6 }} title={VPN_S2S_TIP}>VPN</span>}
+                        {n.arp_snmp && <span className="badge outline" style={{ marginLeft: 6 }} title={arpTip ?? undefined}>ARP</span>}
+                        {countries.length > 0 && (
+                          <span className="badge outline" style={{ marginLeft: 6 }} title={`Expected countries: ${countries.map(countryLabel).join(', ')}`}>
+                            {countries.join(',')}
+                          </span>
+                        )}
+                      </span>
                     </td>
-                  )}
-                </tr>
-              ))}
+                    <td className="mono">{n.cidr}</td>
+                    <td>{n.zone ?? <span className="muted">-</span>}</td>
+                    <td className="small" title={`${n.active_count ?? 0} active / ${n.device_count ?? 0} total`}>{devices}</td>
+                    <td className="small">{n.archived_at ? <span className="muted">-</span> : n.baseline_at ? fmtTime(n.baseline_at) : <span className="badge medium">pending</span>}</td>
+                    <td>{n.archived_at
+                      ? <span className="badge outline" title={`Archived ${fmtTime(n.archived_at)}`}>archived</span>
+                      : n.enabled ? <span className="badge ok">enabled</span> : <span className="badge outline">disabled</span>}</td>
+                    {isAdmin && (
+                      <td className="right nowrap">
+                        {n.archived_at ? (
+                          <button className="btn sm" disabled={pending(`net-${n.id}`)} onClick={() => restore(n)}>Restore</button>
+                        ) : (
+                          <>
+                            <button className="btn ghost sm" onClick={() => openDraft(draftOf(n))}>Edit</button>
+                            {n.baseline_at && (
+                              <button className="btn danger sm" disabled={pending(`net-${n.id}`)} title="Reset baseline" onClick={() => resetBaseline(n)}>Reset</button>
+                            )}
+                            <button className="btn danger sm" disabled={pending(`net-${n.id}`)} onClick={() => remove(n)}>Archive</button>
+                          </>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -188,12 +188,12 @@ export default function WebHosts() {
           <h1>Web interfaces</h1>
           <p>HTTP(S) and RTSP services from the latest Web Capture - one card per service, previews first. RDP and VNC desktops are under <Link to="/remote">Remote</Link>.</p>
         </div>
-        <div className="row wrap">
+        <div className="row wrap gap-2">
           <label className="check small" title="Hosts of networks archived in Settings > Networks are hidden by default">
             <input type="checkbox" checked={filters.archived} onChange={(e) => update({ archived: e.target.checked })} />Show archived networks
           </label>
           <input type="search" aria-label="Search web interfaces" placeholder="Search host, IP, title…" value={qInput}
-            onChange={(e) => setQInput(e.target.value)} style={{ width: 240 }} />
+            onChange={(e) => setQInput(e.target.value)} className="web-search" />
         </div>
       </div>
       <div className="row wrap web-filters">
@@ -204,9 +204,9 @@ export default function WebHosts() {
         <select aria-label="Scheme" value={filters.scheme ?? ''} onChange={(e) => update({ scheme: (e.target.value || null) as WebFilters['scheme'] })}>
           <option value="">HTTP and HTTPS</option><option value="http">HTTP</option><option value="https">HTTPS</option>
         </select>
-        <input type="number" aria-label="Port" placeholder="Port" min={1} max={65535} value={filters.port ?? ''} style={{ width: 96 }}
+        <input type="number" aria-label="Port" placeholder="Port" min={1} max={65535} value={filters.port ?? ''} style={{ width: 96, maxWidth: '100%' }}
           onChange={(e) => update({ port: e.target.value ? Number(e.target.value) : null }, true)} />
-        <div className="row" style={{ gap: 4 }}>
+        <div className="row wrap" style={{ gap: 4 }}>
           {STATUS_CHIPS.map((s) => {
             const n = counts ? (s.id ? counts[s.id] : countAll) : null;
             return (

@@ -168,14 +168,14 @@ export function TypeEvidenceCard({ d }: { d: DeviceDetail }) {
         </div>
       ) : (
         <div className="table-wrap">
-          <table>
-            <thead><tr><th>Signal</th><th>Points</th><th>Detail</th></tr></thead>
+          <table className="domain-table fit-table">
+            <thead><tr><th>Signal</th><th>Points</th><th className="domain-col-fluid" title="Detail">Detail</th></tr></thead>
             <tbody>
               {evidence.map((e, i) => (
                 <tr key={`${e.factor}-${i}`}>
                   <td className="mono small">{e.factor}</td>
                   <td className="mono small">+{e.points}</td>
-                  <td className="small">{e.detail}</td>
+                  <td className="small domain-col-fluid"><span className="cell-ellipsis" title={e.detail}>{e.detail}</span></td>
                 </tr>
               ))}
             </tbody>

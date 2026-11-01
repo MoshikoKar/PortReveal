@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { del, post } from '../api';
 import { useApp } from '../context';
 import type { VulnFindingsPage } from '../types';
-import { fmtTime, useApi } from '../util';
+import { fmtTime, relTime, useApi } from '../util';
 import { buildVulnQuery, displayHiddenReasons, type VulnFilters } from '../vulnFilters';
 import { dismissBusyKey, findingRowKey, formatCvss, formatEpss } from '../vulnFormat';
 import { Card, Empty, ErrorBox, Pager, SkeletonRows, SortTh } from './ui';
@@ -45,7 +45,7 @@ export function VulnFindingsTable({
     only_hidden: searching && onlyHidden ? 'true' : undefined,
   });
   const sortTh = (key: FindingSort, label: string) => (
-    <SortTh active={sort.key === key} desc={sort.desc} onSort={() => onSort(key)}>{label}</SortTh>
+    <SortTh title={label} active={sort.key === key} desc={sort.desc} onSort={() => onSort(key)}>{label}</SortTh>
   );
   const { data, error, reload } = useApi<VulnFindingsPage>('/vulns', params, 30000);
   const [busy, setBusy] = useState<string | null>(null);
@@ -133,7 +133,7 @@ export function VulnFindingsTable({
       ) : (
         <>
           <div className="table-wrap">
-            <table className="compact">
+            <table className="compact domain-table fit-table">
               <thead>
                 <tr>
                   {sortTh('cve', 'CVE')}
@@ -154,27 +154,37 @@ export function VulnFindingsTable({
                   const netKey = v.network_id != null ? String(v.network_id) : 'unassigned';
                   const netActive = filters.network_id === netKey;
                   const netLabel = v.network ?? 'Unassigned';
+                  const portText = [v.protocol.toUpperCase() + '/' + v.port, v.product ?? v.service, v.version].filter(Boolean).join(' ');
+                  const cveTip = [
+                    v.cve_id,
+                    v.kev ? 'CISA KEV' : null,
+                    v.epss != null ? `EPSS ${formatEpss(v.epss)}` : null,
+                    ...reasons,
+                  ].filter(Boolean).join('\n');
+                  const deviceTip = [v.device_ip, v.device_hostname].filter(Boolean).join('\n');
                   return (
                     <tr key={key} className={v.state === 'dismissed' ? 'dim' : ''}>
-                      <td className="mono nowrap">
-                        <Link to={`/vulnerabilities/${encodeURIComponent(v.cve_id)}`}>{v.cve_id}</Link>
-                        {v.kev && <span className="badge high" style={{ marginLeft: 6 }} title="Known to be exploited in the wild (CISA KEV)">KEV</span>}
-                        {v.epss != null && <span className="muted small" style={{ marginLeft: 6 }}>{formatEpss(v.epss)}</span>}
-                        {reasons.map((reason) => (
-                          <span key={reason} className="badge outline" style={{ marginLeft: 6 }}
-                            title="Normally hidden from the default findings list">
-                            {reason}
-                          </span>
-                        ))}
+                      <td className="mono domain-col-fluid">
+                        <span className="cell-ellipsis" title={cveTip}>
+                          <Link to={`/vulnerabilities/${encodeURIComponent(v.cve_id)}`}>{v.cve_id}</Link>
+                          {v.kev && <span className="badge high" style={{ marginLeft: 6 }}>KEV</span>}
+                          {reasons.length > 0 && (
+                            <span className="badge outline" style={{ marginLeft: 6 }} title={reasons.join('\n')}>
+                              {reasons.length === 1 ? reasons[0] : `+${reasons.length}`}
+                            </span>
+                          )}
+                        </span>
                       </td>
-                      <td>
-                        <Link className="mono" to={`/devices/${v.device_uuid}`}>{v.device_ip}</Link>
-                        {v.device_hostname && <div className="muted small">{v.device_hostname}</div>}
+                      <td className="domain-col-fluid" title={deviceTip}>
+                        <span className="cell-ellipsis">
+                          <Link className="mono" to={`/devices/${v.device_uuid}`}>{v.device_ip}</Link>
+                          {v.device_hostname && <span className="muted small"> · {v.device_hostname}</span>}
+                        </span>
                       </td>
-                      <td>
+                      <td className="domain-col-fluid">
                         <button
                           type="button"
-                          className={`heatmap-network-btn ${netActive ? 'active' : ''}`}
+                          className={`heatmap-network-btn cell-ellipsis ${netActive ? 'active' : ''}`}
                           aria-pressed={netActive}
                           title={netActive ? 'Clear network filter' : `Filter by network: ${netLabel}`}
                           onClick={() => onToggleNetwork(v.network_id)}
@@ -182,8 +192,8 @@ export function VulnFindingsTable({
                           {netLabel}
                         </button>
                       </td>
-                      <td className="small">
-                        {v.protocol.toUpperCase()}/{v.port} {v.product ?? v.service ?? ''} {v.version ?? ''}
+                      <td className="small domain-col-fluid">
+                        <span className="cell-ellipsis" title={portText}>{portText}</span>
                       </td>
                       <td className="mono small">{formatCvss(v.cvss_base)}</td>
                       <td>
@@ -197,14 +207,8 @@ export function VulnFindingsTable({
                           }>
                           {v.state}
                         </span>
-                        {v.state === 'potential' && (v.hidden_reasons ?? []).includes('Potential (hidden)') && (
-                          <span className="badge outline" style={{ marginLeft: 6 }}
-                            title="Normally hidden when include_potential is off">
-                            hidden
-                          </span>
-                        )}
                       </td>
-                      <td className="small muted">{fmtTime(v.first_seen_at)}</td>
+                      <td className="small muted" title={fmtTime(v.first_seen_at)}>{relTime(v.first_seen_at)}</td>
                       {isAdmin && (
                         <td className="right">
                           {v.state === 'dismissed' ? (

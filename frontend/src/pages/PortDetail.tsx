@@ -28,12 +28,14 @@ export default function PortDetail() {
   return (
     <>
       <div className="page-head">
-        <div>
+        <div className="page-head-main">
           <div className="muted small"><Link to="/ports">Exposed ports</Link> /</div>
           <h1 className="mono">{proto.toUpperCase()}/{n}</h1>
           <p>{network ? `In ${network}. ` : ''}{hosts.data ? `${hosts.data.total} host${hosts.data.total === 1 ? '' : 's'} with this port open.` : ' '}</p>
         </div>
-        <Link className="btn" to={`/search?q=${encodeURIComponent(q)}`}>Open in search →</Link>
+        <div className="page-head-actions">
+          <Link className="btn" to={`/search?q=${encodeURIComponent(q)}`}>Open in search →</Link>
+        </div>
       </div>
       <div className="search-layout">
         <aside className="card card-body">

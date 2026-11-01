@@ -70,7 +70,7 @@ export default function SubdomainDetail() {
   return (
     <>
       <div className="page-head">
-        <div style={{ minWidth: 0 }}>
+        <div className="page-head-main">
           <div className="small muted"><Link to="/domains">Domains</Link> / <Link to={`/domains/${s.domain_id}`}>{s.domain_name}</Link></div>
           <h1 className="page-title-ellipsis"><span className="mono" title={s.name}>{s.name}</span></h1>
           <p className="row wrap" style={{ gap: 6 }}>
@@ -80,7 +80,7 @@ export default function SubdomainDetail() {
             <SubdomainScoreBadges s={s} />
           </p>
         </div>
-        <div className="row wrap gap-2">
+        <div className="row wrap gap-2 page-head-actions">
           {s.devices.length === 1 && <Link className="btn" to={`/devices/${s.devices[0].uuid}`}>Device: {s.devices[0].label}</Link>}
           {webHref && <Link className="btn" to={webHref}>Open web preview →</Link>}
           {isAdmin && s.ips.length > 0 && (

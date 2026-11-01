@@ -109,10 +109,12 @@ export default function DeviceDetail() {
   return (
     <>
       <div className="page-head">
-        <div>
+        <div className="page-head-main">
           <div className="muted small"><Link to="/devices">Devices</Link> /</div>
-          <h1 className="row" style={{ gap: 12 }}>
-            {d.hostname ?? d.discovery_name ?? d.current_ip}
+          <h1 className="row wrap gap-2 page-title-badges">
+            <span className="page-title-ellipsis" title={d.hostname ?? d.discovery_name ?? d.current_ip}>
+              {d.hostname ?? d.discovery_name ?? d.current_ip}
+            </span>
             <DeviceStatusBadge status={d.status} failed={d.port_scan_failed} scannerHost={d.scanner_host} supersededBy={d.superseded_by} />
             <span title="Exposure score"><ScoreBadge score={d.score} /></span>
             {d.risk_scored_at && <span title="Risk score"><RiskBadge score={d.risk_score} kind="risk" /></span>}
@@ -130,9 +132,9 @@ export default function DeviceDetail() {
               </Link>
             )}
           </h1>
-          <p className="mono">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
+          <p className="mono page-head-meta">{d.current_ip}{d.mac && ` · ${d.mac}`}</p>
         </div>
-        <div className="row wrap gap-2">
+        <div className="row wrap gap-2 page-head-actions">
           <Link className="btn" to={`/vulnerabilities?device_uuid=${encodeURIComponent(d.uuid)}&print=1`}>
             Report for this device
           </Link>
@@ -197,33 +199,63 @@ export default function DeviceDetail() {
           {open.length === 0 && !showClosed ? <Empty>No open ports detected.</Empty> : (
             <>
               <div className="table-wrap">
-                <table>
-                  <thead><tr><th>Port</th><th>Service</th><th>Product / version</th><th>HTTP</th><th>Confidence</th><th>Open since</th><th>Last seen</th></tr></thead>
+                <table className="domain-table fit-table">
+                  <thead>
+                    <tr>
+                      <th>Port</th>
+                      <th className="domain-col-fluid" title="Service">Service</th>
+                      <th className="domain-col-fluid" title="Product / version">Product / version</th>
+                      <th className="domain-col-fluid" title="HTTP">HTTP</th>
+                      <th>Confidence</th>
+                      <th title="Open since">Open since</th>
+                      <th title="Last seen">Last seen</th>
+                    </tr>
+                  </thead>
                   <tbody>
-                    {previewRows(portRows, portsOpen).map((p) => (
-                      <tr key={`${p.protocol}${p.port}`} className={p.is_open ? '' : 'dim'}>
-                        <td className="mono nowrap"><strong>{p.protocol.toUpperCase()}/{p.port}</strong>{!p.is_open && <span className="badge outline" style={{ marginLeft: 6 }}>closed {fmtTime(p.closed_at)}</span>}</td>
-                        <td>{p.service ?? '-'}{p.tunnel && <span className="badge outline" style={{ marginLeft: 6 }}>{p.tunnel}</span>}</td>
-                        <td>
-                          {[p.product, p.version].filter(Boolean).join(' ') || <span className="muted">-</span>}
-                          {p.extra_info && <div className="muted small">{p.extra_info}</div>}
-                          {p.cpe?.map((c) => <div key={c} className="mono muted small">{c}</div>)}
-                        </td>
-                        <td className="small">
-                          {p.http ? (
-                            <>
-                              {p.http.status != null && <span className="badge outline">{p.http.status}</span>} {httpTitleDisplay(p.http.status, p.http.title) ?? <span className="muted">no title</span>}
-                              {p.http.login && <span className="badge medium" style={{ marginLeft: 6 }}>login</span>}
-                              {p.http.default_page && <span className="badge outline" style={{ marginLeft: 6 }}>default page</span>}
-                              {p.http.server && <div className="muted">{p.http.server}</div>}
-                            </>
-                          ) : <span className="muted">-</span>}
-                        </td>
-                        <td className="small"><IdentityBadge method={p.method} product={p.product} version={p.version} />{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
-                        <td className="nowrap small">{fmtTime(p.opened_at)}</td>
-                        <td className="nowrap small">{relTime(p.last_seen)}</td>
-                      </tr>
-                    ))}
+                    {previewRows(portRows, portsOpen).map((p) => {
+                      const product = [p.product, p.version].filter(Boolean).join(' ');
+                      const productTip = [product || null, p.extra_info, ...(p.cpe ?? [])].filter(Boolean).join('\n') || undefined;
+                      const httpTitle = p.http ? httpTitleDisplay(p.http.status, p.http.title) : null;
+                      const httpTip = !p.http ? undefined : [
+                        p.http.status != null ? `HTTP ${p.http.status}` : null,
+                        httpTitle,
+                        p.http.login ? 'login form' : null,
+                        p.http.default_page ? 'default page' : null,
+                        p.http.server,
+                      ].filter(Boolean).join('\n') || undefined;
+                      const serviceTip = [p.service, p.tunnel].filter(Boolean).join(' · ') || undefined;
+                      return (
+                        <tr key={`${p.protocol}${p.port}`} className={p.is_open ? '' : 'dim'}>
+                          <td className="mono" title={p.is_open ? undefined : `closed ${fmtTime(p.closed_at)}`}>
+                            <strong>{p.protocol.toUpperCase()}/{p.port}</strong>
+                            {!p.is_open && <span className="badge outline" style={{ marginLeft: 6 }}>closed</span>}
+                          </td>
+                          <td className="domain-col-fluid">
+                            <span className="cell-ellipsis" title={serviceTip}>
+                              {p.service ?? '-'}
+                              {p.tunnel && <span className="badge outline" style={{ marginLeft: 6 }}>{p.tunnel}</span>}
+                            </span>
+                          </td>
+                          <td className="domain-col-fluid">
+                            <span className="cell-ellipsis" title={productTip}>
+                              {product || <span className="muted">-</span>}
+                            </span>
+                          </td>
+                          <td className="domain-col-fluid small">
+                            {p.http ? (
+                              <span className="cell-ellipsis" title={httpTip}>
+                                {p.http.status != null && <span className="badge outline">{p.http.status}</span>}
+                                {' '}{httpTitle ?? <span className="muted">no title</span>}
+                                {p.http.login && <span className="badge medium" style={{ marginLeft: 6 }}>login</span>}
+                              </span>
+                            ) : <span className="muted">-</span>}
+                          </td>
+                          <td className="small"><IdentityBadge method={p.method} product={p.product} version={p.version} />{p.confidence != null && <span className="muted"> {p.confidence}/10</span>}</td>
+                          <td className="small" title={fmtTime(p.opened_at)}>{relTime(p.opened_at)}</td>
+                          <td className="small" title={fmtTime(p.last_seen)}>{relTime(p.last_seen)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

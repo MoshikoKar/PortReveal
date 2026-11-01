@@ -106,7 +106,7 @@ export default function Devices() {
     update({ sort: col, order: same && params.order === 'asc' ? 'desc' : 'asc' });
   };
   const sortTh = (col: string, label: string, className?: string) => (
-    <SortTh className={className} active={params.sort === col} desc={params.order === 'desc'} onSort={() => sortBy(col)}>{label}</SortTh>
+    <SortTh className={className} title={label} active={params.sort === col} desc={params.order === 'desc'} onSort={() => sortBy(col)}>{label}</SortTh>
   );
   const items = data?.items ?? [];
   // Port chips stay on one line: optional columns take width from Open ports, so show fewer chips
@@ -251,7 +251,7 @@ export default function Devices() {
           </div>
         )}
         {loading && !data ? <SkeletonRows cols={isAdmin ? 13 : 12} /> : !items.length ? <Empty>No devices match.</Empty> : (
-          <div className="table-wrap">
+          <div className="table-wrap devices-table-wrap">
             <table className="devices-table">
               <thead>
                 <tr>
@@ -264,21 +264,29 @@ export default function Devices() {
                   {sortTh('ip', 'IP')}
                   {sortTh('hostname', 'Hostname', 'dev-fluid')}
                   <th title="Open-port services (expand the row)">Svc</th>
-                  <th className="dev-fluid">Vendor</th>
+                  <th className="dev-fluid dev-vendor" title="Vendor">Vendor</th>
                   {sortTh('open_ports', 'Open ports')}
                   {showOs && sortTh('os', 'OS', 'dev-fluid')}
                   {showRtt && <th title="Last measured round-trip time">RTT</th>}
-                  <th className="dev-fluid">Network</th>
+                  <th className="dev-fluid dev-network" title="Network">Network</th>
                   <th className="dev-score" title="Exposure score">Exp.</th>
                   <th className="dev-score" title="Vulnerability-based risk score">Risk</th>
                   <th className="dev-score" title="Combined score: risk boosted by exposure">Comb.</th>
-                  {sortTh('last_seen', 'Last seen')}
-                  {sortTh('first_seen', 'First seen')}
+                  {sortTh('last_seen', 'Last seen', 'dev-fit')}
+                  {sortTh('first_seen', 'First seen', 'dev-first-seen')}
                 </tr>
               </thead>
               <tbody>
                 {items.map((d) => {
                   const vpn = d.network_id != null && vpnNetworks.has(d.network_id);
+                  // Narrow viewports hide First seen / Vendor / Network; keep their values on the hostname title.
+                  const hostTip = [
+                    d.hostname ?? d.discovery_name ?? null,
+                    d.vendor ? `Vendor: ${d.vendor}` : null,
+                    d.network_name ? `Network: ${d.network_name}` : null,
+                    `First seen: ${fmtTime(d.first_seen)}`,
+                    `Last seen: ${fmtTime(d.last_seen)}`,
+                  ].filter(Boolean).join('\n');
                   return (
                   <Fragment key={d.uuid}>
                   <tr className={`clickable ${selected.has(d.uuid) ? 'selected' : ''} ${d.status === 'not_detected' ? 'dim' : ''}`} onClick={() => nav(`/devices/${d.uuid}`)}>
@@ -288,7 +296,7 @@ export default function Devices() {
                     <td className="mono nowrap dev-fit" title={d.ip_assignment ? `${d.current_ip} - ${d.ip_assignment} IP` : undefined}>
                       {d.current_ip}{d.ip_assignment === 'dynamic' && <> <span className="badge medium" title="Dynamic: this device has recently used more than one IP (DHCP-style)">dyn</span></>}
                     </td>
-                    <td className="dev-fluid dev-host" title={d.hostname ?? d.discovery_name ?? undefined}>
+                    <td className="dev-fluid dev-host" title={hostTip}>
                       <span className="cell-ellipsis">
                         {d.hostname ?? d.discovery_name ?? <span className="muted" title={vpn ? NO_NAME_VPN_TIP : NO_NAME_TIP}>-</span>}
                         {!d.hostname && d.discovery_name && <span className="badge outline" style={{ marginLeft: 6 }}>{d.discovery_source}</span>}
@@ -330,8 +338,8 @@ export default function Devices() {
                     <td className="dev-score">{d.score != null ? <ScoreBadge score={d.score} /> : <span className="muted">-</span>}</td>
                     <td className="dev-score">{d.risk_scored_at != null ? <RiskBadge score={d.risk_score} kind="risk" /> : <span className="muted">-</span>}</td>
                     <td className="dev-score">{d.risk_scored_at != null ? <RiskBadge score={d.combined_score} kind="combined" /> : <span className="muted">-</span>}</td>
-                    <td className="nowrap" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>
-                    <td className="nowrap muted small" title={fmtTime(d.first_seen)}>{relTime(d.first_seen)}</td>
+                    <td className="nowrap dev-fit" title={fmtTime(d.last_seen)}>{relTime(d.last_seen)}</td>
+                    <td className="nowrap muted small dev-first-seen" title={fmtTime(d.first_seen)}>{relTime(d.first_seen)}</td>
                   </tr>
                   {expanded.has(d.uuid) && (
                     <tr className="dim">

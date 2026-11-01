@@ -36,7 +36,7 @@ const BELL_OFF = (
 );
 
 /**
- * Change events as Time · Event · Device (name, IP below) · Port · Change [· Scan]. Domain-scan events
+ * Change events as Time · Event · Device (name · IP) · Port · Change [· Scan]. Domain-scan events
  * have no device: the Device column shows the host name and links to its domain. Shared by the
  * Changes page and the dashboard's Recent changes card; the column content comes from eventColumns().
  * `compact` is the dashboard form: short times, no Scan column, "no alert" as an icon.
@@ -62,13 +62,11 @@ export function EventTable({ events, compact, tableRef }: {
               <td className="muted event-time" title={fmtTime(e.created_at, true)}>{compact ? fmtShortTime(e.created_at) : fmtTime(e.created_at)}</td>
               <td className="event-type" title={EVENT_LABELS[e.event_type] ?? e.event_type}><SeverityBadge ev={e} short /></td>
               <td className="event-device">
-                <div className="event-device-cell">
-                  <span className="cell-ellipsis" title={e.device_label ?? undefined}>
-                    {e.device_uuid ? <Link to={`/devices/${e.device_uuid}`}>{e.device_label}</Link>
-                      : e.domain_id != null ? <Link to={`/domains/${e.domain_id}`}>{e.device_label}</Link> : e.device_label}
-                  </span>
-                  {col.ip && <span className="cell-ellipsis mono small muted" title={col.ip}>{col.ip}</span>}
-                </div>
+                <span className="cell-ellipsis" title={[e.device_label, col.ip].filter(Boolean).join('\n') || undefined}>
+                  {e.device_uuid ? <Link to={`/devices/${e.device_uuid}`}>{e.device_label}</Link>
+                    : e.domain_id != null ? <Link to={`/domains/${e.domain_id}`}>{e.device_label}</Link> : e.device_label}
+                  {col.ip && <span className="mono small muted"> · {col.ip}</span>}
+                </span>
               </td>
               <td className="event-port">{col.port ? <span className="chip new">{col.port}</span> : <span className="muted">-</span>}</td>
               <td className="event-change">

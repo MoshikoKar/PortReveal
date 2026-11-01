@@ -72,7 +72,7 @@ export function DomainLookup({ domains, onChanged }: { domains: string[]; onChan
     <Card title="Lookup">
       <form className="row wrap" onSubmit={run} style={{ gap: 8 }}>
         <input type="search" value={input} onChange={(e) => setInput(e.target.value)} placeholder="test.example.com"
-          aria-label="Host name to look up" spellCheck={false} style={{ flex: 1, minWidth: 220 }} data-testid="lookup-input" />
+          aria-label="Host name to look up" spellCheck={false} style={{ flex: '1 1 160px', minWidth: 0 }} data-testid="lookup-input" />
         <button className="btn primary" type="submit" disabled={view.busy}>{view.busy ? 'Resolving…' : 'Look up'}</button>
       </form>
       <div className="muted small" style={{ marginTop: 6 }}>

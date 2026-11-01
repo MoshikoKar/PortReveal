@@ -57,7 +57,7 @@ export function VulnFacets({ summary, filters, onToggle, onToggleVendorProduct }
       isActive={(value) => filters[key] === value} onClick={(value) => onToggle(key, value)} />
   );
   return (
-    <>
+    <div className="vuln-facets">
       {/* Text-heavy facets stay at two columns. */}
       <div className="grid halves">
         {facet('By OS', summary.facets.os, 'os_name')}
@@ -78,6 +78,6 @@ export function VulnFacets({ summary, filters, onToggle, onToggleVendorProduct }
         {facet('By CVE age (published)', ageBuckets(summary.facets.cve_age), 'cve_age')}
         {facet('By exposure duration', ageBuckets(summary.facets.exposure_duration), 'exposure_duration')}
       </div>
-    </>
+    </div>
   );
 }

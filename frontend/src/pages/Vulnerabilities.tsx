@@ -405,15 +405,10 @@ export default function Vulnerabilities() {
   return (
     <>
       <div className="page-head no-print">
-        <div>
+        <div className="page-head-main">
           <h1>Vulnerabilities</h1>
-          <p>
-            Matched CVEs across the network. Severity bands come from the cached CVSS base score
-            (9 / 7 / 4 thresholds), preferring CVSS v3.1 → v3.0 → v2 when present - not NVD&apos;s
-            own severity label. CVEs with no score in the cache are shown as unscored.
-          </p>
         </div>
-        <div className="row wrap gap-2" style={{ alignItems: 'center' }}>
+        <div className="row wrap gap-2 page-head-actions" style={{ alignItems: 'center' }}>
           <label
             className={`vuln-network-select ${networkActive ? 'active' : ''}`}
             title="Scope the dashboard and reports to one network"
@@ -451,6 +446,11 @@ export default function Vulnerabilities() {
           </button>
         </div>
       </div>
+      <p className="page-intro no-print">
+        Matched CVEs across the network. Severity bands come from the cached CVSS base score
+        (9 / 7 / 4 thresholds), preferring CVSS v3.1 → v3.0 → v2 when present - not NVD&apos;s
+        own severity label. CVEs with no score in the cache are shown as unscored.
+      </p>
 
       <div className="vuln-search-bar no-print">
         <div className="row wrap gap-2" style={{ alignItems: 'center' }}>

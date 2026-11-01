@@ -69,17 +69,17 @@ export default function WebPreview() {
   return (
     <>
       <div className="page-head">
-        <div>
+        <div className="page-head-main">
           <div className="muted small">
             <Link to="/web">Web</Link> / {d ? <Link to={`/devices/${d.uuid}`}>{name}</Link> : name} /
           </div>
-          <h1 className="row" style={{ gap: 12 }}>
-            {name}
+          <h1 className="row wrap gap-2 page-title-badges">
+            <span className="page-title-ellipsis" title={name}>{name}</span>
             {d && <DeviceStatusBadge status={d.status} />}
           </h1>
-          <p className="mono">{d?.current_ip}{d?.hostname && d.dns_name && d.dns_name !== d.hostname && ` · ${d.dns_name}`}</p>
+          <p className="mono page-head-meta">{d?.current_ip}{d?.hostname && d.dns_name && d.dns_name !== d.hostname && ` · ${d.dns_name}`}</p>
         </div>
-        <div className="row wrap">
+        <div className="row wrap gap-2 page-head-actions">
           {web.data && web.data.captures.length > 0 && (
             <select
               value={web.data.capture_id ?? ''}

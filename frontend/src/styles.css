@@ -8,7 +8,8 @@
   --border-2: #25395c;
   --text: #d6deee;
   --text-2: #aab6cc;
-  --muted: #74819b;
+  /* ≥4.5:1 on --bg / --panel / --panel-3 / accent-tinted toggle fills (WCAG AA). */
+  --muted: #7e8ca3;
   --accent: #0ed0d9;
   --accent-dim: #0a4f57;
   --accent-ink: #021a1d; /* text on solid --accent fills */
@@ -77,7 +78,13 @@ h3 { font-size: 13px; color: var(--text-2); }
 code, .mono { font-family: var(--mono); font-size: 12.5px; }
 /* A mono name inside a page title keeps the title size (only the face changes). */
 h1 .mono { font-size: inherit; }
-h1.page-title-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+h1.page-title-ellipsis, .page-title-ellipsis {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%;
+}
+/* Title on its own line (truncated); badges wrap under it inside the title column — never shove actions down. */
+h1.page-title-badges { align-items: center; }
+h1.page-title-badges > .page-title-ellipsis { flex: 1 1 100%; }
+.page-head-meta { overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 .small { font-size: 12px; }
 .nowrap { white-space: nowrap; }
@@ -145,8 +152,14 @@ h1.page-title-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space:
   display: flex; flex-direction: column; gap: var(--space-4);
   width: 100%; min-width: 0;
 }
-.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+/* Title column shrinks/truncates; actions stay on the right until the viewport is too narrow to share a row. */
+.page-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.page-head-main { flex: 1 1 16rem; min-width: 0; }
+.page-head-actions { flex: 0 1 auto; justify-content: flex-end; max-width: 100%; }
 .page-head p { margin: 4px 0 0; color: var(--muted); }
+.page-intro { max-width: 75ch; }
 /* Findings search: stays under the top bar while scrolling the long dashboard. */
 .vuln-search-bar {
   position: sticky; top: 58px; z-index: 4;
@@ -170,7 +183,12 @@ h1.page-title-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space:
 
 /* ---------- panels ---------- */
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); display: flex; flex-direction: column; min-width: 0; }
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap;
+  min-width: 0;
+}
+.card-head > * { min-width: 0; max-width: 100%; }
 .card-body { padding: 14px 16px; flex: 1; min-height: 0; }
 .card-body.flush { padding: 0; }
 /* A strip of filters/controls inside a flush card, above its table. */
@@ -199,6 +217,9 @@ h1.page-title-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space:
 @media (max-width: 700px) { .grid.kpis, .grid.kpis.five { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .dashboard { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }
+/* Vulnerabilities: space KPI / charts / heatmap / facets / tables as column siblings. */
+.vuln-screen,
+.vuln-facets { display: flex; flex-direction: column; gap: var(--space-4); width: 100%; }
 @media (min-width: 1201px) {
   /* Beside Recent changes: takes the height the feed leaves and never stretches the row itself
      (size containment); Dashboard.tsx lists only the rows that fit. */
@@ -394,6 +415,8 @@ h1.page-title-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space:
 .sidebar-drawer { display: contents; }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
+  .content { overflow-x: clip; }
+  .dl { grid-template-columns: minmax(96px, 32%) 1fr; }
   .sidebar { position: sticky; top: 0; z-index: 10; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
   .brand { padding: 10px 16px; border-bottom: 0; }
   .brand-sub { display: none; }
@@ -420,15 +443,14 @@ h1.page-title-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space:
   .topbar { position: static; }
 }
 
-.kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px 14px 18px; position: relative; overflow: hidden; min-width: 0; }
-.kpi::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--kpi-color, var(--border-2)); }
+/* Severity via value tint (--kpi-color), not a left stripe (Impeccable side-tab). */
+.kpi { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; position: relative; overflow: hidden; min-width: 0; }
 .kpi .label { font-size: 12px; color: var(--muted); }
-.kpi .value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 6px; line-height: 1.1; }
+.kpi .value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 6px; line-height: 1.1; color: var(--kpi-color, inherit); }
 .kpi .sub { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.4; overflow-wrap: anywhere; }
 .kpi.link { cursor: pointer; }
 .kpi.link:hover { border-color: var(--border-2); }
 .kpi.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.kpi.active::before { background: var(--accent); }
 
 .dl { display: grid; grid-template-columns: 150px 1fr; gap: 8px 16px; margin: 0; }
 .dl dt { color: var(--muted); }
@@ -476,7 +498,7 @@ a.badge.ok { color: var(--ok); }
 a.badge.accent { color: var(--accent); }
 a.badge.outline { color: var(--text-2); }
 /* Title-row wrappers around badges (scores, vuln-job link) share one alignment box. */
-h1.row > a:not(.badge), h1.row > span { display: inline-flex; align-items: center; line-height: 1; }
+h1.row > a:not(.badge), h1.row > span:not(.page-title-ellipsis) { display: inline-flex; align-items: center; line-height: 1; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; flex-shrink: 0; }
 .chip { display: inline-block; font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--panel-3); color: var(--text-2); margin: 1px 4px 1px 0; border: 1px solid var(--border); }
 button.chip { cursor: pointer; }
@@ -489,6 +511,8 @@ input, select, textarea, button { font: inherit; color: inherit; }
 input[type='text'], input[type='password'], input[type='number'], input[type='time'], input[type='search'], input[type='email'], input[type='url'], select, textarea {
   background: var(--bg); border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 7px 10px; color: var(--text); min-width: 0;
 }
+/* Explicit placeholder: browser default (#757575) was ~4.3:1 on --bg. */
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
 /* Bordered fields: the accent border + solid inner ring replaces the outline. Checkboxes keep the shared outline below. */
 input:not([type='checkbox']):not([type='radio']):focus, select:focus, textarea:focus {
@@ -528,6 +552,8 @@ label.check { display: inline-flex; align-items: center; gap: 8px; cursor: point
 /* Filter toggles: outline when off, accent-tinted outline when on (not a filled primary CTA). */
 .btn.toggle { background: transparent; color: var(--text-2); }
 .btn.toggle.on { border-color: var(--accent); color: var(--text); background: var(--accent-bg); }
+/* Count chips inside an on toggle: --muted on accent-bg was ~4.1:1; --text-2 clears AA. */
+.btn.toggle.on .muted { color: var(--text-2); }
 /* Icon-only buttons: tooltips are intentionally the browser's native `title` (no custom tooltip
    primitive). Every icon-only control must carry both `title` (hover hint) and `aria-label`
    (screen readers / keyboard users, since `title` alone is not reliably announced). */
@@ -605,8 +631,9 @@ td > .btn + .btn { margin-left: var(--space-1); }
 
 /* Change events table (Changes page, dashboard Recent changes): Time, Event, Port and Scan take their
    content width; Device and Change share the rest (Change the larger part) and truncate to one line,
-   full text in the title. Every row is two lines tall (device name + IP), with or without an IP. */
-.event-table th, .event-table td { white-space: nowrap; }
+   full text in the title. Device shows name · IP on one line (~38px rows). */
+.event-table th, .event-table td { white-space: nowrap; padding: 4px 8px; }
+.event-table td { height: 38px; }
 .event-table .event-device { width: 35%; max-width: 0; min-width: 96px; }
 .event-table .event-change { width: 65%; max-width: 0; min-width: 120px; }
 .event-table.compact .event-device { min-width: 64px; }
@@ -618,9 +645,6 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .event-table .event-type { width: 1%; }
 /* line-height 0: the line box is exactly the badge, so the cell's vertical-align: middle centers it. */
 .event-table td.event-type { line-height: 0; }
-.event-device-cell { display: flex; flex-direction: column; justify-content: center; min-width: 0; min-height: 36px; }
-.event-device-cell .small { line-height: 1.3; }
-.event-table.compact .event-device-cell { min-height: 32px; }
 .event-change-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .event-change-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .event-diff { display: flex; gap: 4px; }
@@ -633,9 +657,9 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .event-emailed { margin-left: 6px; }
 
 .bars { display: flex; flex-direction: column; gap: 8px; }
-/* Label column scales with the card (same width on every row, so bars line up); long labels truncate
-   with an ellipsis (full text in the row's title) instead of wrapping or running into the bar. */
-.bar-row { display: grid; grid-template-columns: minmax(96px, 32%) minmax(0, 1fr) 44px; gap: 10px; align-items: center; font-size: 12.5px; }
+/* Fixed label width (same on every row so bars line up). Cap at 10.5rem — 32% left a large dead
+   gap for short labels (ports, services). Long labels still truncate; full text is in the row title. */
+.bar-row { display: grid; grid-template-columns: minmax(0, 10.5rem) minmax(0, 1fr) 2.75rem; gap: 10px; align-items: center; font-size: 12.5px; }
 .bar-row > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-row.active span:first-child { color: var(--accent); font-weight: 600; }
 /* Bar rows are usually links (Dashboard, Reports) or filter buttons (VulnFacets); one reset for both. */
@@ -660,9 +684,10 @@ table.heatmap col.heatmap-label { width: 180px; }
    width left by the fixed columns and truncate (full text in the title); max-width: 0 lets the auto
    table layout shrink them below their content width. */
 /* Compact one-line rows (~38px) that fit 1280 with the optional OS / RTT columns on. */
+.devices-table-wrap { container-type: inline-size; }
 .devices-table th, .devices-table td { padding: 4px 8px; white-space: nowrap; }
 .devices-table td { height: 38px; }
-.devices-table td.dev-fit { width: 1%; }
+.devices-table th.dev-fit, .devices-table td.dev-fit { width: 1%; }
 /* Fluid columns' headers truncate too, so a header label never sets the column's minimum width. */
 .devices-table th.dev-fluid { max-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .devices-table th.dev-fluid .th-sort { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
@@ -672,6 +697,16 @@ table.heatmap col.heatmap-label { width: 180px; }
 .devices-table td.dev-vendor { width: 10%; min-width: 36px; }
 .devices-table td.dev-network { width: 8%; min-width: 36px; }
 .devices-table td.fluid-ellipsis { min-width: 40px; }
+/* Narrow table: drop lowest-value columns (values stay in the hostname title). Last seen always stays. */
+@container (max-width: 1180px) {
+  .devices-table .dev-first-seen { display: none; }
+}
+@container (max-width: 980px) {
+  .devices-table .dev-vendor { display: none; }
+}
+@container (max-width: 860px) {
+  .devices-table .dev-network { display: none; }
+}
 /* Fluid column: takes the table's leftover width and truncates instead of forcing a horizontal scroll
    (max-width: 0 drops the cell's min-content width so the auto table layout can shrink it). */
 td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
@@ -680,10 +715,18 @@ td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 .domain-table th, .domain-table td { white-space: nowrap; }
 .domain-table .domain-col-name { width: 30%; max-width: 0; min-width: 160px; }
 .domain-table .domain-col-fluid { width: 18%; max-width: 0; min-width: 110px; }
-/* Domains list: compact one-line rows so the risk columns fit at 1280. */
+/* Domains list: compact one-line rows so the risk columns fit at 1024/1280.
+   Short columns take content width; Domain / Last scan / Schedule share the rest and truncate
+   (full value in title). Actions stay fit-content so Scan/Edit/Delete are never clipped. */
 .domains-list-table th, .domains-list-table td { padding: 4px 6px; }
 .domains-list-table td { height: 38px; }
-.domains-list-table .domain-col-name { min-width: 120px; }
+.domains-list-table .domain-col-name { min-width: 96px; }
+.domains-list-table .dl-fit { width: 1%; }
+.domains-list-table th.dl-fluid { max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.domains-list-table td.dl-fluid { max-width: 0; min-width: 48px; }
+.domains-list-table .btn.icon {
+  min-width: 28px; min-height: 28px; padding: 4px;
+}
 /* Subdomain inventory: one line per row (same height on every row), never wider than the card. Short
    columns (exposure, findings, sources, last seen, status) take their content width; Name gets the most
    of the rest, IPs / Records / Hosting share what remains. Shrinkable cells truncate with the full value
@@ -691,8 +734,8 @@ td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 .subdomain-table th, .subdomain-table td { white-space: nowrap; padding-left: 8px; padding-right: 8px; }
 .subdomain-table td { height: 38px; }
 .subdomain-table .sd-fit { width: 1%; }
-.subdomain-table .sd-name { width: 34%; max-width: 0; min-width: 100px; }
-.subdomain-table .sd-flex { width: 10%; max-width: 0; min-width: 44px; }
+.subdomain-table .sd-name { width: 34%; max-width: 0; min-width: 80px; }
+.subdomain-table .sd-flex { width: 10%; max-width: 0; min-width: 36px; }
 .subdomain-table .sd-hosting { width: 10%; }
 .subdomain-table .sd-sources { width: 6%; }
 /* Full IPv4 always visible (fit-content up to a short IPv6); longer IPv6 truncates, "+N" stays. */
@@ -702,11 +745,17 @@ td.fluid-ellipsis { max-width: 0; min-width: 120px; width: 16%; }
 .subdomain-table .sd-score { text-align: center; }
 .subdomain-table .sd-findings-col .badge { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
 .sd-ports-cell { display: inline-flex; align-items: center; gap: 6px; }
-/* Below ~1300px of table width (viewports up to ~1580px) Records and Sources drop out so Name, IPs and
-   Hosting stay readable; both are in the name's title and on the subdomain page. */
+/* Progressive column drop on narrow tables; values live in the name title. Status always stays. */
 .subdomain-table-wrap { container-type: inline-size; }
 @container (max-width: 1300px) {
   .subdomain-table .sd-records, .subdomain-table .sd-sources { display: none; }
+}
+@container (max-width: 1100px) {
+  .subdomain-table .sd-hosting { display: none; }
+}
+@container (max-width: 960px) {
+  .subdomain-table .sd-last-seen { display: none; }
+  .subdomain-table .sd-ips { max-width: 110px; }
 }
 .sd-ips-cell { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .sd-ips-cell > .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -809,7 +858,8 @@ img.thumb { width: 96px; height: 60px; object-fit: cover; object-position: top; 
   position: absolute; inset: 0; display: grid; place-items: center; gap: 8px;
   background: rgba(6, 12, 22, 0.55); color: var(--text); font-size: 0.9rem;
 }
-.host-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+/* min(290px, 100%): never force a track wider than the container (390px mobile). */
+.host-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr)); gap: 14px; }
 .shot, .host-card { background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; min-width: 0; display: flex; flex-direction: column; }
 .host-card { background: var(--panel); color: var(--text); transition: border-color 0.15s, transform 0.15s; }
 .host-card:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
@@ -837,7 +887,8 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 a.shot-img { text-decoration: none; }
 .web-filters { gap: var(--space-2); margin-bottom: var(--space-4); align-items: center; }
 /* A select is as wide as its longest option; long network names must not stretch the bar. */
-.web-filters select { max-width: 260px; }
+.web-filters select { max-width: min(260px, 100%); min-width: 0; }
+.web-search { width: min(240px, 100%); min-width: 0; }
 .web-more { justify-content: center; gap: var(--space-3); margin-top: var(--space-4); }
 .shot-missing { display: grid; place-items: center; width: 100%; height: 100%; min-height: 60px; color: var(--muted); font-size: 12.5px; background: var(--panel); }
 .shot-meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }

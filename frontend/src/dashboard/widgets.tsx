@@ -388,7 +388,7 @@ function ExposureScoresWidget({ data, edit, measuring }: WidgetRenderProps) {
         </div>
         {data.exposure.top.length > 0 && (
           <table ref={tableRef} className="dash-table">
-            <thead><tr><th>IP</th><th className="dash-main dash-split">Hostname</th><th className="dash-shrink">Type</th><th className="right">Score</th></tr></thead>
+            <thead><tr><th>IP</th><th className="dash-main dash-split" title="Hostname">Hostname</th><th className="dash-shrink">Type</th><th className="right">Score</th></tr></thead>
             <tbody>
               {rows.map((h) => (
                 <tr key={h.uuid} className="clickable" onClick={() => !edit && nav(`/devices/${h.uuid}`)}>
@@ -479,7 +479,7 @@ function NetworksWidget({ data, edit, measuring, reload }: WidgetRenderProps) {
           row (badge + Run button) needs the shrinking split instead. */}
       <div className={`dash-net${pending ? '' : ' dated'}`}>
       <table ref={tableRef} className="dash-table">
-        <thead><tr><th className="dash-main dash-split net-name">Network</th><th className="dash-fit">Scope</th><th className="dash-fit" title="Active / known hosts">Hosts</th><th className="dash-shrink net-baseline">Baseline</th></tr></thead>
+        <thead><tr><th className="dash-main dash-split net-name" title="Network">Network</th><th className="dash-fit">Scope</th><th className="dash-fit" title="Active / known hosts">Hosts</th><th className="dash-shrink net-baseline" title="Baseline">Baseline</th></tr></thead>
         <tbody>
           {rows.map((n) => (
             <tr key={n.id} className="clickable" onClick={() => !edit && nav(`/devices?network_id=${n.id}`)}>

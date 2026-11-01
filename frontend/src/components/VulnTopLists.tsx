@@ -102,7 +102,7 @@ function TopDevices({ items, filters, onToggleDevice, onToggleNetwork }: {
     <Card title="Top 10 highest-risk devices" flush>
       {!items.length ? <Empty>No device has a non-zero risk score yet.</Empty> : (
         <div className="table-wrap">
-          <table className="compact">
+          <table className="compact domain-table fit-table">
             <thead>
               <tr>
                 {th('host', 'Host')}
@@ -118,20 +118,23 @@ function TopDevices({ items, filters, onToggleDevice, onToggleNetwork }: {
                 const netKey = d.network_id != null ? String(d.network_id) : 'unassigned';
                 const netActive = filters.network_id === netKey;
                 const netLabel = d.network_name ?? 'Unassigned';
+                const hostTip = [d.ip, d.hostname].filter(Boolean).join('\n');
                 return (
                   <tr key={d.uuid} className={active ? 'row-active' : undefined}
                     style={{ cursor: 'pointer' }}
                     onClick={() => onToggleDevice(d.uuid)}
                     title={active ? 'Clear device filter' : 'Filter findings to this device'}>
-                    <td>
-                      <Link className="mono" to={`/devices/${d.uuid}`}
-                        onClick={(e) => e.stopPropagation()}>{d.ip}</Link>
-                      {d.hostname && <div className="muted small">{d.hostname}</div>}
+                    <td className="domain-col-fluid" title={hostTip}>
+                      <span className="cell-ellipsis">
+                        <Link className="mono" to={`/devices/${d.uuid}`}
+                          onClick={(e) => e.stopPropagation()}>{d.ip}</Link>
+                        {d.hostname && <span className="muted small"> · {d.hostname}</span>}
+                      </span>
                     </td>
-                    <td>
+                    <td className="domain-col-fluid">
                       <button
                         type="button"
-                        className={`heatmap-network-btn ${netActive ? 'active' : ''}`}
+                        className={`heatmap-network-btn cell-ellipsis ${netActive ? 'active' : ''}`}
                         aria-pressed={netActive}
                         title={netActive ? 'Clear network filter' : `Filter by network: ${netLabel}`}
                         onClick={(e) => { e.stopPropagation(); onToggleNetwork(d.network_id); }}

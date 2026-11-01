@@ -41,12 +41,12 @@ export default function CveDetail() {
   return (
     <>
       <div className="page-head">
-        <div>
+        <div className="page-head-main">
           <div className="muted small"><Link to="/vulnerabilities">Vulnerabilities</Link> /</div>
-          <h1 className="mono">{cve_id}</h1>
+          <h1 className="mono page-title-ellipsis" title={cve_id}>{cve_id}</h1>
           <p>Severity bands use the cached CVSS base score (9 / 7 / 4). Missing CVSS is unscored - not a guessed medium.</p>
         </div>
-        <div className="row wrap gap-2">
+        <div className="row wrap gap-2 page-head-actions">
           <Link className="btn" to={`/vulnerabilities?cve_id=${encodeURIComponent(cve_id)}&print=1`}>
             Report for this CVE
             {data ? ` (${data.affected_devices.length})` : ''}
