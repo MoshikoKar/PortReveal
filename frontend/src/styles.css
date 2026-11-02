@@ -904,11 +904,62 @@ button.shot-img:hover img, .host-card:hover .shot-img img { transform: scale(1.0
 .host-card-name { color: var(--text); font-weight: 600; }
 .host-card-name:hover { text-decoration: underline; text-underline-offset: 2px; }
 a.shot-img { text-decoration: none; }
-.web-filters { gap: var(--space-2); margin-bottom: var(--space-4); align-items: center; }
+.web-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0 var(--space-2); align-items: center; }
 /* A select is as wide as its longest option; long network names must not stretch the bar. */
 .web-filters select { max-width: min(260px, 100%); min-width: 0; }
-.web-search { width: min(240px, 100%); min-width: 0; }
+.web-search { flex: 1 1 220px; max-width: 320px; min-width: 0; }
+.web-port { width: 96px; max-width: 100%; }
+.web-chips { gap: var(--space-2) var(--space-4); margin-bottom: var(--space-4); }
+.web-chip-group { gap: var(--space-1); }
 .web-more { justify-content: center; gap: var(--space-3); margin-top: var(--space-4); }
+.web-empty { gap: var(--space-3); }
+.page-head .web-summary { margin-top: var(--space-2); color: var(--text-2); }
+.attention, .stale { color: var(--medium); }
+.btn.toggle .attention { color: var(--medium); }
+/* Cards that need attention: tinted border plus a band naming the finding (readable across a room). */
+.host-card[data-risk='high'] { border-color: color-mix(in srgb, var(--high) 60%, var(--border)); }
+.host-card[data-risk='medium'] { border-color: color-mix(in srgb, var(--medium) 55%, var(--border)); }
+.host-card[data-risk='high']:hover { border-color: var(--high); }
+.host-card[data-risk='medium']:hover { border-color: var(--medium); }
+.exposure-band {
+  margin: 0; padding: var(--space-2) var(--space-3); font-size: 13px; line-height: 1.35;
+  border-bottom: 1px solid var(--border); overflow-wrap: anywhere;
+}
+.exposure-band strong { margin-right: var(--space-1); }
+.host-card[data-risk='high'] .exposure-band { background: var(--high-bg); color: color-mix(in srgb, var(--high) 30%, var(--text)); }
+.host-card[data-risk='high'] .exposure-band strong { color: var(--high); }
+.host-card[data-risk='medium'] .exposure-band { background: var(--medium-bg); color: color-mix(in srgb, var(--medium) 30%, var(--text)); }
+.host-card[data-risk='medium'] .exposure-band strong { color: var(--medium); }
+.host-card-h { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.3; min-width: 0; overflow: hidden; }
+.host-card-badges { gap: var(--space-1); flex-shrink: 0; }
+.host-card-tags { gap: var(--space-1); }
+.host-card-tags .chip { margin: 0; }
+/* The card clips its corners and the (positioned) thumbnail would paint over an inset outline,
+   so the screenshot button's focus ring is an overlay drawn above the image. */
+.host-card button.shot-img:focus-visible { outline: none; }
+.host-card button.shot-img:focus-visible::after {
+  content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+/* No screenshot: the reason fills whatever height the row gives the card instead of a fixed 16:10 block. */
+.host-card .shot-ph { aspect-ratio: auto; flex: 1 0 auto; min-height: 64px; overflow-wrap: anywhere; }
+.recapture-error { margin: 0; color: var(--high); overflow-wrap: anywhere; }
+.exposure-note { margin: 0; padding: var(--space-2) 10px; border-radius: var(--radius-md); font-size: 12.5px; line-height: 1.45; }
+.exposure-note.high { background: var(--high-bg); }
+.exposure-note.high strong { color: var(--high); }
+.exposure-note.medium { background: var(--medium-bg); }
+.exposure-note.medium strong { color: var(--medium); }
+.exposure-note.low { background: var(--low-bg); }
+.exposure-note.low strong { color: var(--low); }
+@media (max-width: 600px) {
+  /* Phones: the summary stays, the intro goes (Remote is in the menu), and each chip group is one swipeable line. */
+  .web-intro { display: none; }
+  .web-search { flex-basis: 100%; max-width: none; }
+  .web-filters select, .web-port { flex: 1 1 40%; max-width: none; }
+  .web-chips { flex-direction: column; align-items: stretch; }
+  .web-chips .web-chip-group { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .web-chip-group .btn { flex: none; }
+}
 .shot-missing { display: grid; place-items: center; width: 100%; height: 100%; min-height: 60px; color: var(--muted); font-size: 12.5px; background: var(--panel); }
 .shot-meta { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .shot-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -928,6 +979,8 @@ a.shot-img { text-decoration: none; }
 .lightbox-nav:hover { border-color: var(--accent); }
 .lightbox-nav.prev { left: 12px; }
 .lightbox-nav.next { right: 12px; }
+@media (hover: none) { .lightbox-hint { display: none; } }
+@media (pointer: coarse) { .lightbox-close { min-width: 44px; min-height: 44px; } }
 @media (max-width: 900px) {
   .lightbox { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
   .lightbox-stage { padding: 16px 52px; }

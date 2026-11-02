@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ImgHTMLAttributes, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ImgHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { RtspLivePlayer, liveStreamUrl } from './RtspLivePlayer';
 import type { WebPage, WebPageKind } from '../types';
-import { fmtTime } from '../util';
-import { observeWhenVisible } from '../webGallery';
+import { fmtTime, relTime } from '../util';
+import { observeWhenVisible, pageTitle } from '../webGallery';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -84,7 +84,8 @@ export function HttpBadge({ status, rtsp, desktop }: { status: number | null; rt
   if (desktop) return <span className="badge outline">{desktop.toUpperCase()}</span>;
   if (rtsp) return <span className="badge outline">RTSP</span>;
   if (status == null) return <span className="badge outline">no response</span>;
-  const cls = status < 300 ? 'ok' : status < 400 ? 'low' : status === 401 || status === 403 ? 'medium' : 'high';
+  // A working page is not "healthy" in security terms: 2xx stays neutral, colour is kept for problems
+  const cls = status < 300 ? 'outline' : status < 400 ? 'low' : status === 401 || status === 403 ? 'medium' : 'high';
   return <span className={`badge ${cls}`}>HTTP {status}</span>;
 }
 
@@ -140,14 +141,17 @@ export function PageFlags({ p }: { p: WebPage }) {
 export function ShotTile({ p, onOpen }: { p: WebPage; onOpen?: () => void }) {
   const finalPath = pathOf(p.final_url);
   const redirected = p.final_url && p.final_url !== p.url;
+  // Same host and path (e.g. http -> https): only the full address shows what changed
+  const fullTarget = hostOf(p.final_url) !== hostOf(p.url) || finalPath === pathOf(p.url);
   const rtsp = isRtspPage(p);
   const desktop = isDesktopPage(p);
+  const title = pageTitle(p.title);
   return (
     <article className="shot">
       {isUsefulShot(p) ? (
         <button className="shot-img" onClick={onOpen} title={rtsp ? 'Open stream' : 'Open preview'}>
           {/* width/height only hint the 16:10 tile ratio; CSS sizes the image. */}
-          <ShotImg src={shotUrl(p)} alt={p.title ?? p.url} loading="lazy" decoding="async" width={320} height={200} />
+          <ShotImg src={shotUrl(p)} alt={title ?? p.url} loading="lazy" decoding="async" width={320} height={200} />
         </button>
       ) : (
         <div className="shot-img shot-ph"><span>{shotNote(p)}</span></div>
@@ -158,22 +162,36 @@ export function ShotTile({ p, onOpen }: { p: WebPage; onOpen?: () => void }) {
           <HttpBadge status={p.http_status} rtsp={rtsp} desktop={desktop ? p.scheme : undefined} />
           <PageFlags p={p} />
         </div>
-        <div className="shot-title" title={p.title ?? undefined}>{p.title ?? <span className="muted">Untitled</span>}</div>
+        <div className="shot-title" title={title ?? undefined}>{title ?? <span className="muted">Untitled</span>}</div>
         <div className="mono small muted shot-path" title={p.url}>
-          {rtsp || desktop ? (p.final_url || p.url) : <>{pathOf(p.url)}{redirected && <> → {hostOf(p.final_url) !== hostOf(p.url) ? p.final_url : finalPath}</>}</>}
+          {rtsp || desktop ? (p.final_url || p.url) : <>{pathOf(p.url)}{redirected && <> → {fullTarget ? p.final_url : finalPath}</>}</>}
         </div>
       </div>
     </article>
   );
 }
 
-export function Lightbox({ pages, index, onIndex, onClose }: {
+/**
+ * Full-size preview with prev/next. `total` counts pages not loaded yet: stepping past the last loaded
+ * one calls `onEnd` (load more) instead of wrapping. `side` adds caller content under the badges, and
+ * `focusOnClose` names the element to focus on close (default: the one that opened the lightbox).
+ */
+export function Lightbox({ pages, index, onIndex, onClose, total, onEnd, side, focusOnClose }: {
   pages: WebPage[]; index: number; onIndex: (i: number) => void; onClose: () => void;
+  total?: number; onEnd?: () => void; side?: (index: number) => ReactNode;
+  focusOnClose?: (index: number) => HTMLElement | null | undefined;
 }) {
   const p = pages[index];
   const [showLive, setShowLive] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const go = (d: number) => onIndex((index + d + pages.length) % pages.length);
+  const count = Math.max(total ?? 0, pages.length);
+  const go = (d: number) => {
+    if (d > 0 && index === pages.length - 1 && count > pages.length && onEnd) onEnd();
+    else onIndex((index + d + pages.length) % pages.length);
+  };
+  // Latest values for the mount-once effect below
+  const latest = useRef({ index, focusOnClose, go });
+  latest.current = { index, focusOnClose, go };
 
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -183,19 +201,21 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prev;
-      if (opener?.isConnected) opener.focus();
+      const { focusOnClose: target, index: at } = latest.current;
+      const back = target?.(at) ?? opener;
+      if (back?.isConnected) back.focus();
     };
   }, []);
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
-      else if (e.key === 'ArrowRight') onIndex((index + 1 + pages.length) % pages.length);
-      else if (e.key === 'ArrowLeft') onIndex((index - 1 + pages.length) % pages.length);
+      else if (e.key === 'ArrowRight') latest.current.go(1);
+      else if (e.key === 'ArrowLeft') latest.current.go(-1);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [index, onClose, onIndex, pages.length]);
+  }, [onClose]);
 
   useEffect(() => { setShowLive(false); }, [p?.id]);
 
@@ -221,13 +241,14 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
   if (!p) return null;
   const live = p.final_url ?? p.url;
   const rtsp = isRtspPage(p);
+  const title = pageTitle(p.title);
 
   return (
     <div
       className="lightbox"
       role="dialog"
       aria-modal="true"
-      aria-label={rtsp ? 'Stream preview' : 'Screenshot preview'}
+      aria-label={`${rtsp ? 'Stream' : 'Screenshot'} of ${title ?? `${p.host_used}:${p.port}`}`}
       tabIndex={-1}
       ref={ref}
       onKeyDown={onKeyDown}
@@ -237,13 +258,13 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
           <div className="rtsp-lightbox-feed">
             <RtspLivePlayer
               src={liveStreamUrl(p.id)}
-              label={p.title ?? 'RTSP'}
+              label={title ?? 'RTSP'}
               posterUrl={p.has_screenshot ? shotUrl(p) : null}
               autoStart
             />
           </div>
         ) : p.has_screenshot ? (
-          <ShotImg src={shotUrl(p)} alt={p.title ?? p.url} decoding="async" />
+          <ShotImg src={shotUrl(p)} alt={title ?? p.url} decoding="async" />
         ) : (
           <div className="rtsp-ph" style={{ minWidth: 320, minHeight: 200 }}><span>{shotNote(p)}</span></div>
         )}
@@ -256,22 +277,23 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
       </div>
       <aside className="lightbox-side">
         <div className="spread">
-          <span className="muted small">{index + 1} / {pages.length}</span>
-          <button className="btn ghost sm" onClick={onClose} aria-label="Close" title="Close">✕</button>
+          <span className="muted small">{index + 1} / {count}</span>
+          <button className="btn ghost sm lightbox-close" onClick={onClose} aria-label="Close" title="Close">✕</button>
         </div>
-        <h2 style={{ overflowWrap: 'anywhere' }}>{p.title ?? 'Untitled page'}</h2>
+        <h2 style={{ overflowWrap: 'anywhere' }}>{title ?? 'Untitled page'}</h2>
         <div className="row wrap" style={{ gap: 6 }}>
           <span className="badge accent">{KIND_LABELS[p.kind] ?? p.kind}</span>
           <HttpBadge status={p.http_status} rtsp={rtsp} />
           <PageFlags p={p} />
         </div>
+        {side?.(index)}
         <dl className="dl compact">
           <dt>Host</dt><dd className="mono">{p.ip}:{p.port}</dd>
           <dt>URL</dt><dd className="mono small">{p.url}</dd>
           {p.final_url && p.final_url !== p.url && <><dt>Landed on</dt><dd className="mono small">{p.final_url}</dd></>}
           {p.server_header && <><dt>Server</dt><dd>{p.server_header}</dd></>}
           {p.content_type && <><dt>Content type</dt><dd className="small">{p.content_type}</dd></>}
-          <dt>Captured</dt><dd>{fmtTime(p.captured_at, true)}</dd>
+          <dt>Captured</dt><dd>{fmtTime(p.captured_at, true)} <span className="muted">({relTime(p.captured_at)})</span></dd>
         </dl>
         <div className="row wrap">
           {rtsp ? (
@@ -285,7 +307,7 @@ export function Lightbox({ pages, index, onIndex, onClose }: {
             <a className="btn sm ghost" href={shotUrl(p)} target="_blank" rel="noreferrer">Full-size image</a>
           )}
         </div>
-        <div className="muted small">← → to browse · Esc to close</div>
+        <div className="muted small lightbox-hint">← → to browse · Esc to close</div>
       </aside>
     </div>
   );

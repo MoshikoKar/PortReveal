@@ -100,7 +100,7 @@ Rules for actions:
 | `GET /api/search` | 25 | 100 | Each page scores hosts and nests their services |
 | `GET /api/scans/{id}/events` | 50 | 500 | Scan detail no longer embeds events |
 | `GET /api/web-hosts` | 50 | 500 | Returns `hosts` instead of `items`, plus `total`, `page`, `page_size` |
-| `GET /api/web-previews` | 36 | 200 | Web gallery cards, filtered on the server (`network_id`, `port`, `scheme`, `status`, `q`); adds `counts` per status. Grid images come from `GET /api/web-pages/{id}/thumbnail` (~400px WebP, `ETag` + `Cache-Control`) |
+| `GET /api/web-previews` | 36 | 200 | Web gallery cards with `exposure` findings, `risk` and `is_new`, filtered on the server (`network_id`, `port`, `scheme`, `status`, `q`, `attention`, `new`) and sorted by `sort` (`risk` default, `name`, `oldest`); adds `counts` per status, `attention` / `new` toggle counts and `captured_range`. Grid images come from `GET /api/web-pages/{id}/thumbnail` (~400px WebP, `ETag` + `Cache-Control`) |
 
 - Small admin collections (users, networks, exclusions, tokens, webhooks, saved searches) are returned
   as plain arrays without paging. They stay arrays within v1; OpenAPI marks each one (`UNPAGED_LIST`

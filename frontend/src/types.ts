@@ -453,7 +453,15 @@ export interface WebPreviewCard {
   has_login: boolean;
   captured_at: string;
   page: WebPage;
+  /** Exposure findings, worst first. */
+  exposure: WebExposure[];
+  /** Weight of the worst finding: 0 none, 1 low, 2 medium, 3 high. */
+  risk: number;
+  /** The device's previous capture did not have this service. */
+  is_new: boolean;
 }
+
+export type WebExposure = 'cleartext_login' | 'open_stream' | 'login_unverified_tls' | 'tls_unverified' | 'default_page';
 
 export interface WebPreviewPage {
   items: WebPreviewCard[];
@@ -462,6 +470,11 @@ export interface WebPreviewPage {
   page_size: number;
   /** Cards per status under the other filters. */
   counts: Record<WebPreviewCard['status'], number>;
+  /** Cards the "Needs attention" / "New" toggles would list under the other filters. */
+  attention: number;
+  new: number;
+  /** Oldest and newest capture time of the listed cards. */
+  captured_range: [string, string] | null;
 }
 
 export interface WebCapture {

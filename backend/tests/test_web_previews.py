@@ -128,6 +128,42 @@ def test_preview_filters(db, client):
     assert client.get("/api/web-previews", params={"scheme": "ftp"}).status_code == 422
 
 
+def test_previews_rank_exposure_and_flag_new_services(db, client):
+    setup_admin(client)
+    net = make_network(db, "10.99.0.0/24", name="Mock Lab")
+    old = _capture(db)
+    seen = _device(db, "10.99.0.10", net.id, "aaa-seen.mock.test")
+    _page(db, old, seen, title="Console")
+    db.commit()
+    cap = _capture(db)
+    _page(db, cap, seen, title="Console")  # same service as last time
+    _page(db, cap, seen, scheme="http", port_n=8081, title="Agent")  # opened since the last capture
+    login = _page(db, cap, _device(db, "10.99.0.11", net.id, "zzz-login.mock.test"), scheme="http",
+                  port_n=80, title="Sign in")
+    login.kind = "login"
+    weak_tls = _page(db, cap, _device(db, "10.99.0.12", net.id, "mmm-tls.mock.test"), title="Router")
+    weak_tls.tls_verified = False
+    db.commit()
+
+    r = client.get("/api/web-previews").json()
+    assert [(c["ip"], c["port"]) for c in r["items"]] == [
+        ("10.99.0.11", 80), ("10.99.0.12", 443), ("10.99.0.10", 8081), ("10.99.0.10", 443)]
+    by_port = {(c["ip"], c["port"]): c for c in r["items"]}
+    assert by_port[("10.99.0.11", 80)]["exposure"] == ["cleartext_login"]
+    assert by_port[("10.99.0.11", 80)]["risk"] == 3
+    assert by_port[("10.99.0.12", 443)]["exposure"] == ["tls_unverified"]
+    assert by_port[("10.99.0.10", 8081)]["is_new"] and not by_port[("10.99.0.10", 443)]["is_new"]
+    assert not by_port[("10.99.0.11", 80)]["is_new"]  # first capture of that device: nothing to compare
+    assert r["attention"] == 1 and r["new"] == 1
+    assert r["captured_range"] is not None
+    assert _keys(client.get("/api/web-previews", params={"attention": True})) == {"10.99.0.11"}
+    assert {(c["ip"], c["port"]) for c in client.get("/api/web-previews", params={"new": True}).json()["items"]} \
+        == {("10.99.0.10", 8081)}
+    names = client.get("/api/web-previews", params={"sort": "name"}).json()["items"]
+    assert [c["hostname"] for c in names][0] == "aaa-seen.mock.test"
+    assert client.get("/api/web-previews", params={"sort": "bogus"}).status_code == 422
+
+
 def test_thumbnail_is_small_webp_with_cache_headers(db, client):
     setup_admin(client)
     net = make_network(db, "10.0.0.0/24", name="Test Network A")

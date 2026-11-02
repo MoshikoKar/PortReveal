@@ -51,6 +51,11 @@ HOST_VIEW_STATES = ("running", "completed", "partial", "cancelled")
 # Web gallery cards: a usable service with a screenshot, one without (failed, timed out, skipped, over
 # the screenshot budget), or a host with no usable service at all. Listed in this order.
 PREVIEW_STATUSES = ("ok", "no_preview", "error")
+# Gallery exposure findings and their weight (the UI words them). Passive: only what the capture saw.
+EXPOSURE_RISK = {"cleartext_login": 3, "open_stream": 3, "login_unverified_tls": 2, "tls_unverified": 1,
+                 "default_page": 1}
+# Cards at or above this weight "need attention" (filter + count on /web).
+ATTENTION_RISK = 2
 # Screenshot files never change once written (a new capture writes new pages), so browsers may keep them.
 IMAGE_CACHE_CONTROL = "private, max-age=86400"
 
@@ -211,6 +216,9 @@ def _web_services(dev_pages: list[WebPage]) -> list[dict]:
             "ports": [best.port],
             "page_count": len(usable),
             "has_login": any(p.kind == WEB_PAGE_LOGIN for p in usable),
+            # Basic sends the password base64-encoded (readable); Digest/NTLM/Negotiate do not
+            "basic_auth": any((p.auth_scheme or "").lower() == "basic" for p in usable),
+            "tls_unverified": any(p.tls_verified is False for p in usable),
             "page": web_page_out(best),
         }
         by_landing[_landing_key(best)] = svc
@@ -640,6 +648,51 @@ def _latest_pages_by_device(db: Session, *, kind: Literal["web", "remote"], incl
     return by_dev
 
 
+def _previous_web_ports(db: Session, by_dev: dict[int, list[WebPage]]) -> dict[int, set[int]]:
+    """Web (HTTP(S)/RTSP) ports of each device's capture before its latest one.
+
+    Devices captured only once are left out: nothing to compare with, so nothing is "new".
+    """
+    if not by_dev:
+        return {}
+    web_only = func.lower(WebPage.scheme).not_in(("rdp", "vnc"))
+    latest = {dev_id: pages[0].capture_id for dev_id, pages in by_dev.items()}
+    rows = db.execute(
+        select(WebPage.device_id, WebPage.capture_id, WebPage.port)
+        .join(WebCapture, WebCapture.id == WebPage.capture_id)
+        .where(WebPage.device_id.in_(latest), WebCapture.status.in_(HOST_VIEW_STATES), web_only)
+    ).all()
+    prev_cid: dict[int, int] = {}
+    for dev_id, cid, _ in rows:
+        if cid < latest[dev_id] and cid > prev_cid.get(dev_id, -1):
+            prev_cid[dev_id] = cid
+    ports: dict[int, set[int]] = {dev_id: set() for dev_id in prev_cid}
+    for dev_id, cid, port_n in rows:
+        if prev_cid.get(dev_id) == cid:
+            ports[dev_id].add(port_n)
+    return ports
+
+
+def _exposure(scheme: str | None, page: dict, *, login: bool = False, tls_unverified: bool = False) -> list[str]:
+    """Exposure findings of one gallery card, worst first (keys of EXPOSURE_RISK)."""
+    scheme = (scheme or "").lower()
+    found = []
+    if scheme == "http" and login:
+        found.append("cleartext_login")
+    # RTSP stills are grabbed with empty credentials only: a frame means anyone can watch
+    if scheme in ("rtsp", "rtsps") and page["has_screenshot"] and page["error_reason"] is None:
+        found.append("open_stream")
+    if scheme == "https" and tls_unverified:
+        found.append("login_unverified_tls" if login else "tls_unverified")
+    if (page["error_reason"] or "").startswith("default server page"):
+        found.append("default_page")
+    return sorted(found, key=lambda f: -EXPOSURE_RISK[f])
+
+
+def _with_risk(card: dict, exposure: list[str]) -> dict:
+    return {**card, "exposure": exposure, "risk": max((EXPOSURE_RISK[f] for f in exposure), default=0)}
+
+
 def _preview_cards(dev_pages: list[WebPage]) -> list[dict]:
     """Gallery cards of one host: one per usable web service, or a single ``error`` card (its most
     representative page) when the host has no usable service."""
@@ -647,23 +700,25 @@ def _preview_cards(dev_pages: list[WebPage]) -> list[dict]:
     base = {"device_uuid": dev.uuid, "hostname": dev.hostname, "ip": dev.current_ip}
     services = _web_services(dev_pages)
     if services:
-        return [{
+        return [_with_risk({
             **base,
             "key": f"{dev.uuid}:{s['scheme']}:{s['port']}",
             "status": "ok" if s["page"]["has_screenshot"] and s["page"]["error_reason"] is None else "no_preview",
             "scheme": s["scheme"], "port": s["port"], "ports": s["ports"],
             "page_count": s["page_count"], "has_login": s["has_login"],
             "captured_at": s["page"]["captured_at"], "page": s["page"],
-        } for s in services]
+        }, _exposure(s["scheme"], s["page"], login=s["has_login"] or s["basic_auth"],
+                     tls_unverified=s["tls_unverified"])) for s in services]
     hero = min(dev_pages, key=_page_rank)
-    return [{
+    page = web_page_out(hero)
+    return [_with_risk({
         **base,
         "key": f"{dev.uuid}:{hero.scheme}:{hero.port}",
         "status": "error",
         "scheme": hero.scheme, "port": hero.port, "ports": sorted({p.port for p in dev_pages}),
         "page_count": 0, "has_login": False,
-        "captured_at": max(p.captured_at for p in dev_pages), "page": web_page_out(hero),
-    }]
+        "captured_at": max(p.captured_at for p in dev_pages), "page": page,
+    }, _exposure(hero.scheme, page))]
 
 
 @router.get("/api/web-previews")
@@ -673,6 +728,9 @@ def web_previews(
     scheme: Literal["http", "https"] | None = Query(None),
     status: Literal["ok", "no_preview", "error"] | None = Query(None),
     q: str | None = Query(None, max_length=200, description="substring of hostname, IP or page title"),
+    attention: bool = Query(False, description="only cards with a medium or high exposure finding"),
+    new: bool = Query(False, description="only services the device did not have in its previous capture"),
+    sort: Literal["risk", "name", "oldest"] = Query("risk"),
     include_archived: bool = Query(False, description="also list hosts of archived networks"),
     paging: Paging = Depends(paging_with(36, 200)),
     db: Session = Depends(get_db),
@@ -681,14 +739,17 @@ def web_previews(
     """The Web gallery: one card per HTTP(S)/RTSP service of each device's latest capture, filtered and
     paged on the server.
 
-    Cards with a preview come first, then services without one, then hosts with no usable service.
-    ``counts`` holds the number of cards per status under the other filters (for the status chips).
-    Images are not inlined: the grid loads ``/api/web-pages/{id}/thumbnail`` per visible card.
+    ``sort=risk`` (default) lists the worst exposure first, then new services, then cards with a preview,
+    services without one, and hosts with no usable service. ``counts`` holds the number of cards per
+    status under the other filters (for the status chips); ``attention`` and ``new`` hold what those
+    toggles would list under the other filters. ``captured_range`` is the oldest and newest capture time
+    of the listed cards. Images are not inlined: the grid loads ``/api/web-pages/{id}/thumbnail``.
     """
     by_dev = _latest_pages_by_device(db, kind="web", include_archived=include_archived, network_id=network_id)
+    prev_ports = _previous_web_ports(db, by_dev)
     needle = (q or "").strip().lower()
     cards = []
-    for dev_pages in by_dev.values():
+    for dev_id, dev_pages in by_dev.items():
         for c in _preview_cards(dev_pages):
             if port is not None and port not in c["ports"]:
                 continue
@@ -696,16 +757,37 @@ def web_previews(
                 continue
             if needle and not any(needle in (v or "").lower() for v in (c["hostname"], c["ip"], c["page"]["title"])):
                 continue
+            c["is_new"] = dev_id in prev_ports and not prev_ports[dev_id] & set(c["ports"])
             cards.append(c)
+
+    def needs_attention(c: dict) -> bool:
+        return c["risk"] >= ATTENTION_RISK
+
+    in_status = [c for c in cards if status is None or c["status"] == status]
+    attention_n = sum(1 for c in in_status if needs_attention(c) and (not new or c["is_new"]))
+    new_n = sum(1 for c in in_status if c["is_new"] and (not attention or needs_attention(c)))
+    cards = [c for c in cards if (not attention or needs_attention(c)) and (not new or c["is_new"])]
     counts = {s: 0 for s in PREVIEW_STATUSES}
     for c in cards:
         counts[c["status"]] += 1
     if status is not None:
         cards = [c for c in cards if c["status"] == status]
     rank = {s: i for i, s in enumerate(PREVIEW_STATUSES)}
-    cards.sort(key=lambda c: (rank[c["status"]], (c["hostname"] or c["ip"]).lower(), c["ip"], c["port"]))
+
+    def by_name(c: dict) -> tuple:
+        return (c["hostname"] or c["ip"]).lower(), c["ip"], c["port"]
+
+    if sort == "risk":
+        cards.sort(key=lambda c: (-c["risk"], not c["is_new"], rank[c["status"]], *by_name(c)))
+    elif sort == "oldest":
+        cards.sort(key=lambda c: (c["captured_at"], *by_name(c)))
+    else:
+        cards.sort(key=by_name)
+    times = [c["captured_at"] for c in cards]
     return {"items": cards[paging.offset:paging.offset + paging.page_size], "total": len(cards),
-            "page": paging.page, "page_size": paging.page_size, "counts": counts}
+            "page": paging.page, "page_size": paging.page_size, "counts": counts,
+            "attention": attention_n, "new": new_n,
+            "captured_range": [min(times), max(times)] if times else None}
 
 
 @router.get("/api/devices/{uuid}/web-interfaces")
