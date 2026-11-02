@@ -13,6 +13,8 @@ export function UsersSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boole
   const [draft, setDraft] = useState<{ username: string; password: string; role: 'admin' | 'viewer' } | null>(null);
   const [pw, setPw] = useState<{ user: User; password: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Role picked in a row's select; applied (with a confirm) only by its Apply button, never on change.
+  const [roleDraft, setRoleDraft] = useState<Record<number, 'admin' | 'viewer'>>({});
   // Row actions are keyed per user; the Create/Set password dialogs share the `dialog` key.
   const { pending, track } = useInFlight();
   const saving = pending('dialog');
@@ -27,8 +29,13 @@ export function UsersSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boole
     const msg = role === 'viewer'
       ? `Change ${u.username} from Administrator to Viewer? They lose access to configuration and scans.`
       : `Make ${u.username} an Administrator? They gain full access to configuration, users and scans.`;
-    if (confirm(msg)) track(`user-${u.id}`, () => act(() => patch(`/users/${u.id}`, { role })));
+    if (confirm(msg)) track(`user-${u.id}`, async () => { if (await act(() => patch(`/users/${u.id}`, { role }))) clearRole(u); });
   };
+  const clearRole = (u: User) => setRoleDraft((d) => {
+    const next = { ...d };
+    delete next[u.id];
+    return next;
+  });
   const toggleActive = (u: User) => {
     const msg = u.is_active
       ? `Disable ${u.username}? They are signed out and can no longer log in.`
@@ -71,9 +78,23 @@ export function UsersSettings({ onDirtyChange }: { onDirtyChange?: (dirty: boole
                   <td><strong>{u.username}</strong>{u.display_name && <div className="muted small">{u.display_name}</div>}</td>
                   <td>{u.source}</td>
                   <td>
-                    <select value={u.role} disabled={u.id === me.id || pending(`user-${u.id}`)} onChange={(e) => changeRole(u, e.target.value as 'admin' | 'viewer')}>
-                      <option value="admin">Administrator</option><option value="viewer">Viewer</option>
-                    </select>
+                    <div className="row" style={{ gap: 6 }}>
+                      <select value={roleDraft[u.id] ?? u.role} aria-label={`Role for ${u.username}`}
+                        disabled={u.id === me.id || pending(`user-${u.id}`)}
+                        onChange={(e) => {
+                          const role = e.target.value as 'admin' | 'viewer';
+                          if (role === u.role) clearRole(u);
+                          else setRoleDraft({ ...roleDraft, [u.id]: role });
+                        }}>
+                        <option value="admin">Administrator</option><option value="viewer">Viewer</option>
+                      </select>
+                      {roleDraft[u.id] && (
+                        <>
+                          <button type="button" className="btn sm" disabled={pending(`user-${u.id}`)} onClick={() => changeRole(u, roleDraft[u.id])}>Apply</button>
+                          <button type="button" className="btn ghost sm" onClick={() => clearRole(u)}>Cancel</button>
+                        </>
+                      )}
+                    </div>
                   </td>
                   <td>{u.is_active ? <span className="badge ok">active</span> : <span className="badge outline">disabled</span>}</td>
                   <td>{u.last_login_at ? relTime(u.last_login_at) : 'never'}</td>

@@ -184,7 +184,7 @@ export function MockBadge({ mode }: { mode: string | null }) {
 export function ErrorBox({ error, onRetry }: { error: string | null | undefined; onRetry?: () => void }) {
   if (!error) return null;
   return (
-    <div className="alert error">
+    <div className="alert error" role="alert">
       {error}
       {onRetry && <> <button type="button" className="btn sm ghost" onClick={onRetry}>Retry</button></>}
     </div>

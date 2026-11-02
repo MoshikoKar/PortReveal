@@ -1,6 +1,6 @@
-/** Settings > Notifications: General / Email / Webhooks / CVE Watchlist inner tabs. */
-import { useEffect, useState, type MouseEvent } from 'react';
-import { NavLink, Navigate, useParams } from 'react-router-dom';
+/** Settings > Notifications: General / Email / Recipients / Webhooks / CVE Watchlist sections (listed in the Settings rail). */
+import { useEffect, useState, type KeyboardEvent } from 'react';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { del, patch, post, put } from '../../api';
 import { Card, Empty, ErrorBox, Loading, Modal, SkeletonRows, confirmDiscard, useReportDirty } from '../../components/ui';
 import type {
@@ -21,13 +21,13 @@ import {
   DEFAULT_NOTIFICATION_SECTION,
   eventFilterSummary as summarizeEvents,
   isNotificationSection,
-  NOTIFICATION_SECTIONS,
   scopeMode,
   scopePayload,
   toggleScopeId,
   urlHost,
   type ScopeMode,
 } from './notificationsLogic';
+import { Field, SaveBar, SettingsForm, savedMsg, useRefreshSettingsStatus, type SaveMsg } from './formKit';
 
 export {
   DEFAULT_NOTIFICATION_SECTION,
@@ -53,11 +53,6 @@ const EVENT_CATEGORIES: { title: string; types: EventType[] }[] = [
   },
 ];
 
-function Msg({ msg }: { msg: { ok: boolean; text: string } | null }) {
-  if (!msg) return null;
-  return <div className={`alert ${msg.ok ? 'ok' : 'error'}`}>{msg.text}</div>;
-}
-
 function eventFilterSummary(types: EventType[]): string {
   return summarizeEvents(types, EVENT_LABELS);
 }
@@ -75,24 +70,9 @@ export function NotificationsSettings({ onDirtyChange }: { onDirtyChange?: (dirt
   if (!raw) return <Navigate to={`/settings/notifications/${DEFAULT_NOTIFICATION_SECTION}`} replace />;
   if (!section) return <Navigate to={`/settings/notifications/${DEFAULT_NOTIFICATION_SECTION}`} replace />;
 
-  const onSectionClick = (e: MouseEvent<HTMLAnchorElement>, id: string) => {
-    if (id === section) return;
-    if (!confirmDiscard(dirty)) e.preventDefault();
-  };
-
+  // Section links live in the Settings rail, which also runs the unsaved-changes guard.
   return (
     <div className="stack">
-      <nav className="tabs" aria-label="Notification settings">
-        {NOTIFICATION_SECTIONS.map((s) => (
-          <NavLink
-            key={s.id}
-            to={`/settings/notifications/${s.id}`}
-            onClick={(e) => onSectionClick(e, s.id)}
-          >
-            {s.label}
-          </NavLink>
-        ))}
-      </nav>
       {section === 'general' && <GeneralTab onDirtyChange={setDirty} />}
       {section === 'email' && <EmailTab onDirtyChange={setDirty} />}
       {section === 'recipients' && <RecipientsTab onDirtyChange={setDirty} />}
@@ -105,8 +85,9 @@ export function NotificationsSettings({ onDirtyChange }: { onDirtyChange?: (dirt
 // --- General -----------------------------------------------------------------
 function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const res = useApi<NotificationSettings>('/settings/notifications');
+  const refreshStatus = useRefreshSettingsStatus();
   const [form, setForm] = useState<NotificationSettings | null>(null);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<SaveMsg>(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { if (res.data) setForm(res.data); }, [res.data]);
   const dirty = !!form && !!res.data && (
@@ -125,7 +106,8 @@ function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) 
       });
       res.setData(out);
       setForm(out);
-      setMsg({ ok: true, text: 'Saved.' });
+      setMsg(savedMsg());
+      refreshStatus();
     } catch (e: any) {
       setMsg({ ok: false, text: e.message });
     } finally {
@@ -134,30 +116,41 @@ function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) 
   };
 
   if (!form) return <Card title="General"><ErrorBox error={res.error} /><Loading /></Card>;
+  const smtpReady = !!res.data?.smtp_host.trim();
 
   return (
     <Card title="Channels">
-      <div className="stack">
+      <SettingsForm onSave={save}>
         <div className="muted small">
           Master switches for outbound channels. In-app events and the Changes feed are always recorded.
         </div>
-        <label className="check">
-          <input type="checkbox" checked={form.enabled}
-            onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-          Email digest
-        </label>
-        <span className="hint">Daily HTML summary at the configured local time (configure SMTP on the Email tab).</span>
-        <label className="check">
-          <input type="checkbox" checked={form.webhooks_enabled}
-            onChange={(e) => setForm({ ...form, webhooks_enabled: e.target.checked })} />
-          Webhooks
-        </label>
-        <span className="hint">Outbound HTTP posts to configured endpoints. CVE watchlist has an additional per-channel toggle.</span>
-        <label className="check" title="Always on">
-          <input type="checkbox" checked disabled />
-          In-app events
-        </label>
-        <span className="hint">Always on — inventory changes appear in Changes and related feeds.</span>
+        <div className="check-field">
+          <label className="check">
+            <input type="checkbox" checked={form.enabled} disabled={!smtpReady && !form.enabled} aria-describedby="digest-hint"
+              onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+            Email digest
+          </label>
+          <span className="hint" id="digest-hint">
+            {smtpReady
+              ? <>Daily HTML summary. This is the only switch for the recipient group marked <strong>Default</strong>; other groups have their own switch under <Link to="/settings/notifications/recipients">Recipients</Link>.</>
+              : <>Set up the mail relay under <Link to="/settings/notifications/email">Email</Link> first; then turn the digest on here.</>}
+          </span>
+        </div>
+        <div className="check-field">
+          <label className="check">
+            <input type="checkbox" checked={form.webhooks_enabled} aria-describedby="webhooks-hint"
+              onChange={(e) => setForm({ ...form, webhooks_enabled: e.target.checked })} />
+            Webhooks
+          </label>
+          <span className="hint" id="webhooks-hint">Outbound HTTP posts to configured endpoints. CVE watchlist has an additional per-channel toggle.</span>
+        </div>
+        <div className="check-field">
+          <label className="check" title="Always on">
+            <input type="checkbox" checked disabled aria-describedby="inapp-hint" />
+            In-app events
+          </label>
+          <span className="hint" id="inapp-hint">Always on — inventory changes appear in Changes and related feeds.</span>
+        </div>
 
         <details className="notif-explain">
           <summary>Which events count as alerts?</summary>
@@ -174,19 +167,22 @@ function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) 
             </p>
           </div>
         </details>
-        <Msg msg={msg} />
-        <div><button className="btn primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</button></div>
-      </div>
+        <SaveBar dirty={dirty} saving={saving} msg={msg} onRevert={() => res.data && setForm(res.data)} />
+      </SettingsForm>
     </Card>
   );
 }
 
 // --- Email (SMTP only; recipients live on the Recipients tab) ----------------
+const SMTP_KEYS = ['smtp_host', 'smtp_port', 'security', 'username', 'sender'] as const;
+const smtpSnapshot = (n: NotificationSettings) => JSON.stringify(SMTP_KEYS.map((k) => n[k]));
+
 function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const res = useApi<NotificationSettings>('/settings/notifications');
+  const refreshStatus = useRefreshSettingsStatus();
   const [form, setForm] = useState<NotificationSettings | null>(null);
   const [password, setPassword] = useState<string | null>(null);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<SaveMsg>(null);
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testTo, setTestTo] = useState('');
   const [saving, setSaving] = useState(false);
@@ -194,13 +190,7 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
 
   useEffect(() => { if (res.data) setForm(res.data); }, [res.data]);
 
-  const formDirty = !!form && !!res.data && JSON.stringify({
-    smtp_host: form.smtp_host, smtp_port: form.smtp_port, security: form.security,
-    username: form.username, sender: form.sender, enabled: form.enabled,
-  }) !== JSON.stringify({
-    smtp_host: res.data.smtp_host, smtp_port: res.data.smtp_port, security: res.data.security,
-    username: res.data.username, sender: res.data.sender, enabled: res.data.enabled,
-  });
+  const formDirty = !!form && !!res.data && smtpSnapshot(form) !== smtpSnapshot(res.data);
   const dirty = formDirty || password !== null;
   useReportDirty(dirty, onDirtyChange);
 
@@ -208,13 +198,13 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
 
   const set = (patch: Partial<NotificationSettings>) => setForm({ ...form, ...patch });
 
+  // Transport only: whether the digest is sent is owned by the switch under General.
   const save = async () => {
     if (saving) return;
     setSaving(true);
     setMsg(null);
     try {
       const out = await put<NotificationSettings>('/settings/notifications', {
-        enabled: form.enabled,
         smtp_host: form.smtp_host,
         smtp_port: form.smtp_port,
         security: form.security,
@@ -225,7 +215,8 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
       res.setData(out);
       setForm(out);
       setPassword(null);
-      setMsg({ ok: true, text: 'Saved.' });
+      setMsg(savedMsg());
+      refreshStatus();
     } catch (e: any) {
       setMsg({ ok: false, text: e.message });
     } finally {
@@ -257,58 +248,62 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
       setTesting(false);
     }
   };
+  // Enter in the test address runs the test, not the form's Save.
+  const testOnEnter = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (form.smtp_host && !testing) testConnection();
+  };
+  const digestOn = !!res.data?.enabled;
 
   return (
     <Card title="Email">
-      <div className="stack">
+      <SettingsForm onSave={save}>
         <div className="muted small">
           SMTP relay used by recipient groups and CVE watchlist email. Audience addresses and digest
-          schedules live on the <strong>Recipients</strong> tab.
+          schedules live under <Link to="/settings/notifications/recipients">Recipients</Link>.
+        </div>
+        <div className={`alert ${digestOn ? '' : 'warn'}`}>
+          Email digest is <strong>{digestOn ? 'on' : 'off'}</strong>. Turn it {digestOn ? 'off' : 'on'} under <Link to="/settings/notifications/general">General</Link>.
         </div>
         <div className="form-grid">
-          <label className="field">SMTP host / IP
-            <input type="text" value={form.smtp_host} onChange={(e) => set({ smtp_host: e.target.value })}
-              placeholder="smtp-relay.example.com" />
-          </label>
-          <label className="field">Port
-            <input type="number" min={1} max={65535} value={form.smtp_port}
-              onChange={(e) => set({ smtp_port: Number(e.target.value) })} />
-          </label>
-          <label className="field">Security
-            <select value={form.security} onChange={(e) => set({ security: e.target.value as NotificationSettings['security'] })}>
-              <option value="none">None (internal relay)</option>
-              <option value="starttls">STARTTLS</option>
-              <option value="ssl">SSL/TLS</option>
-            </select>
-          </label>
-          <label className="field">Sender
-            <input type="text" value={form.sender} onChange={(e) => set({ sender: e.target.value })} />
-          </label>
-          <label className="field">Username (optional)
-            <input type="text" value={form.username} onChange={(e) => set({ username: e.target.value })} autoComplete="off" />
-          </label>
-          <label className="field">Password (optional)
-            <input type="password" value={password ?? ''} placeholder={form.password_set ? '•••••• (unchanged)' : ''}
-              onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
-          </label>
+          <Field label="SMTP host / IP">
+            {(p) => <input {...p} type="text" value={form.smtp_host} onChange={(e) => set({ smtp_host: e.target.value })} placeholder="smtp-relay.example.com" />}
+          </Field>
+          <Field label="Port">
+            {(p) => <input {...p} type="number" min={1} max={65535} value={form.smtp_port} onChange={(e) => set({ smtp_port: Number(e.target.value) })} />}
+          </Field>
+          <Field label="Security">
+            {(p) => (
+              <select {...p} value={form.security} onChange={(e) => set({ security: e.target.value as NotificationSettings['security'] })}>
+                <option value="none">None (internal relay)</option>
+                <option value="starttls">STARTTLS</option>
+                <option value="ssl">SSL/TLS</option>
+              </select>
+            )}
+          </Field>
+          <Field label="Sender">{(p) => <input {...p} type="text" value={form.sender} onChange={(e) => set({ sender: e.target.value })} />}</Field>
+          <Field label="Username (optional)">{(p) => <input {...p} type="text" value={form.username} onChange={(e) => set({ username: e.target.value })} autoComplete="off" />}</Field>
+          <Field label="Password (optional)">
+            {(p) => (
+              <input {...p} type="password" value={password ?? ''} placeholder={form.password_set ? '•••••• (unchanged)' : ''}
+                onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+            )}
+          </Field>
         </div>
-        <label className="check">
-          <input type="checkbox" checked={form.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
-          Enable SMTP (also toggles the default Email digest group)
-        </label>
-        <Msg msg={msg} />
-        {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`}>{testMsg.text}</div>}
-        <div className="row wrap">
-          <button className="btn primary" onClick={save} disabled={saving || testing || !dirty}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-          <input type="email" placeholder="test recipient" value={testTo}
-            onChange={(e) => setTestTo(e.target.value)} style={{ minWidth: 220 }} />
-          <button className="btn" onClick={testConnection} disabled={!form.smtp_host || saving || testing}>
-            {testing ? 'Testing…' : 'Test connection'}
-          </button>
-        </div>
-      </div>
+        <fieldset className="settings-group">
+          <legend>Test with the values above (nothing is saved)</legend>
+          <div className="row wrap">
+            <input type="email" aria-label="Test recipient" placeholder="test recipient" value={testTo}
+              onChange={(e) => setTestTo(e.target.value)} onKeyDown={testOnEnter} style={{ minWidth: 220 }} />
+            <button type="button" className="btn" onClick={testConnection} disabled={!form.smtp_host || saving || testing}>
+              {testing ? 'Testing…' : 'Test connection'}
+            </button>
+          </div>
+          {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`} role="status">{testMsg.text}</div>}
+        </fieldset>
+        <SaveBar dirty={dirty} saving={saving} msg={msg} onRevert={() => { if (res.data) setForm(res.data); setPassword(null); }} />
+      </SettingsForm>
     </Card>
   );
 }
@@ -451,6 +446,8 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
   const networks = useApi<Network[]>('/networks');
   const domains = useApi<Domain[]>('/domains');
   const hooks = useApi<WebhookEndpoint[]>('/webhooks');
+  const notif = useApi<NotificationSettings>('/settings/notifications');
+  const refreshStatus = useRefreshSettingsStatus();
   const [draft, setDraft] = useState<GroupDraft | null>(null);
   const [draftBase, setDraftBase] = useState<GroupDraft | null>(null);
   const [saving, setSaving] = useState(false);
@@ -524,6 +521,7 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
       }
       closeDraft();
       reload();
+      refreshStatus();
     } catch (e: any) {
       setSaveError(e.message);
     } finally {
@@ -539,6 +537,7 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
     try {
       await patch(`/recipient-groups/${g.id}`, { enabled: !g.enabled });
       reload();
+      refreshStatus();
     } catch (e: any) {
       setActionError(e.message);
     } finally {
@@ -556,6 +555,7 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
     try {
       await del(`/recipient-groups/${g.id}`);
       reload();
+      refreshStatus();
     } catch (e: any) {
       setActionError(e.message);
     } finally {
@@ -643,6 +643,13 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
         only for critical events and the CVE watchlist. Overflow past the hourly cap rolls into the next digest
         (never dropped). Slack and Teams webhook URLs are stored as secrets and never shown in full.
       </div>
+      {notif.data && !notif.data.enabled && (
+        <div className="card-body" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="alert warn">
+            The email digest is off, so the group marked Default sends nothing. Turn it on under <Link to="/settings/notifications/general">General</Link>.
+          </div>
+        </div>
+      )}
       <ErrorBox error={error || actionError} />
       {loading && !data ? <SkeletonRows cols={4} /> : !data?.length ? (
         <Empty>No recipient groups yet.</Empty>
@@ -689,16 +696,23 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
                   </div>
                 </div>
                 <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-                  <label className="check small">
-                    <input
-                      type="checkbox"
-                      checked={g.enabled}
-                      disabled={pending === `en-${g.id}`}
-                      onChange={() => toggleEnabled(g)}
-                      aria-label={`Enable ${g.name}`}
-                    />
-                    Enabled
-                  </label>
+                  {g.is_default ? (
+                    // The default group follows the Email digest switch under General (one owner).
+                    <span className="small muted">
+                      {g.enabled ? 'On' : 'Off'} · <Link to="/settings/notifications/general">switch in General</Link>
+                    </span>
+                  ) : (
+                    <label className="check small">
+                      <input
+                        type="checkbox"
+                        checked={g.enabled}
+                        disabled={pending === `en-${g.id}`}
+                        onChange={() => toggleEnabled(g)}
+                        aria-label={`Enable ${g.name}`}
+                      />
+                      Enabled
+                    </label>
+                  )}
                   <button className="btn sm" disabled={!!pending} onClick={() => sendTest(g)}>
                     {pending === `test-${g.id}` ? 'Sending…' : 'Send test'}
                   </button>
@@ -743,14 +757,20 @@ function RecipientsTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void 
                 placeholder="SOC"
               />
             </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={draft.enabled}
-                onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
-              />
-              Enabled
-            </label>
+            {draft.is_default ? (
+              <div className="muted small">
+                {draft.enabled ? 'On' : 'Off'}. This group follows the Email digest switch under General.
+              </div>
+            ) : (
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={draft.enabled}
+                  onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+                />
+                Enabled
+              </label>
+            )}
 
             <h3 className="recipient-section-title">WHAT</h3>
             <div className="field">
@@ -1354,7 +1374,7 @@ function WebhooksTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void })
 function CveWatchlistTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const res = useApi<NotificationSettings>('/settings/notifications');
   const [form, setForm] = useState<NotificationSettings | null>(null);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<SaveMsg>(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => { if (res.data) setForm(res.data); }, [res.data]);
   const dirty = !!form && !!res.data && (
@@ -1374,7 +1394,7 @@ function CveWatchlistTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => voi
       });
       res.setData(out);
       setForm(out);
-      setMsg({ ok: true, text: 'Saved.' });
+      setMsg(savedMsg());
     } catch (e: any) {
       setMsg({ ok: false, text: e.message });
     } finally {
@@ -1388,35 +1408,37 @@ function CveWatchlistTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => voi
 
   return (
     <Card title="CVE watchlist alerts">
-      <div className="stack">
+      <SettingsForm onSave={save}>
         <div className="muted small">
           In-app events are always recorded when a watched CVE appears. Use these toggles for outbound delivery.
           Immediate email marks events as notified so they are not repeated in the daily digest; if immediate
           email is off or fails, the digest still includes them.
         </div>
-        <label className="check small" title={!emailReady ? 'Turn on email notifications and configure SMTP first' : undefined}>
-          <input
-            type="checkbox"
-            checked={emailReady ? form.watchlist_email_enabled : false}
-            disabled={!emailReady}
-            onChange={(e) => setForm({ ...form, watchlist_email_enabled: e.target.checked })}
-          />
-          Immediate email (does not wait for the daily digest)
-        </label>
-        {!emailReady && (
-          <span className="hint">
-            Enable email notifications and configure SMTP host + recipients on the Email tab to use immediate watchlist email.
-          </span>
-        )}
+        <div className="check-field">
+          <label className="check small" title={!emailReady ? 'Turn on email notifications and configure SMTP first' : undefined}>
+            <input
+              type="checkbox"
+              checked={emailReady ? form.watchlist_email_enabled : false}
+              disabled={!emailReady}
+              aria-describedby={!emailReady ? 'watch-email-hint' : undefined}
+              onChange={(e) => setForm({ ...form, watchlist_email_enabled: e.target.checked })}
+            />
+            Immediate email (does not wait for the daily digest)
+          </label>
+          {!emailReady && (
+            <span className="hint" id="watch-email-hint">
+              Turn on the email digest under <Link to="/settings/notifications/general">General</Link> and set up the
+              mail relay under <Link to="/settings/notifications/email">Email</Link> to use immediate watchlist email.
+            </span>
+          )}
+        </div>
         <label className="check small">
           <input type="checkbox" checked={form.watchlist_webhooks_enabled}
             onChange={(e) => setForm({ ...form, watchlist_webhooks_enabled: e.target.checked })} />
           Webhooks (respects each endpoint&apos;s event-type filter)
         </label>
-        <Msg msg={msg} />
-        <div><button className="btn primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</button></div>
-      </div>
+        <SaveBar dirty={dirty} saving={saving} msg={msg} onRevert={() => res.data && setForm(res.data)} />
+      </SettingsForm>
     </Card>
   );
 }
-

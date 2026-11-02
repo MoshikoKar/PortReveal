@@ -73,7 +73,7 @@ export function DomainDialog({ initial, onClose, onSaved }: {
               <option value="">Select a list…</option>
               {lists.map((w) => <option key={w.id} value={w.id}>{w.name} ({w.entries.toLocaleString()} entries)</option>)}
             </select>
-            <span className="hint">{lists.length ? 'Lists of type "subdomains" from Settings → Web capture → Wordlists.' : 'No subdomain lists yet: upload one under Settings → Web capture → Wordlists.'}</span>
+            <span className="hint">{lists.length ? 'Lists of type "subdomains" from Settings → Wordlists.' : 'No subdomain lists yet: upload one under Settings → Wordlists.'}</span>
           </label>
         )}
         {draft.wordlist_mode === 'custom' && (

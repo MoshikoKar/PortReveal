@@ -951,11 +951,12 @@ def test_notifications_tabs_and_webhook_crud(live_app, browser):
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
 
         page.get_by_role("link", name="Settings", exact=True).click()
-        page.get_by_role("navigation").get_by_role("link", name="Notifications", exact=True).click()
+        # Settings sections rail; the link may carry an on/off marker ("Notifications Off").
+        nav = page.get_by_role("navigation", name="Settings sections")
+        nav.get_by_role("link", name=re.compile(r"^Notifications")).click()
         expect(page).to_have_url(f"{base}/settings/notifications/general", timeout=15_000)
         expect(page.get_by_role("heading", name="Channels")).to_be_visible()
 
-        nav = page.get_by_role("navigation", name="Notification settings")
         for link_name, section, heading in (
             ("Email", "email", "Email"),
             ("Recipients", "recipients", "Recipients"),

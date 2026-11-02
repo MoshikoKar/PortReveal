@@ -546,7 +546,7 @@ docker compose exec app python -m app.cli import-data /tmp/inventory.zip --yes
 npm run cli -- import-data .\inventory.zip --yes
 ```
 
-Also available under **Settings → Data** (admin). Import **replaces** inventory on
+Also available under **Settings → Export / import** (admin). Import **replaces** inventory on
 the target; keep environments on the same schema revision.
 
 ### Availability and capacity
@@ -583,7 +583,7 @@ scrape_configs:
 ```
 
 **Host sizing.** Work runs one scan at a time, with up to `parallelism` concurrent
-nmap processes (Settings → Scan profiles, default 4), plus one web-capture job using
+nmap processes (Settings → Scanner tuning, default 4), plus one web-capture job using
 up to `http_concurrency` HTTP probes and `screenshot_concurrency` headless Chromium
 pages (defaults 3 and 1).
 

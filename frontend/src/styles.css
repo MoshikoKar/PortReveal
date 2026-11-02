@@ -73,11 +73,11 @@ a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 /* Content links keep a quiet underline so they are not signalled by color alone (WCAG 1.4.1).
    Component links (buttons, badges, chips, cards and their name/preview, bar rows, tabs) keep their own chrome. */
-.content a:not(.btn, .badge, .chip, .host-card, .host-card-name, .shot-img, .bar-row, .result-shot, .row-link):not(.tabs a) {
+.content a:not(.btn, .badge, .chip, .host-card, .host-card-name, .shot-img, .bar-row, .result-shot, .row-link, .status-name):not(.tabs a, .settings-rail a) {
   text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px;
   text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
 }
-.content a:not(.btn, .badge, .chip, .host-card, .host-card-name, .shot-img, .bar-row, .result-shot, .row-link):not(.tabs a):hover { text-decoration-color: currentColor; }
+.content a:not(.btn, .badge, .chip, .host-card, .host-card-name, .shot-img, .bar-row, .result-shot, .row-link, .status-name):not(.tabs a, .settings-rail a):hover { text-decoration-color: currentColor; }
 h1, h2, h3 { margin: 0; font-weight: 600; letter-spacing: 0.01em; }
 h1 { font-size: 20px; }
 h2 { font-size: 15px; }
@@ -538,8 +538,16 @@ input:not([type='checkbox']):not([type='radio']):focus, select:focus, textarea:f
 }
 input[type='checkbox'] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
 th > input[type='checkbox'], td > input[type='checkbox'] { width: var(--table-check); height: var(--table-check); margin: 0; }
-label.field, div.field[role=group] { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-2); }
-label.field .hint, div.field[role=group] .hint { color: var(--muted); font-size: 11.5px; }
+label.field, div.field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-2); min-width: 0; }
+/* Day / source checkbox groups: a fieldset that looks like any other field. */
+fieldset.field { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 0; border: 0; min-width: 0; font-size: 12.5px; color: var(--text-2); }
+fieldset.field > legend { padding: 0; margin-bottom: 5px; }
+.field .hint, .check-field .hint { color: var(--muted); font-size: 12px; line-height: 1.45; }
+/* A checkbox with its explanation underneath, aligned to the label text (16px box + 8px gap). */
+.check-field { display: flex; flex-direction: column; gap: 2px; }
+.check-field > .hint { padding-left: 24px; max-width: 72ch; }
+/* Help paragraphs keep a readable line length on wide screens. */
+.measure { max-width: 80ch; }
 /* Settings > Domain discovery: provider key fields on one grid (equal widths, labels aligned at the top). */
 .key-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--space-3) var(--space-4); align-items: start; }
 .key-grid > .field { min-width: 0; }
@@ -613,6 +621,93 @@ td > .btn + .btn { margin-left: var(--space-1); }
 .tabs a, .tabs button { padding: 9px 14px; color: var(--text-2); border: 0; background: none; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 500; }
 .tabs a:hover, .tabs button:hover { color: var(--text); text-decoration: none; }
 .tabs a.active, .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ---------- settings: section rail + body ---------- */
+.skip-link {
+  position: absolute; left: 12px; top: -48px; z-index: 50; padding: 8px 14px; border-radius: var(--radius-md);
+  background: var(--accent); color: var(--accent-ink); font-weight: 600;
+}
+.skip-link:focus { top: 12px; text-decoration: none; }
+.content:focus { outline: none; }
+.settings-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.settings-body { min-width: 0; }
+.settings-nav { position: sticky; top: 70px; max-height: calc(100vh - 86px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+.settings-nav-toggle { display: none; }
+.settings-rail { display: flex; flex-direction: column; gap: var(--space-4); font-size: 13.5px; }
+.settings-rail ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.settings-rail a {
+  display: flex; align-items: center; gap: var(--space-2); padding: 6px 10px; border-radius: var(--radius-md);
+  color: var(--text-2); font-weight: 500; min-height: 32px; box-sizing: border-box;
+}
+.settings-rail a:hover { color: var(--text); background: var(--panel-2); text-decoration: none; }
+.settings-rail a.active { color: var(--text); background: var(--panel-3); box-shadow: inset 2px 0 0 var(--accent); }
+.settings-rail a.parent-active { color: var(--text); }
+.settings-rail a:focus-visible { outline-offset: -2px; }
+.rail-heading { display: block; padding: 0 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.settings-rail .rail-sub { margin: 1px 0 2px 10px; padding-left: 8px; border-left: 1px solid var(--border-2); }
+.rail-sub a { font-size: 13px; min-height: 30px; padding: 5px 10px; }
+/* On/off markers: text, not color alone. */
+.rail-state { margin-left: auto; font-size: 12px; font-weight: 500; color: var(--muted); }
+.rail-state.warn { color: var(--medium); }
+.rail-state.issue { color: var(--high); }
+/* Below 1240px the rail would squeeze the widest settings tables (users, audit) under their minimum width. */
+@media (max-width: 1240px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+  .settings-nav { position: relative; top: auto; z-index: 3; max-height: none; overflow: visible; }
+  .settings-nav-toggle { display: flex; width: 100%; justify-content: flex-start; gap: var(--space-2); text-align: left; }
+  .settings-nav-current { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .settings-rail { display: none; }
+  .settings-rail.open {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-3) var(--space-4);
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); padding: var(--space-3);
+    background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius-lg);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); max-height: 70vh; overflow-y: auto;
+  }
+  .settings-rail.open > a { grid-column: 1 / -1; }
+}
+
+/* A titled group of fields inside one settings form. */
+fieldset.settings-group {
+  margin: 0; padding: var(--space-4) 0 0; border: 0; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: var(--space-3); min-width: 0;
+}
+fieldset.settings-group > legend { float: left; width: 100%; padding: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+fieldset.settings-group > legend + * { clear: both; }
+fieldset.danger-zone > legend { color: var(--high); }
+/* Expert knobs stay collapsed until asked for. */
+.settings-advanced { border-top: 1px solid var(--border); padding-top: var(--space-3); }
+.settings-advanced > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: var(--text-2); padding: 4px 0; width: fit-content; }
+.settings-advanced > summary:hover { color: var(--text); }
+.settings-advanced[open] > summary { margin-bottom: var(--space-3); }
+/* Scan profile definitions (static reference, not alerts). */
+.profile-defs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3) var(--space-5); margin: 0; }
+.profile-defs dt { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.profile-defs dd { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+@media (max-width: 760px) { .profile-defs { grid-template-columns: minmax(0, 1fr); } }
+
+/* One save bar per settings form: Save, Revert and the form's state. */
+.save-bar { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.save-bar-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+.save-state { font-size: 12.5px; color: var(--ok); }
+.save-state.dirty { color: var(--medium); }
+.save-bar-extra { margin-left: auto; display: inline-flex; gap: var(--space-2); }
+
+/* Settings > Overview */
+.overview-summary ul { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.overview-summary a { color: inherit; }
+.status-list { list-style: none; margin: 0; padding: 0 0 var(--space-2); }
+.status-row {
+  display: grid; grid-template-columns: 170px minmax(0, 1fr) auto; align-items: center; gap: var(--space-2) var(--space-4);
+  padding: 9px var(--space-4); border-top: 1px solid var(--border);
+}
+.status-row:first-child { border-top: 0; }
+.status-name { color: var(--text); font-weight: 500; }
+.status-name:hover { color: var(--accent); }
+.status-detail { color: var(--text-2); font-size: 12.5px; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .status-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .status-detail { grid-column: 1 / -1; grid-row: 2; }
+}
 
 /* Collapsed helper blocks inside Notifications settings */
 .notif-explain { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; background: var(--panel-2); }
@@ -703,6 +798,13 @@ table.heatmap col.heatmap-label { width: 180px; }
    table layout shrink them below their content width. */
 /* Compact one-line rows (~38px) that fit 1280 with the optional OS / RTT columns on. */
 .devices-table-wrap { container-type: inline-size; }
+/* Settings > Wordlists: hash, created date and author drop out when the table is narrow (they stay in the name's title). */
+.wordlist-table-wrap { container-type: inline-size; }
+.wordlist-table td:first-child { overflow-wrap: anywhere; }
+@container (max-width: 1080px) {
+  .wordlist-table .wl-extra { display: none; }
+  .wordlist-table th, .wordlist-table td { padding-left: 8px; padding-right: 8px; }
+}
 .devices-table th, .devices-table td { padding: 4px 8px; white-space: nowrap; }
 .devices-table td { height: 38px; }
 .devices-table th.dev-fit, .devices-table td.dev-fit { width: 1%; }

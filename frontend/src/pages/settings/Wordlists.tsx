@@ -1,4 +1,4 @@
-// Wordlist library (Settings > Web capture): upload, import from URL, re-import, rename, delete.
+// Wordlist library (Settings > Wordlists): upload, import from URL, re-import, rename, delete.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { del, patch, post, postForm } from '../../api';
@@ -16,18 +16,16 @@ function DomainLinks({ domains }: { domains: DomainRef[] }) {
 }
 import { WebCaptureForm } from './Forms';
 
-/** Web capture tab: settings form (with the discovery wordlist select) and the wordlist library. */
+/** Web capture tab: settings form; the library feeds its discovery wordlist select. */
 export function WebCaptureTab({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
   const lib = useApi<WordlistLibrary>('/wordlists');
-  const [formDirty, setFormDirty] = useState(false);
-  const [libDirty, setLibDirty] = useState(false);
-  useReportDirty(formDirty || libDirty, onDirtyChange);
-  return (
-    <>
-      <WebCaptureForm onDirtyChange={setFormDirty} wordlists={lib.data} />
-      <WordlistLibraryCard lib={lib.data} error={lib.error} loading={lib.loading} reload={lib.reload} onDirtyChange={setLibDirty} />
-    </>
-  );
+  return <WebCaptureForm onDirtyChange={onDirtyChange} wordlists={lib.data} />;
+}
+
+/** Wordlists tab: path lists for Web capture and subdomain lists for Domains. */
+export function WordlistsTab({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+  const lib = useApi<WordlistLibrary>('/wordlists');
+  return <WordlistLibraryCard lib={lib.data} error={lib.error} loading={lib.loading} reload={lib.reload} onDirtyChange={onDirtyChange} />;
 }
 
 type Draft =
@@ -197,21 +195,22 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
         </div>
       )}
       {loading && !lib ? <SkeletonRows cols={9} /> : !lib ? <Empty>Wordlists unavailable.</Empty> : (
-        <div className="table-wrap">
-          <table>
+        <div className="table-wrap wordlist-table-wrap">
+          <table className="wordlist-table">
             <thead>
-              <tr><th>Name</th><th>Type</th><th>Source</th><th className="right">Entries</th><th className="right">Size</th><th>SHA-256</th><th>Created</th><th>Updated</th><th>By</th><th /></tr>
+              <tr><th>Name</th><th>Type</th><th>Source</th><th className="right">Entries</th><th className="right">Size</th><th className="wl-extra">SHA-256</th><th className="wl-extra">Created</th><th>Updated</th><th className="wl-extra">By</th><th /></tr>
             </thead>
             <tbody>
               <tr className="dim">
                 <td><strong>{lib.builtin.name}</strong> {lib.builtin.in_use && <span className="badge ok">in use</span>}</td>
                 <td>{KIND_LABEL.paths}</td><td>{SOURCE_LABEL.builtin}</td>
                 <td className="right">{lib.builtin.entries.toLocaleString('en-US')}</td>
-                <td className="right">-</td><td>-</td><td>-</td><td>-</td><td>-</td><td />
+                <td className="right">-</td><td className="wl-extra">-</td><td className="wl-extra">-</td><td>-</td><td className="wl-extra">-</td><td />
               </tr>
               {lib.items.map((w) => (
                 <tr key={w.id} data-testid={`wordlist-row-${w.id}`}>
-                  <td>
+                  <td title={`SHA-256 ${w.sha256}
+Created ${fmtTime(w.created_at)}${w.created_by ? ` by ${w.created_by}` : ''}`}>
                     <strong>{w.name}</strong> {w.in_use && <span className="badge ok">in use</span>}
                     {w.skipped > 0 && <div className="muted small">{w.skipped.toLocaleString('en-US')} lines skipped</div>}
                     {w.domains?.length > 0 && <div className="small muted" title={inUseByDomainsText(w.domains)}>Used by <DomainLinks domains={w.domains} /></div>}
@@ -220,10 +219,10 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
                   <td className="small" title={w.source_url ?? w.original_filename ?? undefined}>{SOURCE_LABEL[w.source] ?? w.source}</td>
                   <td className="right">{w.entries.toLocaleString('en-US')}</td>
                   <td className="right nowrap">{formatBytes(w.size_bytes)}</td>
-                  <td className="mono small" title={w.sha256}>{shortSha(w.sha256)}</td>
-                  <td className="small nowrap">{fmtTime(w.created_at)}</td>
+                  <td className="mono small wl-extra" title={w.sha256}>{shortSha(w.sha256)}</td>
+                  <td className="small nowrap wl-extra">{fmtTime(w.created_at)}</td>
                   <td className="small nowrap">{fmtTime(w.updated_at)}</td>
-                  <td className="small">{w.created_by ?? '-'}</td>
+                  <td className="small wl-extra">{w.created_by ?? '-'}</td>
                   <td className="right nowrap">
                     <div className="row" style={{ justifyContent: 'flex-end' }}>
                       {w.source === 'url' && (

@@ -12,7 +12,7 @@ classification and retention policy.
 | Network inventory | IP and MAC addresses, hostnames/DNS names, vendor, OS guess, open ports, service product/version, tags, exposure scores, device owner/location/notes (entered by admins) | Database (`devices`, `device_ports`, `device_ips`, `device_tags`, `device_profiles`) | Internal / confidential: a map of the network and its weak spots |
 | Scan and change history | Scans, per-scan host observations, change events, daily compressed snapshots | Database (`scans`, `scan_hosts`, `events`, `snapshots`) | Same as inventory |
 | Web captures | Screenshots and titles of web interfaces and RTSP camera stills found on the network. Pages are loaded passively; no credentials are submitted, but a screenshot can show whatever the page displays (dashboards, camera images of people or premises) | Data directory `web-captures/` + database (`web_captures`, `web_pages`, `port_http`) | Potentially sensitive; camera stills may be personal data |
-| Raw scanner output | nmap XML, only when "Keep raw nmap XML temporarily" is enabled (Settings → Scan profiles) | Data directory `raw/` | Same as inventory |
+| Raw scanner output | nmap XML, only when "Keep raw nmap XML temporarily" is enabled (Settings → Scanner tuning, under Advanced tuning) | Data directory `raw/` | Same as inventory |
 | User accounts | Username, display name, role, source (local/LDAP), Argon2 password hash (local accounts only), last login | Database (`users`) | Personal data (employees) |
 | Sessions and API tokens | Session token hash, client IP, timestamps; API token hash, name, last use | Database (`sessions`, `api_tokens`) | Personal data (employees) |
 | Audit log | Who did what, when, and from which IP (logins, failed logins, settings and inventory changes, deletions) | Database (`audit_log`) | Personal data (employees); security record |
@@ -26,7 +26,7 @@ No data leaves the host except through the integrations below.
 | Integration | Data sent | When |
 |---|---|---|
 | SMTP server (Settings → Notifications) | Daily digest: device labels, IPs, ports, services, change descriptions | Daily, when changes are pending; test emails on demand |
-| LDAP / Active Directory (Settings → Authentication) | Username and password of the person signing in; group lookups | Each LDAP sign-in |
+| LDAP / Active Directory (Settings → LDAP sign-in) | Username and password of the person signing in; group lookups | Each LDAP sign-in |
 | Scanned networks | nmap probes and HTTP/RTSP requests; OS detection (`-O`) sends one UDP probe to a closed port (U1 fingerprint) when privileged | Scans and web captures |
 | Local discovery (optional) | mDNS/SSDP multicast listen/query and NetBIOS unicast to already-known device IPs - stays on the LAN | After scans, when Settings → Local discovery is enabled |
 | NVD / CISA KEV / FIRST EPSS (Settings → Vulnerabilities) | **Inbound only**: HTTP GET of public vulnerability data files/API pages. No device, port, CPE, or network inventory is included in any request. Matching and scoring run locally against the downloaded cache. An optional NVD API key only raises the public rate limit. | On first enable / empty cache, then on the configured weekly schedule (or Sync now) |
@@ -41,7 +41,7 @@ your processing records if your organization keeps them.
 | Events, scan history, per-scan observations, daily snapshots, web captures and their screenshots, audit log | 365 days | Settings → Retention (`days`, 7-3650) |
 | Devices not seen for the whole retention period (and not currently active) | 365 days | same |
 | Expired sessions | removed when they expire | `SESSION_IDLE_MINUTES`, `SESSION_MAX_HOURS` |
-| Raw nmap XML | 7 days | Settings → Scan profiles (`raw_retention_days`, 1-90) |
+| Raw nmap XML | 7 days | Settings → Scanner tuning (`raw_retention_days`, 1-90) |
 | Application log files | about 20 MB total, rotated | fixed |
 | User accounts, API tokens, settings | until deleted | manual |
 
@@ -69,7 +69,7 @@ ZIPs) are outside this retention; delete them according to your backup policy.
 | Remove one device and its history | Device page → Delete (admin). Removes the device with its ports, IPs, tags, profile, events and scan observations. Its web-capture pages stay until their capture job is deleted or expires. |
 | Remove screenshots | Scans → Web captures → Delete the job (removes its pages and files), or wait for retention. |
 | Shorten what is kept | Lower Settings → Retention, save, then **Run cleanup now**. |
-| Hand over or move the inventory | Settings → Data → Export (admin). The ZIP contains inventory and history only, no users, settings, audit log, or screenshots. Treat the file as confidential. |
+| Hand over or move the inventory | Settings → Export / import → Export (admin). The ZIP contains inventory and history only, no users, settings, audit log, or screenshots. Treat the file as confidential. |
 | Decommission the installation | Delete the database (or `pgdata` volume), the data directory (or `appdata` volume), the env file holding `APP_SECRET_KEY`, and backups/exports per policy. |
 
 Every deletion made through the UI is recorded in the audit log.

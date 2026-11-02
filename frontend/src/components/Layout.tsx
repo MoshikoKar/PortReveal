@@ -170,6 +170,7 @@ export function Layout({ children }: { children: ReactNode }) {
   }, []);
   return (
     <div className="app">
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <aside ref={sidebarRef} className={`sidebar ${navOpen ? 'open' : ''}`}>
         <div className="brand">
           <Link className="brand-home" to="/">
@@ -228,7 +229,7 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
           {system && <SystemMenu system={system} readOnly={!isAdmin} />}
         </header>
-        <main className="content">{children}</main>
+        <main className="content" id="main-content" tabIndex={-1}>{children}</main>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ Reuses the live app + headless Chromium fixtures from test_e2e_smoke. Marked `e2
 
 from __future__ import annotations
 
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -30,11 +31,12 @@ def test_wordlist_upload_select_save_and_delete(live_app, browser, tmp_path):  #
         _sign_in(page, base)
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
         page.goto(f"{base}/settings/web-capture")
-        expect(page.get_by_role("heading", name="Wordlists")).to_be_visible(timeout=15_000)
         lists = page.get_by_role("group", name="Discovery wordlists")
-        expect(lists.get_by_label("Built-in", exact=False)).to_be_checked()
+        expect(lists.get_by_label("Built-in", exact=False)).to_be_checked(timeout=15_000)
 
-        # Upload
+        # Upload (Settings > Wordlists)
+        page.goto(f"{base}/settings/wordlists")
+        expect(page.get_by_role("heading", name="Wordlists")).to_be_visible(timeout=15_000)
         page.get_by_role("button", name="Upload wordlist").click()
         page.get_by_label("File", exact=True).set_input_files(str(wordlist))
         page.get_by_label("Name", exact=True).fill("e2e paths")
@@ -46,12 +48,14 @@ def test_wordlist_upload_select_save_and_delete(live_app, browser, tmp_path):  #
         expect(row).to_contain_text("Upload")
 
         # Select in Web capture and save
-        lists.get_by_label("e2e paths (2 paths)").check()
-        page.get_by_role("button", name="Save Web Capture settings").click()
-        expect(page.get_by_text("Saved.", exact=True)).to_be_visible(timeout=10_000)
+        page.goto(f"{base}/settings/web-capture")
+        lists.get_by_label("e2e paths (2 paths)").check(timeout=15_000)
+        page.get_by_role("button", name="Save", exact=True).click()
+        expect(page.get_by_role("status").filter(has_text=re.compile(r"^Saved \d"))).to_be_visible(timeout=10_000)
         page.reload()
         expect(lists.get_by_label("e2e paths (2 paths)")).to_be_checked(timeout=15_000)
-        expect(row.get_by_text("in use", exact=True)).to_be_visible()
+        page.goto(f"{base}/settings/wordlists")
+        expect(row.get_by_text("in use", exact=True)).to_be_visible(timeout=15_000)
 
         # Delete (in use: confirm explains the fallback to the built-in list)
         messages: list[str] = []
@@ -64,9 +68,9 @@ def test_wordlist_upload_select_save_and_delete(live_app, browser, tmp_path):  #
         row.get_by_role("button", name="Delete").click()
         expect(row).to_have_count(0, timeout=10_000)
         assert messages and "built-in" in messages[0]
-        page.reload()
-        expect(lists.get_by_label("e2e paths (2 paths)")).to_have_count(0, timeout=15_000)
-        expect(lists.get_by_label("Built-in", exact=False)).to_be_checked()
+        page.goto(f"{base}/settings/web-capture")
+        expect(lists.get_by_label("Built-in", exact=False)).to_be_checked(timeout=15_000)
+        expect(lists.get_by_label("e2e paths (2 paths)")).to_have_count(0)
         assert not errors, errors
     finally:
         page.close()
@@ -98,7 +102,7 @@ def test_wordlist_url_import_to_local_server_is_refused(live_app, browser):  # n
     try:
         _sign_in(page, base)
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
-        page.goto(f"{base}/settings/web-capture")
+        page.goto(f"{base}/settings/wordlists")
         page.get_by_role("button", name="Import from URL").click()
 
         page.get_by_role("dialog").locator("input[type=url]").fill(f"http://127.0.0.1:{port}/paths.txt")
