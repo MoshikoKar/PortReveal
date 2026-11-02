@@ -16,6 +16,10 @@ export const FINDING_SORTS = ['risk', 'cve', 'device', 'network', 'port', 'cvss'
 export type FindingSort = (typeof FINDING_SORTS)[number];
 /** Scores and dates read best largest/newest first; names and numbers ascending. */
 export const FINDING_DESC_FIRST: readonly FindingSort[] = ['cvss', 'first_seen'];
+const SORT_LABELS: Record<FindingSort, string> = {
+  risk: 'KEV first, then highest CVSS', cve: 'CVE', device: 'Device', network: 'Network',
+  port: 'Port / service', cvss: 'CVSS', state: 'State', first_seen: 'First seen',
+};
 
 /** Plain-language meaning of each match state; shown in the legend and on each badge. */
 export const STATE_HELP: Record<string, string> = {
@@ -55,8 +59,8 @@ export function VulnFindingsTable({
     q: q || undefined,
     only_hidden: searching && onlyHidden ? 'true' : undefined,
   });
-  const sortTh = (key: FindingSort, label: string) => (
-    <SortTh title={label} active={sort.key === key} desc={sort.desc} onSort={() => onSort(key)}>{label}</SortTh>
+  const sortTh = (key: FindingSort) => (
+    <SortTh title={SORT_LABELS[key]} active={sort.key === key} desc={sort.desc} onSort={() => onSort(key)}>{SORT_LABELS[key]}</SortTh>
   );
   const { data, error, reload } = useApi<VulnFindingsPage>('/vulns', params, 30000);
   const [busy, setBusy] = useState<string | null>(null);
@@ -113,14 +117,7 @@ export function VulnFindingsTable({
   const epssOn = filters.epss_min === epssValue;
 
   return (
-    <Card title="Findings" flush actions={
-      sort.key !== 'risk' ? (
-        <button type="button" className="btn sm ghost" onClick={() => onSort('risk')}
-          title="Back to the default order: actively exploited (KEV) first, then highest CVSS">
-          Triage order
-        </button>
-      ) : undefined
-    }>
+    <Card title="Findings" flush>
       <div className="card-toolbar vuln-findings-toolbar">
         <div className="row wrap gap-2" role="group" aria-label="Narrow findings">
           {stateToggle('confirmed', 'Confirmed')}
@@ -140,6 +137,18 @@ export function VulnFindingsTable({
               <input type="checkbox" checked={onlyHidden} onChange={onToggleOnlyHidden} />
               Only normally hidden
             </label>
+          )}
+        </div>
+        <div className="row wrap gap-2 small" style={{ alignItems: 'center' }}>
+          <span className="muted">
+            Sorted by {SORT_LABELS[sort.key]}{sort.key !== 'risk' && (sort.desc ? ' ↓' : ' ↑')}
+            {sort.key === 'risk' && ' (default)'}
+          </span>
+          {sort.key !== 'risk' && (
+            <button type="button" className="btn sm" onClick={() => onSort('risk')}
+              title="Back to the default order: actively exploited (KEV) first, then highest CVSS">
+              Reset to KEV first
+            </button>
           )}
         </div>
         <p className="vuln-state-legend small muted">
@@ -182,13 +191,13 @@ export function VulnFindingsTable({
             <table className="compact domain-table fit-table vuln-findings-table" aria-label="Vulnerability findings">
               <thead>
                 <tr>
-                  {sortTh('cve', 'CVE')}
-                  {sortTh('device', 'Device')}
-                  {sortTh('network', 'Network')}
-                  {sortTh('port', 'Port / service')}
-                  {sortTh('cvss', 'CVSS')}
-                  {sortTh('state', 'State')}
-                  {sortTh('first_seen', 'First seen')}
+                  {sortTh('cve')}
+                  {sortTh('device')}
+                  {sortTh('network')}
+                  {sortTh('port')}
+                  {sortTh('cvss')}
+                  {sortTh('state')}
+                  {sortTh('first_seen')}
                   {isAdmin && <th><span className="sr-only">Actions</span></th>}
                 </tr>
               </thead>
