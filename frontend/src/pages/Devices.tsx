@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { get, post } from '../api';
 import { ScanDialog } from '../components/ScanDialog';
 import { WebCaptureDialog } from '../components/WebCaptureDialog';
@@ -294,7 +294,7 @@ export default function Devices() {
                     <td><DeviceStatusBadge status={d.status} failed={d.port_scan_failed} scannerHost={d.scanner_host} supersededBy={d.superseded_by} compact /></td>
                     {/* Only a dynamic address gets a (short) badge; static / unknown go in the title, so the column stays narrow. */}
                     <td className="mono nowrap dev-fit" title={d.ip_assignment ? `${d.current_ip} - ${d.ip_assignment} IP` : undefined}>
-                      {d.current_ip}{d.ip_assignment === 'dynamic' && <> <span className="badge medium" title="Dynamic: this device has recently used more than one IP (DHCP-style)">dyn</span></>}
+                      <Link className="row-link" to={`/devices/${d.uuid}`} onClick={(e) => e.stopPropagation()}>{d.current_ip}</Link>{d.ip_assignment === 'dynamic' && <> <span className="badge medium" title="Dynamic: this device has recently used more than one IP (DHCP-style)">dyn</span></>}
                     </td>
                     <td className="dev-fluid dev-host" title={hostTip}>
                       <span className="cell-ellipsis">

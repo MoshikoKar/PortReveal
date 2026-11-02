@@ -464,7 +464,9 @@ export default function Scans() {
                 <tbody>
                   {history.data.items.map((s) => (
                     <tr key={s.id} className="clickable" onClick={() => openDetail(s.id)}>
-                      <td>{s.id}</td>
+                      <td>
+                        <button type="button" className="row-link" aria-label={`Scan ${s.id} details`} onClick={(e) => { e.stopPropagation(); openDetail(s.id); }}>{s.id}</button>
+                      </td>
                       <td className="nowrap">{SCAN_TYPE_LABELS[s.scan_type]} <MockBadge mode={s.scanner_mode} /></td>
                       <td><ScanScope s={s} /></td>
                       <td className="nowrap"><ScanStatusBadge status={s.status} />{s.is_baseline && <span className="badge accent" style={{ marginLeft: 4 }}>baseline</span>}</td>

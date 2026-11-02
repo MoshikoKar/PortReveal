@@ -350,6 +350,8 @@ def test_exposed_ports_labelled_by_most_common_service(db):
     rows = {r["port"]: r for r in exposed_ports(db)}
     assert rows[3389]["count"] == 3 and rows[3389]["service"] == "ms-wbt-server"  # not max() -> "ssh"
     assert rows[445]["service"] == "microsoft-ds"  # a named service beats tcpwrapped
+    assert rows[3389]["risk"] == {"label": "RDP", "kind": "admin"} and rows[445]["risk"]["label"] == "SMB"
+    assert rows[3389]["new"] == 0  # baseline scan: nothing opened since
     assert exposed_ports(db, network_id=net.id + 1) == []
 
 

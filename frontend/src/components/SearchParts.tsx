@@ -67,7 +67,7 @@ export function HostResult({ h }: { h: SearchHost }) {
           <ul className="result-services">
             {h.services.map((s) => (
               <li key={`${s.protocol}${s.port}`}>
-                <span className="mono nowrap">{s.port}/{s.protocol}</span>
+                <span className="mono nowrap">{s.protocol.toUpperCase()}/{s.port}</span>
                 <span>{serviceLabel(s) || <span className="muted">unknown</span>}</span>
                 {s.http && httpTitleDisplay(s.http.status, s.http.title) && (
                   <span className="muted small" title="HTTP page title">“{httpTitleDisplay(s.http.status, s.http.title)}”</span>

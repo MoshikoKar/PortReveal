@@ -249,7 +249,7 @@ export default function Search() {
                       <tbody>
                         {(shown.items as HistoryHost[]).map((h) => (
                           <tr key={`${h.network}-${h.uuid}`} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
-                            <td className="mono">{h.ip}</td>
+                            <td className="mono"><Link className="row-link" to={`/devices/${h.uuid}`} onClick={(e) => e.stopPropagation()}>{h.ip}</Link></td>
                             <td>{h.hostname ?? '-'}</td>
                             <td>{h.network ?? '-'}</td>
                             <td>{h.type ?? '-'}</td>
@@ -270,8 +270,8 @@ export default function Search() {
                       <tbody>
                         {(shown.items as SearchServiceRow[]).map((s) => (
                           <tr key={`${s.host.uuid}-${s.protocol}${s.port}`} className="clickable" onClick={() => nav(`/devices/${s.host.uuid}`)}>
-                            <td><span className="mono">{s.host.ip}</span>{s.host.hostname && <div className="muted small">{s.host.hostname}</div>}</td>
-                            <td className="mono nowrap">{s.port}/{s.protocol}</td>
+                            <td><Link className="row-link mono" to={`/devices/${s.host.uuid}`} onClick={(e) => e.stopPropagation()}>{s.host.ip}</Link>{s.host.hostname && <div className="muted small">{s.host.hostname}</div>}</td>
+                            <td className="mono nowrap">{s.protocol.toUpperCase()}/{s.port}</td>
                             <td>{serviceLabel(s) || <span className="muted">-</span>}{s.extra_info && <div className="muted small">{s.extra_info}</div>}</td>
                             <td className="small">{s.http ? <>{s.http.status != null && <span className="badge outline">{s.http.status}</span>} {httpTitleDisplay(s.http.status, s.http.title) ?? ''}</> : <span className="muted">-</span>}</td>
                             <td><ScoreBadge score={s.host.score} /></td>

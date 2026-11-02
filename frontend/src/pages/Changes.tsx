@@ -13,6 +13,9 @@ export default function Changes() {
   const types = (sp.get('type') ?? '').split(',').filter(Boolean) as EventType[];
   const range = sp.get('range') ?? '7d';
   const page = Number(sp.get('page') || 1);
+  // Set by links from Ports / port detail; shown as a removable chip, no free-form input.
+  const port = sp.get('port') || undefined;
+  const proto = sp.get('proto') || undefined;
   const [qInput, setQInput] = useState(sp.get('q') ?? '');
 
   const since = useMemo(() => {
@@ -41,7 +44,7 @@ export default function Changes() {
 
   const { data, error, loading } = useApi<Paged<ChangeEvent>>('/events', {
     type: types.join(',') || undefined, severity: sp.get('severity') || undefined, q: sp.get('q') || undefined,
-    since, page, page_size: PAGE,
+    port, protocol: proto, since, page, page_size: PAGE,
   }, 15000);
 
   const toggleType = (t: EventType) => {
@@ -75,6 +78,12 @@ export default function Changes() {
               <button key={t} className={`btn sm toggle ${types.includes(t) ? 'on' : ''}`} aria-pressed={types.includes(t)} onClick={() => toggleType(t)}>{EVENT_LABELS[t]}</button>
             ))}
             {types.length > 0 && <button className="btn sm ghost" onClick={() => set({ type: undefined })}>Clear</button>}
+            {port && (
+              <button className="btn sm toggle on" aria-pressed onClick={() => set({ port: undefined, proto: undefined })}
+                aria-label={`Remove port filter ${(proto ?? '').toUpperCase()}/${port}`}>
+                Port {proto ? `${proto.toUpperCase()}/` : ''}{port} <span aria-hidden>✕</span>
+              </button>
+            )}
           </div>
         </div>
       }>

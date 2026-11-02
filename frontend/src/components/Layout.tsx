@@ -150,9 +150,27 @@ export function Layout({ children }: { children: ReactNode }) {
       narrow.removeEventListener('change', onWiden);
     };
   }, [navOpen]);
+  // Sticky table headers sit under whichever bar is sticky (top bar, or the collapsed sidebar below 900px);
+  // its height changes (scan progress, wrapping), so publish it as --sticky-top.
+  const topbarRef = useRef<HTMLElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const narrow = window.matchMedia('(max-width: 900px)');
+    const update = () => {
+      const bar = narrow.matches ? sidebarRef.current : topbarRef.current;
+      if (bar) document.documentElement.style.setProperty('--sticky-top', `${bar.offsetHeight}px`);
+    };
+    const ro = new ResizeObserver(update);
+    for (const el of [topbarRef.current, sidebarRef.current]) if (el) ro.observe(el);
+    narrow.addEventListener('change', update);
+    return () => {
+      ro.disconnect();
+      narrow.removeEventListener('change', update);
+    };
+  }, []);
   return (
     <div className="app">
-      <aside className={`sidebar ${navOpen ? 'open' : ''}`}>
+      <aside ref={sidebarRef} className={`sidebar ${navOpen ? 'open' : ''}`}>
         <div className="brand">
           <Link className="brand-home" to="/">
             <LogoLockup className="sidebar-lockup" />
@@ -197,7 +215,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="banner danger">Scanner unavailable: {scanner.message}</div>
         )}
         {system && !system.database.ok && <div className="banner danger">Database unavailable: {system.database.message}</div>}
-        <header className="topbar">
+        <header ref={topbarRef} className="topbar">
           {current ? (
             <Link to="/scans" className="row title" style={{ color: 'var(--text)', gap: 10, minWidth: 260 }}>
               <span className="badge accent pulse"><span className="dot" />Scanning</span>

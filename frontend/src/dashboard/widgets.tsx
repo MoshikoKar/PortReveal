@@ -392,7 +392,7 @@ function ExposureScoresWidget({ data, edit, measuring }: WidgetRenderProps) {
             <tbody>
               {rows.map((h) => (
                 <tr key={h.uuid} className="clickable" onClick={() => !edit && nav(`/devices/${h.uuid}`)}>
-                  <td className="mono">{h.ip}</td>
+                  <td className="mono">{edit ? h.ip : <Link className="row-link" to={`/devices/${h.uuid}`} onClick={(e) => e.stopPropagation()}>{h.ip}</Link>}</td>
                   <td className="dash-main dash-split muted small" title={h.hostname || undefined}>{h.hostname || '-'}</td>
                   <td className="dash-shrink muted small" title={h.type || undefined}>{h.type || '-'}</td>
                   <td className="right"><ScoreBadge score={h.score} /></td>
@@ -483,7 +483,9 @@ function NetworksWidget({ data, edit, measuring, reload }: WidgetRenderProps) {
         <tbody>
           {rows.map((n) => (
             <tr key={n.id} className="clickable" onClick={() => !edit && nav(`/devices?network_id=${n.id}`)}>
-              <td className="dash-main dash-split net-name" title={n.name}>{n.name}</td>
+              <td className="dash-main dash-split net-name" title={n.name}>
+                {edit ? n.name : <Link className="row-link" to={`/devices?network_id=${n.id}`} onClick={(e) => e.stopPropagation()}>{n.name}</Link>}
+              </td>
               <td className="mono dash-fit">{n.cidr}</td>
               <td className="dash-fit" title={`${n.active_count} active / ${n.device_count} known`}>{n.active_count} / {n.device_count}</td>
               <td className="dash-shrink net-baseline"><BaselineCell n={n} onStarted={reload} /></td>
@@ -509,8 +511,12 @@ function TopPortsWidget({ data, edit, measuring }: WidgetRenderProps) {
         <table ref={tableRef} className="dash-table">
           <tbody>
             {rows.map((p) => (
-              <tr key={`${p.protocol}${p.port}`} className="clickable" onClick={() => !edit && nav(`/devices?port=${p.port}`)}>
-                <td className="mono">{p.protocol.toUpperCase()}/{p.port}</td>
+              <tr key={`${p.protocol}${p.port}`} className="clickable" onClick={() => !edit && nav(`/ports/${p.protocol}/${p.port}`)}>
+                <td className="mono">
+                  {edit ? `${p.protocol.toUpperCase()}/${p.port}` : (
+                    <Link className="row-link" to={`/ports/${p.protocol}/${p.port}`} onClick={(e) => e.stopPropagation()}>{p.protocol.toUpperCase()}/{p.port}</Link>
+                  )}
+                </td>
                 <td className="dash-main muted" title={p.service ?? undefined}>{p.service ?? ''}</td>
                 <td className="right">{p.count} host{p.count === 1 ? '' : 's'}</td>
               </tr>

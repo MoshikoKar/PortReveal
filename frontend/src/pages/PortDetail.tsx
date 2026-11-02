@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { FacetList, HostResult } from '../components/SearchParts';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { FacetList, HostResult, SaveWatchDialog } from '../components/SearchParts';
 import { Card, Empty, ErrorBox, Loading, Pager } from '../components/ui';
 import type { Facets, Paged, SearchHost } from '../types';
 import { addTerm, quoteValue, useApi } from '../util';
@@ -14,8 +14,12 @@ export default function PortDetail() {
   const { proto = '', port = '' } = useParams();
   const [sp] = useSearchParams();
   const nav = useNavigate();
+  // Set by the Ports list so the breadcrumb returns to the same sort/filter/network view.
+  const from = (useLocation().state as { from?: string } | null)?.from ?? '';
   const network = sp.get('network');
   const [page, setPage] = useState(1);
+  const [watching, setWatching] = useState(false);
+  const [watched, setWatched] = useState<string | null>(null);
   const n = Number(port);
   const valid = PROTOCOLS.includes(proto) && /^\d+$/.test(port) && n >= 1 && n <= MAX_PORT;
   const base = `port:${n}${proto === 'tcp' ? '' : ` proto:${proto}`}`;
@@ -25,20 +29,28 @@ export default function PortDetail() {
 
   if (!valid) return <ErrorBox error={`Not a valid port: ${proto}/${port}`} />;
 
+  const total = hosts.data?.total;
   return (
     <>
       <div className="page-head">
         <div className="page-head-main">
-          <div className="muted small"><Link to="/ports">Exposed ports</Link> /</div>
-          <h1 className="mono">{proto.toUpperCase()}/{n}</h1>
-          <p>{network ? `In ${network}. ` : ''}{hosts.data ? `${hosts.data.total} host${hosts.data.total === 1 ? '' : 's'} with this port open.` : ' '}</p>
+          <div className="muted small"><Link to={`/ports${from}`}>Exposed ports</Link> /</div>
+          <h1><span className="mono">{proto.toUpperCase()}/{n}</span></h1>
+          <p>
+            {network ? `In ${network}. ` : ''}
+            {total != null ? `${total} known host${total === 1 ? '' : 's'} with this port open, including any not detected in the latest scan.` : ' '}
+          </p>
         </div>
-        <div className="page-head-actions">
+        <div className="row wrap gap-2 page-head-actions">
+          <Link className="btn" to={`/changes?type=port_opened,port_closed&range=30d&port=${n}&proto=${proto}`}>Changes on this port</Link>
+          <button className="btn" onClick={() => setWatching(true)}>Watch this port</button>
           <Link className="btn" to={`/search?q=${encodeURIComponent(q)}`}>Open in search →</Link>
         </div>
       </div>
+      {watched && <div className="alert ok">Saved watch “{watched}”. <Link to="/watches">Open watches →</Link></div>}
       <div className="search-layout">
         <aside className="card card-body">
+          <h2 className="sr-only">Breakdown of these hosts</h2>
           {facets.data ? (
             <FacetList facets={facets.data} onPick={(f) => nav(`/search?q=${encodeURIComponent(addTerm(q, f.term))}`)} />
           ) : facets.error ? <ErrorBox error={facets.error} /> : <Loading />}
@@ -53,6 +65,9 @@ export default function PortDetail() {
           )}
         </div>
       </div>
+      {watching && (
+        <SaveWatchDialog query={q} onClose={() => setWatching(false)} onSaved={(s) => { setWatching(false); setWatched(s.name); }} />
+      )}
     </>
   );
 }

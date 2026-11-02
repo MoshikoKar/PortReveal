@@ -51,7 +51,7 @@ function HostTable({ hosts, empty }: { hosts: ReportHost[]; empty: string }) {
         <tbody>
           {hosts.map((h) => (
             <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
-              <td><span className="mono">{h.ip}</span>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
+              <td><Link className="row-link mono" to={`/devices/${h.uuid}`} onClick={(e) => e.stopPropagation()}>{h.ip}</Link>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
               <td>{h.type ?? '-'}</td>
               <td>{h.network ?? '-'}</td>
               <td className="right"><ScoreBadge score={h.score} /></td>
@@ -146,9 +146,9 @@ export default function Reports() {
                 <tbody>
                   {preview(rareItems, isOpen('rare')).map((r) => (
                     <tr key={`${r.network}-${r.protocol}${r.port}`} className="clickable" onClick={() => nav(`/devices/${r.host.uuid}`)}>
-                      <td className="mono nowrap">{r.port}/{r.protocol}</td>
+                      <td className="mono nowrap">{r.protocol.toUpperCase()}/{r.port}</td>
                       <td>{[r.product, r.version].filter(Boolean).join(' ') || r.service || '-'}</td>
-                      <td><span className="mono">{r.host.ip}</span>{r.host.hostname && <div className="muted small">{r.host.hostname}</div>}</td>
+                      <td><Link className="row-link mono" to={`/devices/${r.host.uuid}`} onClick={(e) => e.stopPropagation()}>{r.host.ip}</Link>{r.host.hostname && <div className="muted small">{r.host.hostname}</div>}</td>
                       <td>{r.network ?? '-'}</td>
                     </tr>
                   ))}
@@ -209,7 +209,7 @@ export default function Reports() {
                 <tbody>
                   {preview(topDevices, isOpen('risk')).map((h) => (
                     <tr key={h.uuid} className="clickable" onClick={() => nav(`/devices/${h.uuid}`)}>
-                      <td><span className="mono">{h.ip}</span>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
+                      <td><Link className="row-link mono" to={`/devices/${h.uuid}`} onClick={(e) => e.stopPropagation()}>{h.ip}</Link>{h.hostname && <div className="muted small">{h.hostname}</div>}</td>
                       <td>{h.network ?? '-'}</td>
                       <td className="right"><RiskBadge score={h.risk} kind="risk" /></td>
                       <td className="right"><RiskBadge score={h.combined} kind="combined" /></td>
@@ -238,7 +238,7 @@ export default function Reports() {
                 <tbody>
                   {preview(topCves, isOpen('cves')).map((c) => (
                     <tr key={c.cve_id} className="clickable" onClick={() => nav(searchLink(`cve:${c.cve_id}`))}>
-                      <td className="mono">{c.cve_id}</td>
+                      <td className="mono"><Link className="row-link" to={searchLink(`cve:${c.cve_id}`)} onClick={(e) => e.stopPropagation()}>{c.cve_id}</Link></td>
                       <td className="right mono">{c.cvss_base != null ? c.cvss_base.toFixed(1) : '-'}</td>
                       <td>{c.kev && <span className="badge high">KEV</span>}</td>
                       <td className="right">{c.device_count}</td>
@@ -261,7 +261,7 @@ export default function Reports() {
               <tbody>
                 {preview(subnetItems, isOpen('subnets')).map((s) => (
                   <tr key={s.subnet} className="clickable" onClick={() => nav(searchLink(s.query))}>
-                    <td className="mono">{s.subnet}</td>
+                    <td className="mono"><Link className="row-link" to={searchLink(s.query)} onClick={(e) => e.stopPropagation()}>{s.subnet}</Link></td>
                     <td className="right">{s.hosts}</td>
                     <td className="right">{s.active}</td>
                     <td className="right"><ScoreBadge score={s.max_score} /></td>

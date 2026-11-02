@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, literal_column, select
+from sqlalchemy import and_, case, func, literal_column, select
 from sqlalchemy.orm import Session
 
 from ..auth.deps import current_user
-from ..core.exposure import HIGH_THRESHOLD, MEDIUM_THRESHOLD
+from ..core.exposure import HIGH_THRESHOLD, MEDIUM_THRESHOLD, PORT_FACTORS
 from ..core.mockdata import device_visible, event_visible, snapshot_visible
 from ..db import get_db, utcnow
 from ..models import (
@@ -46,6 +46,30 @@ def _event_counts(db: Session, since) -> dict[str, int]:
 
 EXPOSED_PORTS_DEFAULT_LIMIT = 1000
 EXPOSED_PORTS_MAX_LIMIT = 5000
+NEW_PORT_DAYS = 7  # same window as the dashboard's 7-day "new ports" count
+
+
+def _port_risk(protocol: str, port: int, services: list[dict]) -> dict | None:
+    """The exposure-score factor this port triggers (same port/service match as exposure.compute), if any."""
+    names = {s["service"].lower() for s in services}
+    for pf in PORT_FACTORS:
+        if (protocol == "tcp" and port in pf.ports) or names.intersection(pf.services):
+            return {"label": pf.label, "kind": pf.kind}
+    return None
+
+
+def _newly_opened(db: Session, conds: list) -> dict[tuple[str, int], int]:
+    """Hosts per open protocol/port that opened it in the last NEW_PORT_DAYS and still have it open."""
+    rows = db.execute(
+        select(Event.protocol, Event.port, func.count(func.distinct(Event.device_id)))
+        .join(DevicePort, and_(DevicePort.device_id == Event.device_id, DevicePort.protocol == Event.protocol,
+                               DevicePort.port == Event.port))
+        .join(Device, Device.id == DevicePort.device_id)
+        .where(Event.event_type == EV_PORT_OPENED, Event.created_at >= utcnow() - timedelta(days=NEW_PORT_DAYS),
+               event_visible(db), *conds)
+        .group_by(Event.protocol, Event.port)
+    ).all()
+    return {(proto, port): n for proto, port, n in rows}
 
 
 def _open_port_conds(db: Session, network_id: int | None) -> list:
@@ -102,10 +126,13 @@ def exposed_ports(db: Session, network_id: int | None = None, limit: int | None 
         row = by_port.setdefault((proto, port), {"protocol": proto, "port": port, "count": 0, "services": []})
         row["services"].append({"service": service, "count": n})
         row["count"] += n
-    for row in by_port.values():
+    new = _newly_opened(db, conds) if by_port else {}
+    for key, row in by_port.items():
         row["services"].sort(key=lambda x: (-x["count"], x["service"]))
         named = [x for x in row["services"] if x["service"] not in ("unknown", "tcpwrapped")]
         row["service"] = (named or row["services"])[0]["service"]
+        row["risk"] = _port_risk(row["protocol"], row["port"], row["services"])
+        row["new"] = new.get(key, 0)
     return sorted(by_port.values(), key=lambda r: (-r["count"], r["protocol"], r["port"]))
 
 

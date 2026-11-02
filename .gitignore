@@ -21,3 +21,5 @@ tmp/
 # Coverage (pytest --cov)
 .coverage
 coverage.xml
+
+/.impeccable

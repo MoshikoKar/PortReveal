@@ -637,6 +637,10 @@ export interface ExposedPort {
   count: number;
   service: string;
   services: { service: string; count: number }[];
+  /** The exposure-score factor this port triggers (risky service), if any. */
+  risk: { label: string; kind: 'admin' | 'database' | null } | null;
+  /** Hosts that opened this port in the last 7 days and still have it open. */
+  new: number;
 }
 
 export interface ScheduleSettings {

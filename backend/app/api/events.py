@@ -26,6 +26,8 @@ def list_events(
     since: datetime | None = None,
     until: datetime | None = None,
     scan_id: int | None = None,
+    port: int | None = Query(None, ge=1, le=65535),
+    protocol: str | None = Query(None, pattern="^(tcp|udp)$"),
     paging: Paging = Depends(),
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
@@ -45,6 +47,10 @@ def list_events(
         conds.append(Event.created_at <= until)
     if scan_id is not None:
         conds.append(Event.scan_id == scan_id)
+    if port is not None:
+        conds.append(Event.port == port)
+    if protocol:
+        conds.append(Event.protocol == protocol)
     if q:
         like = like_pattern(q.strip())
         conds.append(or_(
