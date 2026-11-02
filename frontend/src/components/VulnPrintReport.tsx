@@ -4,14 +4,27 @@ import {
   formatVulnPrintFilterLine, type VulnFilterLabelContext, type VulnFilters,
 } from '../vulnFilters';
 import { formatCvss, formatEpssPct } from '../vulnFormat';
+import { STATE_HELP } from './VulnFindingsTable';
 
 const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'unknown'] as const;
+const SEV_LABEL: Record<(typeof SEV_ORDER)[number], string> = {
+  critical: 'critical', high: 'high', medium: 'medium', low: 'low', unknown: 'unscored',
+};
 
-function severityClass(sev: string | null | undefined): string {
-  if (sev === 'critical' || sev === 'high') return 'high';
-  if (sev === 'medium') return 'medium';
-  if (sev === 'low') return 'ok';
-  return 'outline';
+function plural(n: number, one: string, many = `${one}s`) {
+  return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+}
+
+/** "12 findings on 4 devices: 2 critical, 5 high, 5 medium. 1 is on the CISA KEV list." */
+function summarySentence(total: number, devices: number, kev: number, sev: Record<string, number> | undefined) {
+  const bands = sev
+    ? SEV_ORDER.filter((k) => (sev[k] ?? 0) > 0).map((k) => `${sev[k]} ${SEV_LABEL[k]}`)
+    : [];
+  const head = `${plural(total, 'finding')} on ${plural(devices, 'device')}${bands.length ? `: ${bands.join(', ')}` : ''}.`;
+  const kevLine = kev > 0
+    ? ` ${plural(kev, 'finding')} ${kev === 1 ? 'is' : 'are'} on the CISA KEV list of actively exploited vulnerabilities.`
+    : ' None is on the CISA KEV list of actively exploited vulnerabilities.';
+  return head + kevLine;
 }
 
 /** Print-only vulnerability findings report: filter summary, executive counts, full findings table. */
@@ -34,21 +47,41 @@ export function VulnPrintReport({
   const generatedAt = new Date();
   const filterSummary = formatVulnPrintFilterLine(filters, labelCtx, { searchQ, onlyHidden });
   const kevCount = summary?.kev_count ?? findings.filter((f) => f.kev).length;
-  const deviceCount = new Set(findings.map((f) => f.device_uuid)).size;
+  const deviceCount = summary?.device_count ?? new Set(findings.map((f) => f.device_uuid)).size;
   const sev = summary?.severity_counts;
   const topCves = summary?.top_cves?.slice(0, 5) ?? [];
   const topDevices = summary?.top_devices?.slice(0, 5) ?? [];
   const findingsTotal = summary?.findings_total ?? findings.length;
+  const feed = summary?.feed;
+  // On screen the preview sits under the page's own h1, so its headings step down one level.
+  const H1 = preview ? 'h2' : 'h1';
+  const H2 = preview ? 'h3' : 'h2';
+  const H3 = preview ? 'h4' : 'h3';
 
   return (
     <div className={`vuln-print-report${preview ? ' is-preview' : ''}`}>
       <header className="vuln-print-header">
-        <h1>PortReveal vulnerability report</h1>
+        <H1 className="vuln-print-title-head" tabIndex={-1}>PortReveal vulnerability report</H1>
         <p className="vuln-print-meta">
           Generated {fmtTime(generatedAt.toISOString(), true)}
           <span className="vuln-print-tz"> ({Intl.DateTimeFormat().resolvedOptions().timeZone})</span>
         </p>
         <p className="vuln-print-filters"><strong>Filters:</strong> {filterSummary}</p>
+        <p className="vuln-print-method">
+          <strong>Method:</strong> the product and version each service reports (CPE) are compared with a
+          local copy of NVD, CISA KEV and EPSS. No exploit or intrusive check is run, so verify a finding
+          before acting on it. Severity is the CVSS base-score band (critical 9+, high 7+, medium 4+).
+          {' '}<strong>Confirmed</strong>: {STATE_HELP.confirmed}
+          {' '}<strong>Potential</strong>: {STATE_HELP.potential}
+        </p>
+        {feed && (
+          <p className="vuln-print-method">
+            <strong>Vulnerability data:</strong> last synced{' '}
+            {feed.newest_synced_at ? fmtTime(feed.newest_synced_at, true) : 'never'}; oldest enabled source{' '}
+            {feed.oldest_synced_at ? fmtTime(feed.oldest_synced_at, true) : 'never'}.
+            {feed.stale && <strong> The data is stale, so recent CVEs may be missing.</strong>}
+          </p>
+        )}
       </header>
 
       {error && <p className="vuln-print-empty">Could not load findings for this report: {error}</p>}
@@ -57,24 +90,19 @@ export function VulnPrintReport({
       {!loading && !error && (
         <>
           <section className="vuln-print-exec">
-            <h2>Executive summary</h2>
+            <H2 className="vuln-print-section-head">Executive summary</H2>
             {!findings.length && !summary ? (
               <p className="vuln-print-empty">No vulnerability findings match the current filters.</p>
             ) : (
               <>
-                <ul className="vuln-print-kpis">
-                  <li>Findings: <strong>{findings.length || findingsTotal}</strong></li>
-                  <li>KEV (actively exploited): <strong>{kevCount}</strong></li>
-                  <li>Affected devices: <strong>{deviceCount || (summary?.top_devices.length ?? 0)}</strong></li>
-                  {sev && SEV_ORDER.map((k) => (sev[k] ?? 0) > 0 && (
-                    <li key={k}><span className="vuln-print-sev-label">{k}</span>: <strong>{sev[k]}</strong></li>
-                  ))}
-                </ul>
+                <p className="vuln-print-sentence">
+                  {summarySentence(findings.length || findingsTotal, deviceCount, kevCount, sev)}
+                </p>
                 {(topCves.length > 0 || topDevices.length > 0) && (
                   <div className="vuln-print-tops">
                     {topCves.length > 0 && (
                       <div>
-                        <h3>Top CVEs</h3>
+                        <H3 className="vuln-print-sub-head">Top CVEs</H3>
                         <ol>
                           {topCves.map((c) => (
                             <li key={c.cve_id}>
@@ -89,7 +117,7 @@ export function VulnPrintReport({
                     )}
                     {topDevices.length > 0 && (
                       <div>
-                        <h3>Top devices</h3>
+                        <H3 className="vuln-print-sub-head">Top devices</H3>
                         <ol>
                           {topDevices.map((d) => (
                             <li key={d.uuid}>
@@ -108,7 +136,7 @@ export function VulnPrintReport({
           </section>
 
           <section className="vuln-print-findings">
-            <h2>Findings</h2>
+            <H2 className="vuln-print-section-head">Findings</H2>
             {!findings.length ? (
               <p className="vuln-print-empty">No vulnerability findings match the current filters.</p>
             ) : (
@@ -131,15 +159,15 @@ export function VulnPrintReport({
                 <tbody>
                   {findings.map((f) => (
                     <tr key={`${f.device_uuid}-${f.protocol}-${f.port}-${f.cve_id}`}>
-                      <td>{f.kev ? <span className="badge high">KEV</span> : ''}</td>
+                      <td>{f.kev ? <span className="badge kev">KEV</span> : ''}</td>
                       <td>
-                        <span className={`badge ${severityClass(f.severity)}`}>
-                          {f.severity ?? 'unknown'}
+                        <span className={`badge sev-${f.severity && f.severity !== 'unknown' ? f.severity : 'unscored'}`}>
+                          {f.severity && f.severity !== 'unknown' ? f.severity : 'unscored'}
                         </span>
                       </td>
                       <td className="mono">{formatCvss(f.cvss_base)}</td>
                       <td className="mono small">{formatEpssPct(f.epss)}</td>
-                      <td className="mono">{f.cve_id}</td>
+                      <td className="mono nowrap">{f.cve_id}</td>
                       <td className="small vuln-print-title vuln-print-clip">
                         {(f.summary || '').replace(/\s+/g, ' ').trim() || '—'}
                       </td>
@@ -161,6 +189,9 @@ export function VulnPrintReport({
                       </td>
                       <td className="vuln-print-state">
                         <div className="vuln-print-state-main">{f.state}</div>
+                        {f.state === 'dismissed' && f.dismiss_reason && (
+                          <div className="vuln-print-dismiss-reason">{f.dismiss_reason}</div>
+                        )}
                         {(f.hidden_reasons ?? []).map((reason) => (
                           <div key={reason} className="badge outline vuln-print-hidden-reason">
                             {reason}

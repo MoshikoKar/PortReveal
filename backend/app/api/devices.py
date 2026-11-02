@@ -513,14 +513,24 @@ def _after_vuln_state_change(db: Session, device_id: int) -> None:
     invalidate_vuln_summary_cache()
 
 
+class VulnDismissIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=200)
+
+    @field_validator("reason")
+    @classmethod
+    def _strip(cls, v: str | None) -> str | None:
+        return (v or "").strip() or None
+
+
 @router.post("/{uuid}/vulns/{cve_id}/dismiss")
-def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends(get_db),
-                 user: User = Depends(require_admin)):
+def dismiss_vuln(uuid: str, cve_id: str, request: Request, body: VulnDismissIn | None = None,
+                 db: Session = Depends(get_db), user: User = Depends(require_admin)):
     """Learned no: this match stays dismissed until explicitly undone, even across rematches."""
     from ..core.vuln.display import normalize_cve_id
     from ..core.vuln.watchlist import clear_alerts_for_device_cve
 
     cve_id = normalize_cve_id(cve_id)
+    reason = body.reason if body else None
     d = _get(db, uuid)
     rows = db.scalars(
         select(DevicePortVuln).join(DevicePort, DevicePort.id == DevicePortVuln.device_port_id)
@@ -535,11 +545,12 @@ def dismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depends
                 row.state if row.state in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
             )
             row.state = VULN_STATE_DISMISSED
+        row.dismiss_reason = reason
     # Owner: dismiss is a reopen baseline — clear alert rows so a later undismiss re-alerts.
     clear_alerts_for_device_cve(db, device_uuid=d.uuid, cve_id=cve_id)
     _after_vuln_state_change(db, d.id)
     audit(db, user.username, "device.vuln_dismiss", d.hostname or d.current_ip,
-          {"uuid": d.uuid, "cve_id": cve_id}, client_ip(request))
+          {"uuid": d.uuid, "cve_id": cve_id, "reason": reason}, client_ip(request))
     db.commit()
     return {"ok": True}
 
@@ -563,6 +574,7 @@ def undismiss_vuln(uuid: str, cve_id: str, request: Request, db: Session = Depen
         prior = row.state_before_dismiss
         row.state = prior if prior in (VULN_STATE_CONFIRMED, VULN_STATE_POTENTIAL) else VULN_STATE_POTENTIAL
         row.state_before_dismiss = None
+        row.dismiss_reason = None
     _after_vuln_state_change(db, d.id)
     # Re-opened findings should alert immediately if the CVE is on the watchlist.
     wl = check_watchlist_safe(db, cve_ids=[cve_id], now=utcnow())

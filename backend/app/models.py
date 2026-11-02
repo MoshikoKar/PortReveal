@@ -651,6 +651,8 @@ class DevicePortVuln(Base):
     state: Mapped[str] = mapped_column(String(10), default=VULN_STATE_POTENTIAL)
     # Set on dismiss; Undo restores this instead of always falling back to potential.
     state_before_dismiss: Mapped[str | None] = mapped_column(String(10))
+    # Optional admin note on dismiss ("not exposed", "patched by backport"); cleared on Undo.
+    dismiss_reason: Mapped[str | None] = mapped_column(String(200))
     source: Mapped[str] = mapped_column(String(15), default=VULN_SOURCE_CACHE)
     matched_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
     vulnerability: Mapped[Vulnerability] = relationship(lazy="joined")

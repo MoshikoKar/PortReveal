@@ -13,10 +13,10 @@ const SERIES: (LegendItem & { key: keyof Pick<VulnWeeklyPoint, 'new' | 'resolved
 ];
 
 const SEVERITY_SERIES: (LegendItem & { key: keyof Pick<VulnSnapshotPoint, 'critical' | 'high' | 'medium' | 'low'> })[] = [
-  { key: 'critical', color: 'var(--high)', label: 'critical' },
-  { key: 'high', color: '#fb923c', label: 'high' },
-  { key: 'medium', color: 'var(--medium)', label: 'medium' },
-  { key: 'low', color: 'var(--low)', label: 'low' },
+  { key: 'critical', color: 'var(--sev-critical)', label: 'critical' },
+  { key: 'high', color: 'var(--sev-high)', label: 'high' },
+  { key: 'medium', color: 'var(--sev-medium)', label: 'medium' },
+  { key: 'low', color: 'var(--sev-low)', label: 'low' },
 ];
 
 const RISK_LEGEND: LegendItem[] = [
@@ -71,8 +71,10 @@ export function VulnTrend({ points }: { points: VulnWeeklyPoint[] }) {
     return <Empty>No new, resolved or dismissed findings in this window yet.</Empty>;
   }
   const max = niceMax(maxOf(totals));
+  const last = points[points.length - 1];
   return (
-    <TrendFrame label="Weekly new, resolved and dismissed findings" max={max} legend={SERIES}
+    <TrendFrame max={max} legend={SERIES}
+      label={`Weekly new, resolved and dismissed findings. Latest week: ${last.new} new, ${last.resolved} resolved, ${last.dismissed} dismissed.`}
       from={points[0].week_start.slice(5)} to={points[points.length - 1].week_start.slice(5)}>
       {SERIES.map((s) => (
         <path key={s.key} d={linePath(points.map((p) => p[s.key]), scale(max))} fill="none" stroke={s.color} strokeWidth="2" />
@@ -91,8 +93,10 @@ export function VulnSeverityTrend({ points }: { points: VulnSnapshotPoint[] }) {
     return <Empty>Trend appears after two daily snapshots.</Empty>;
   }
   const max = niceMax(maxOf(points.flatMap((p) => [p.critical, p.high, p.medium, p.low])));
+  const last = points[points.length - 1];
   return (
-    <TrendFrame label="Open vulnerability count over time, by severity" max={max} legend={SEVERITY_SERIES}
+    <TrendFrame max={max} legend={SEVERITY_SERIES}
+      label={`Open findings over time, by severity. Latest: ${last.critical} critical, ${last.high} high, ${last.medium} medium, ${last.low} low.`}
       from={points[0].date.slice(5)} to={points[points.length - 1].date.slice(5)}>
       {SEVERITY_SERIES.map((s) => (
         <path key={s.key} d={linePath(points.map((p) => p[s.key]), scale(max))} fill="none" stroke={s.color} strokeWidth="2" />
@@ -107,8 +111,10 @@ export function VulnRiskTrend({ points }: { points: VulnSnapshotPoint[] }) {
     return <Empty>Trend appears after two daily snapshots with a scored device.</Empty>;
   }
   const max = niceMax(maxOf(withRisk.flatMap((p) => [p.avg_risk_score ?? 0, p.avg_combined_score ?? 0])));
+  const last = withRisk[withRisk.length - 1];
   return (
-    <TrendFrame label="Average network risk and combined score over time" max={max} legend={RISK_LEGEND}
+    <TrendFrame max={max} legend={RISK_LEGEND}
+      label={`Average network risk and combined score over time. Latest: risk ${Math.round(last.avg_risk_score ?? 0)}, combined ${Math.round(last.avg_combined_score ?? 0)}.`}
       from={withRisk[0].date.slice(5)} to={withRisk[withRisk.length - 1].date.slice(5)}>
       <path d={linePath(withRisk.map((p) => p.avg_combined_score ?? 0), scale(max))} fill="none" stroke="var(--medium)" strokeWidth="1.6" />
       <path d={linePath(withRisk.map((p) => p.avg_risk_score ?? 0), scale(max))} fill="none" stroke="var(--accent)" strokeWidth="2" />

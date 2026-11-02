@@ -3,13 +3,15 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { downloadBlob, get, query } from '../api';
 import { VulnFacets } from '../components/VulnFacets';
 import { FINDING_DESC_FIRST, FINDING_SORTS, VulnFindingsTable, type FindingSort } from '../components/VulnFindingsTable';
+import { VulnGlance } from '../components/VulnGlance';
 import { VulnHeatmap } from '../components/VulnHeatmap';
 import { VulnPrintReport } from '../components/VulnPrintReport';
-import { VulnTopLists } from '../components/VulnTopLists';
+import { VulnNewLists, VulnTopLists } from '../components/VulnTopLists';
 import { VulnRiskTrend, VulnSeverityTrend, VulnTrend } from '../components/VulnTrend';
-import { Card, ErrorBox, Kpi, Loading } from '../components/ui';
+import { Card, ErrorBox, Loading } from '../components/ui';
+import { Popover } from '../dashboard/Popover';
 import type { Network, Paged, VulnFindingListItem, VulnSummary } from '../types';
-import { fmtTime, relTime, useApi } from '../util';
+import { useApi } from '../util';
 import {
   applyVulnSearchQ, buildVulnQuery, clearVulnFilters, formatVulnFilterChip, liveSearchParams,
   clearVulnFindingsHash, parseVulnFilters, scrollToVulnFindings, setVulnFilter,
@@ -29,9 +31,8 @@ function spWithFilters(base: URLSearchParams, filters: VulnFilters): URLSearchPa
   return next;
 }
 
-const SEVERITY_COLOR: Record<string, string> = {
-  critical: 'var(--high)', high: 'var(--high)', medium: 'var(--medium)', low: 'var(--ok)',
-};
+/** Facet keys whose filters live inside the Breakdowns disclosure (it opens when one is set). */
+const BREAKDOWN_KEYS: readonly VulnFilterKey[] = ['os_name', 'vendor', 'service', 'port', 'device_type', 'cve_age', 'exposure_duration'];
 
 const REPORT_PAGE_SIZE = 500;
 
@@ -219,6 +220,7 @@ export default function Vulnerabilities() {
   };
   const liveSp = () => spWithFilters(liveSearchParams(), filters);
   const toggle = (key: VulnFilterKey, value: string) => applySp(toggleVulnFilter(liveSp(), key, value));
+  const toggleInPlace = (key: VulnFilterKey, value: string) => applySp(toggleVulnFilter(liveSp(), key, value), false);
   const set = (key: VulnFilterKey, value: string | undefined, scroll = true) =>
     applySp(setVulnFilter(liveSp(), key, value), scroll);
   const toggleVendorProduct = (facetKey: string) => applySp(toggleVendorProductFilter(liveSp(), facetKey));
@@ -291,7 +293,7 @@ export default function Vulnerabilities() {
         vulnExportFilename(filters, labelCtx, 'csv', { searchQ: q || undefined }),
       );
     } catch (e: unknown) {
-      setExportError(e instanceof Error ? e.message : 'Export failed.');
+      setExportError(`CSV export failed: ${e instanceof Error ? e.message : 'unknown error'}. Try again.`);
     } finally {
       setExporting(false);
     }
@@ -306,7 +308,7 @@ export default function Vulnerabilities() {
         vulnExportFilename(filters, labelCtx, 'html', { searchQ: q || undefined }),
       );
     } catch (e: unknown) {
-      setExportError(e instanceof Error ? e.message : 'HTML report failed.');
+      setExportError(`HTML report failed: ${e instanceof Error ? e.message : 'unknown error'}. Try again.`);
     } finally {
       setExportingHtml(false);
     }
@@ -351,7 +353,11 @@ export default function Vulnerabilities() {
       return;
     }
     const ok = await prepareReport();
-    if (ok) setPreviewOpen(true);
+    if (!ok) return;
+    setPreviewOpen(true);
+    // Move keyboard and screen-reader focus to the report that just opened above the dashboard.
+    await waitForPrintPaint();
+    document.querySelector<HTMLElement>('.vuln-print-title-head')?.focus();
   }, [summaryReady, prepareReport]);
 
   useEffect(() => {
@@ -387,8 +393,6 @@ export default function Vulnerabilities() {
     };
   }, [pendingPrint, summaryReady, filters, q, onlyHidden, sp, setSp]);
 
-  const severity = data?.severity_counts ?? { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
-  const risk = data?.risk_device_levels ?? { high: 0, medium: 0, low: 0 };
   const epssPct = data ? Math.round(data.epss_threshold * 100) : 0;
   const epssValue = data ? String(data.epss_threshold) : '0.1';
   const networkSelectValue = filters.network_id ?? '';
@@ -401,6 +405,10 @@ export default function Vulnerabilities() {
   const filtered = activeFilters.length > 0 || hasSearch;
   const snapshotNote = data?.snapshot_trend_note ?? null;
   const printDisabled = printLoading || pendingPrint || !summaryReady;
+  const breakdownFiltered = BREAKDOWN_KEYS.some((k) => filters[k]);
+  const [breakdownsOpen, setBreakdownsOpen] = useState(breakdownFiltered);
+  useEffect(() => { if (breakdownFiltered) setBreakdownsOpen(true); }, [breakdownFiltered]);
+  const reportBusy = exporting || exportingHtml || printLoading || pendingPrint;
 
   return (
     <>
@@ -427,30 +435,60 @@ export default function Vulnerabilities() {
             </select>
           </label>
           <Link className="btn" to="/vulnerabilities/watchlist">CVE Watchlist</Link>
-          <button type="button" className="btn" disabled={exporting || exportingHtml} onClick={() => { void exportCsv(); }}>
-            {exporting ? 'Exporting…' : 'Export CSV'}
-          </button>
-          <button type="button" className="btn" disabled={exporting || exportingHtml}
-            title="Download a self-contained HTML report for the current filters"
-            onClick={() => { void exportHtml(); }}>
-            {exportingHtml ? 'Preparing…' : 'HTML report'}
-          </button>
-          <button type="button" className="btn" disabled={printDisabled || !summaryReady}
-            onClick={() => { void openPreview(); }}>
-            {printLoading && !previewOpen ? 'Preparing…' : 'Preview'}
-          </button>
-          <button type="button" className="btn" disabled={printDisabled}
-            title={!summaryReady ? 'Waiting for summary to match the current filters…' : undefined}
-            onClick={() => { void printReport(); }}>
-            {printLoading || pendingPrint || !summaryReady ? 'Preparing…' : 'Print / PDF report'}
-          </button>
+          <Popover label={reportBusy ? 'Preparing report…' : 'Export & print'} buttonClassName="btn"
+            title="Reports for the current filters" panelClassName="vuln-report-panel">
+            {(close) => (
+              <div className="col" role="group" aria-label="Export and print">
+                <button type="button" className="btn ghost sm dash-popover-item" disabled={printDisabled}
+                  onClick={() => { close(); void openPreview(); }}>
+                  Preview printable report
+                </button>
+                <button type="button" className="btn ghost sm dash-popover-item" disabled={printDisabled}
+                  onClick={() => { close(); void printReport(); }}>
+                  Print or save as PDF
+                </button>
+                <button type="button" className="btn ghost sm dash-popover-item" disabled={exporting || exportingHtml}
+                  title="A self-contained HTML file you can open offline or send on"
+                  onClick={() => { close(); void exportHtml(); }}>
+                  Download HTML report
+                </button>
+                <button type="button" className="btn ghost sm dash-popover-item" disabled={exporting || exportingHtml}
+                  onClick={() => { close(); void exportCsv(); }}>
+                  Download CSV
+                </button>
+                {!summaryReady && <p className="muted small vuln-report-note">Waiting for the summary to load…</p>}
+              </div>
+            )}
+          </Popover>
         </div>
       </div>
       <p className="page-intro no-print">
-        Matched CVEs across the network. Severity bands come from the cached CVSS base score
-        (9 / 7 / 4 thresholds), preferring CVSS v3.1 → v3.0 → v2 when present - not NVD&apos;s
-        own severity label. CVEs with no score in the cache are shown as unscored.
+        Known vulnerabilities (CVEs) that match the software versions found on your devices. Matching
+        is passive: each service&apos;s reported product and version is compared with a local copy of
+        NVD, CISA KEV and EPSS. Nothing is probed or exploited, so treat a finding as a lead to verify.
       </p>
+      <details className="vuln-explain no-print">
+        <summary>How to read this page</summary>
+        <dl className="dl small">
+          <dt>Actively exploited (KEV)</dt>
+          <dd>On CISA&apos;s Known Exploited Vulnerabilities list: attackers are using it now. Fix these first.</dd>
+          <dt>Severity</dt>
+          <dd>
+            From the CVSS base score in the local cache (critical 9+, high 7+, medium 4+, low below 4),
+            preferring CVSS v3.1, then v3.0, then v2. It is not NVD&apos;s own label. No score means unscored.
+          </dd>
+          <dt>EPSS</dt>
+          <dd>FIRST.org&apos;s estimate of the chance a CVE is exploited in the next 30 days.</dd>
+          <dt>Confirmed</dt>
+          <dd>The exact product version a service reports is listed as affected.</dd>
+          <dt>Potential</dt>
+          <dd>The version is imprecise or falls in an affected range. Check the device before acting.</dd>
+          <dt>Dismissed</dt>
+          <dd>An admin marked it not applicable. It stays hidden across rescans until restored.</dd>
+          <dt>Risk score</dt>
+          <dd>Per device, from its findings&apos; severity, KEV and EPSS. Combined adds port exposure.</dd>
+        </dl>
+      </details>
 
       <div className="vuln-search-bar no-print">
         <div className="row wrap gap-2" style={{ alignItems: 'center' }}>
@@ -480,9 +518,9 @@ export default function Vulnerabilities() {
         </div>
       </div>
 
-      {exportError && <div className="alert error no-print">{exportError}</div>}
-      {printError && <div className="alert error no-print">{printError}</div>}
-      <ErrorBox error={error} />
+      {exportError && <div className="alert error no-print" role="alert">{exportError}</div>}
+      {printError && <div className="alert error no-print" role="alert">{printError}</div>}
+      <ErrorBox error={error} onRetry={() => { void reload(); }} />
       {showFilterBar && (
         <div className="row wrap gap-2 no-print">
           <span className="muted small">Filters:</span>
@@ -495,7 +533,7 @@ export default function Vulnerabilities() {
           {onlyHidden && (
             <button type="button" className="btn sm toggle on" aria-pressed="true" title="Show all matches"
               onClick={toggleOnlyHidden}>
-              Only hidden <span aria-hidden>✕</span>
+              Only normally hidden <span aria-hidden>✕</span>
             </button>
           )}
           {activeFilters.map(([key, value]) => (
@@ -511,7 +549,10 @@ export default function Vulnerabilities() {
       {previewOpen && (
         <div className="vuln-print-preview no-print" role="region" aria-label="Report preview">
           <div className="row wrap gap-2" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
-            <strong>Report preview</strong>
+            <span>
+              <strong>Report preview</strong>
+              <span className="muted small"> · exactly what prints, for the current filters</span>
+            </span>
             <div className="row gap-2">
               <button type="button" className="btn" disabled={printLoading}
                 onClick={() => { window.print(); }}>
@@ -540,89 +581,10 @@ export default function Vulnerabilities() {
       <div className="vuln-screen no-print">
       {!data ? (!error && <Loading />) : (
         <>
-          <div className="grid kpis five">
-            <Kpi label="Actively exploited (CISA KEV)"
-              value={<span style={{ color: data.kev_count > 0 ? 'var(--high)' : undefined }}>{data.kev_count}</span>}
-              sub="Known to be exploited in the wild - the most urgent findings."
-              color={data.kev_count > 0 ? 'var(--high)' : undefined}
-              active={filters.kev === 'true'} onClick={() => toggle('kev', 'true')} />
-            <Kpi label="Critical" value={severity.critical} color={SEVERITY_COLOR.critical}
-              active={filters.severity === 'critical'} onClick={() => toggle('severity', 'critical')} />
-            <Kpi label="High" value={severity.high} color={SEVERITY_COLOR.high}
-              active={filters.severity === 'high'} onClick={() => toggle('severity', 'high')} />
-            <Kpi label="Medium" value={severity.medium} color={SEVERITY_COLOR.medium}
-              active={filters.severity === 'medium'} onClick={() => toggle('severity', 'medium')} />
-            <Kpi label="Low" value={severity.low} color={SEVERITY_COLOR.low}
-              active={filters.severity === 'low'} onClick={() => toggle('severity', 'low')} />
-            {(severity.unknown ?? 0) > 0 && (
-              <Kpi label="Unscored" value={severity.unknown} sub="No CVSS in local cache"
-                active={filters.severity === 'unknown'} onClick={() => toggle('severity', 'unknown')} />
-            )}
-            <Kpi label={`High exploit probability (EPSS ≥ ${epssPct}%)`} value={data.epss_high_count}
-              sub="FIRST.org exploitation-probability score"
-              active={filters.epss_min === epssValue}
-              onClick={() => toggle('epss_min', epssValue)} />
-            <Kpi label="High-risk devices" value={risk.high}
-              sub={filtered
-                ? `Among matching findings · ${risk.medium} medium · ${risk.low} low`
-                : `${risk.medium} medium · ${risk.low} low`}
-              color={risk.high ? 'var(--high)' : undefined}
-              active={filters.risk_band === 'high'} onClick={() => toggle('risk_band', 'high')} />
-            <Kpi label="Confirmed findings" value={data.confirmed_count}
-              active={filters.state === 'confirmed'} onClick={() => toggle('state', 'confirmed')} />
-            <Kpi label="Potential findings" value={data.potential_count}
-              active={filters.state === 'potential'} onClick={() => toggle('state', 'potential')} />
-          </div>
+          <VulnGlance summary={data} filters={filters} filtered={filtered} onToggle={toggle} />
 
-          <div className="row wrap gap-2 small muted">
-            <span>
-              Vulnerability feed - oldest enabled-source sync{' '}
-              {data.feed.oldest_synced_at
-                ? <>{fmtTime(data.feed.oldest_synced_at)} ({relTime(data.feed.oldest_synced_at)})</>
-                : 'never'}
-              {' · '}most recent{' '}
-              {data.feed.newest_synced_at
-                ? <>{fmtTime(data.feed.newest_synced_at)} ({relTime(data.feed.newest_synced_at)})</>
-                : 'never'}
-            </span>
-            {data.feed.stale && (
-              <span className="badge high">
-                Stale - oldest enabled source hasn&apos;t synced in over {data.feed.stale_threshold_hours}h
-              </span>
-            )}
-          </div>
+          <VulnNewLists summary={data} filters={filters} onToggleNewSince={(v) => toggle('new_since', v)} />
 
-          <div className="grid three">
-            <Card title="New vs. resolved vs. dismissed (weekly)">
-              <VulnTrend points={data.weekly} />
-            </Card>
-            <Card title="Open vulnerabilities over time (by severity)">
-              {snapshotNote && <p className="muted small vuln-snapshot-note">{snapshotNote}</p>}
-              <VulnSeverityTrend points={data.snapshot_trend} />
-            </Card>
-            <Card title="Average network risk score over time">
-              {snapshotNote && <p className="muted small vuln-snapshot-note">{snapshotNote}</p>}
-              <VulnRiskTrend points={data.snapshot_trend} />
-            </Card>
-          </div>
-
-          <VulnHeatmap
-            rows={data.severity_by_network}
-            filters={filters}
-            onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))}
-            onNetworkClick={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
-          />
-
-          <VulnFacets summary={data} filters={filters} onToggle={toggle}
-            onToggleVendorProduct={toggleVendorProduct} />
-          <VulnTopLists
-            summary={data}
-            filters={filters}
-            onToggleCve={(id) => toggle('cve_id', id)}
-            onToggleDevice={(uuid) => toggle('device_uuid', uuid)}
-            onToggleNetwork={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
-            onToggleNewSince={(v) => toggle('new_since', v)}
-          />
           <div id="vuln-findings">
             <VulnFindingsTable
               filters={filters}
@@ -633,11 +595,54 @@ export default function Vulnerabilities() {
               onPage={setPage}
               sort={findingSort}
               onSort={setFindingSort}
-              onToggleDismissed={(show) => set('state', show ? 'dismissed' : undefined, false)}
+              onToggleFilter={toggleInPlace}
+              epssValue={epssValue}
+              epssPct={epssPct}
               onToggleNetwork={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
               onChanged={() => { void reload(); }}
             />
           </div>
+
+          <section className="vuln-analysis" aria-labelledby="vuln-analysis-head">
+            <h2 id="vuln-analysis-head" className="vuln-zone-head">Trends</h2>
+            {snapshotNote && <p className="muted small vuln-snapshot-note">{snapshotNote}</p>}
+            <div className="grid three">
+              <Card title="New, resolved and dismissed (weekly)">
+                <VulnTrend points={data.weekly} />
+              </Card>
+              <Card title="Open findings by severity">
+                <VulnSeverityTrend points={data.snapshot_trend} />
+              </Card>
+              <Card title="Average network risk score">
+                <VulnRiskTrend points={data.snapshot_trend} />
+              </Card>
+            </div>
+            <VulnTopLists
+              summary={data}
+              filters={filters}
+              onToggleCve={(id) => toggle('cve_id', id)}
+              onToggleDevice={(uuid) => toggle('device_uuid', uuid)}
+              onToggleNetwork={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
+            />
+          </section>
+
+          <details className="vuln-breakdowns" open={breakdownsOpen}
+            onToggle={(e) => setBreakdownsOpen(e.currentTarget.open)}>
+            <summary>
+              <span className="vuln-zone-head">Breakdowns</span>
+              <span className="muted small"> by network, OS, vendor, service, port, device type and age</span>
+            </summary>
+            <div className="vuln-breakdowns-body">
+              <VulnHeatmap
+                rows={data.severity_by_network}
+                filters={filters}
+                onCellClick={(networkId, sev) => applySp(toggleHeatmapCell(liveSp(), networkId, sev))}
+                onNetworkClick={(networkId) => applySp(toggleNetworkFilter(liveSp(), networkId))}
+              />
+              <VulnFacets summary={data} filters={filters} onToggle={toggle}
+                onToggleVendorProduct={toggleVendorProduct} />
+            </div>
+          </details>
         </>
       )}
       </div>

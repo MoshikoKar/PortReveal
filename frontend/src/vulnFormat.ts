@@ -5,6 +5,17 @@ export function formatCvss(cvss: number | null | undefined): string {
   return cvss != null ? cvss.toFixed(1) : '-';
 }
 
+export type SeverityBand = 'critical' | 'high' | 'medium' | 'low' | 'unscored';
+
+/** Same 9 / 7 / 4 CVSS thresholds as the backend's severity_bucket(); no score → unscored. */
+export function severityBand(cvss: number | null | undefined): SeverityBand {
+  if (cvss == null) return 'unscored';
+  if (cvss >= 9) return 'critical';
+  if (cvss >= 7) return 'high';
+  if (cvss >= 4) return 'medium';
+  return 'low';
+}
+
 export function formatEpss(epss: number | null | undefined): string {
   if (epss == null) return '';
   return `EPSS ${(epss * 100).toFixed(0)}%`;

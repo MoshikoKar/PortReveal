@@ -69,15 +69,16 @@ export function cellIntensity(count: number, max: number): number {
 export type SeverityKey = 'critical' | 'high' | 'medium' | 'low';
 
 /**
- * Warm single-hue-family ramp (pale yellow → orange → red → deep crimson).
- * Lightness bands are disjoint so count modulation never lets a Low cell look darker than Medium
- * (or Medium darker than High, etc.). Higher severity = lower lightness = darker/more intense.
+ * Hues follow the --sev-* tokens (blue low, amber medium, orange high, rose critical) so a cell
+ * reads like the matching KPI and trend line. Lightness bands are disjoint so count modulation
+ * never lets a Low cell look darker than Medium (or Medium darker than High, etc.).
+ * Higher severity = lower lightness = darker/more intense.
  */
 const SEVERITY_HSL: Record<SeverityKey, { h: number; s: number; lMax: number; lMin: number }> = {
-  low: { h: 48, s: 88, lMax: 78, lMin: 68 },
-  medium: { h: 32, s: 90, lMax: 58, lMin: 50 },
-  high: { h: 10, s: 82, lMax: 46, lMin: 38 },
-  critical: { h: 0, s: 78, lMax: 32, lMin: 24 },
+  low: { h: 213, s: 90, lMax: 78, lMin: 68 },
+  medium: { h: 43, s: 92, lMax: 58, lMin: 50 },
+  high: { h: 25, s: 88, lMax: 46, lMin: 38 },
+  critical: { h: 350, s: 78, lMax: 32, lMin: 24 },
 };
 
 /** Resolved HSL lightness (0-100) for a cell -- exported for ramp unit tests. */

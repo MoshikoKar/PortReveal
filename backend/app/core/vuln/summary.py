@@ -640,16 +640,20 @@ def _new_lists(db: Session, findings: list[_Finding], feed: dict) -> dict:
     )
     last_db = feed.get("newest_synced_at")
 
-    def since(cutoff: datetime | None) -> list[dict]:
+    def since(cutoff: datetime | None) -> list[_Finding]:
         if cutoff is None:
             return []
         rows = [f for f in findings if (ts := _seen_at(f)) is not None and ts >= cutoff]
         rows.sort(key=lambda f: _seen_at(f) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-        return [_new_finding_row(f) for f in rows[:TOP_N]]
+        return rows
 
+    by_scan, by_db = since(last_scan), since(last_db)
+    # The lists are capped at TOP_N; the counts are the full totals for headline copy.
     return {
-        "new_since_last_scan": since(last_scan),
-        "new_since_last_db_update": since(last_db),
+        "new_since_last_scan": [_new_finding_row(f) for f in by_scan[:TOP_N]],
+        "new_since_last_db_update": [_new_finding_row(f) for f in by_db[:TOP_N]],
+        "new_since_last_scan_count": len(by_scan),
+        "new_since_last_db_update_count": len(by_db),
     }
 
 
@@ -804,6 +808,7 @@ def refresh_vuln_summary(db: Session, *, now: datetime, filters: FindingFilters 
         "confirmed_count": int(state_counts.get(VULN_STATE_CONFIRMED, 0)),
         "potential_count": int(state_counts.get(VULN_STATE_POTENTIAL, 0)),
         "findings_total": len(findings),
+        "device_count": len({f.device_uuid for f in findings}),
         "risk_device_levels": _risk_device_levels(db, findings if filtered else None),
         "feed": feed,
         "facets": facets,

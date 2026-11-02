@@ -662,6 +662,22 @@ def _html_filter_line(db: Session, filters: FindingFilters) -> str:
     return format_filter_line(filters, network_name=network_name, device_label=device_label)
 
 
+def _html_data_note(db: Session, now: datetime) -> str:
+    """Method and data-currency line for the report header, so a reader knows what a finding is."""
+    feed = get_vuln_summary(db, now=now)["feed"]
+
+    def when(ts: datetime | None) -> str:
+        return ts.astimezone().strftime("%Y-%m-%d %H:%M") if ts else "never"
+
+    note = (
+        "Method: the product and version each service reports (CPE) are compared with a local copy of "
+        "NVD, CISA KEV and EPSS. No exploit or intrusive check is run, so verify a finding before acting on it. "
+        f"Vulnerability data last synced {when(feed['newest_synced_at'])}; "
+        f"oldest enabled source {when(feed['oldest_synced_at'])}."
+    )
+    return note + (" The feed is stale." if feed["stale"] else "")
+
+
 def _html_findings(db: Session, filters: FindingFilters, now: datetime) -> list[dict]:
     """All matching findings for the HTML report (same filter SQL as CSV/list)."""
     cfg = get_section(db, VulnSettings)
@@ -848,6 +864,7 @@ def export_vulns_html(
         findings=findings,
         filter_line=filter_line,
         generated_at=datetime.now().astimezone(),
+        data_note=_html_data_note(db, now),
     )
     filename = _export_filename(db, filters, ext="html")
     return HTMLResponse(

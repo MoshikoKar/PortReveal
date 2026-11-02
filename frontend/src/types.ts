@@ -978,6 +978,8 @@ export interface VulnSummary {
   potential_count: number;
   /** Total findings matching the active filters (parity with GET /api/vulns total). */
   findings_total: number;
+  /** Distinct devices among those findings. */
+  device_count: number;
   risk_device_levels: { high: number; medium: number; low: number };
   feed: {
     oldest_synced_at: string | null;
@@ -1006,6 +1008,9 @@ export interface VulnSummary {
   top_cves: VulnTopCve[];
   new_since_last_scan: VulnNewFinding[];
   new_since_last_db_update: VulnNewFinding[];
+  /** Full totals; the two lists above are capped at 10 rows. */
+  new_since_last_scan_count: number;
+  new_since_last_db_update_count: number;
 }
 
 /** One (device, port, cve) finding row from the CVE-centric list (GET /api/vulns); an
@@ -1019,6 +1024,8 @@ export interface VulnFindingListItem extends DeviceVuln {
   os_name: string | null;
   device_type: string | null;
   first_seen_at: string | null;
+  /** Admin note captured on Dismiss; null when none was given or the row is not dismissed. */
+  dismiss_reason: string | null;
   /** Present when listing with `q`: why this row is hidden from the default (non-search) view. */
   hidden_reasons?: string[];
 }

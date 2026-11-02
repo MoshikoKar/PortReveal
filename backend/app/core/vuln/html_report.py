@@ -1215,6 +1215,7 @@ def build_html_report(
     filter_line: str,
     generated_at: datetime | None = None,
     product_name: str = "PortReveal",
+    data_note: str | None = None,
 ) -> str:
     """Return a full HTML document string (UTF-8), XSS-safe for untrusted finding fields."""
     now = generated_at or datetime.now().astimezone()
@@ -1264,6 +1265,7 @@ def build_html_report(
       <h1>{_esc(product_name)} vulnerability report</h1>
       <p class="meta">Generated {_esc(gen_label)}</p>
       <p class="filters"><strong>Filters:</strong> {_esc(filter_line)}</p>
+      {f'<p class="meta">{_esc(data_note)}</p>' if data_note else ""}
     </div>
     <div class="theme-toggle" role="group" aria-label="Color theme">
       <button type="button" data-theme-set="auto" class="on">Auto</button>

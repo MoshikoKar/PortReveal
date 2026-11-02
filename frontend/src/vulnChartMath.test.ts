@@ -116,7 +116,7 @@ describe('cellFillStyle / severity ramp', () => {
     expect(cellFillLightness('critical', 100, 100)).toBeLessThan(critical);
   });
 
-  it('uses a warm hsl fill and flips text for WCAG AA contrast', () => {
+  it('uses an hsl severity fill and flips text for WCAG AA contrast', () => {
     const pale = cellFillStyle('low', 1, 100);
     const deep = cellFillStyle('critical', 100, 100);
     expect(pale.background.startsWith('hsl(')).toBe(true);

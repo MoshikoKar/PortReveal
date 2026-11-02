@@ -19,12 +19,13 @@ export function Card({ title, actions, children, flush, className, id }: {
   );
 }
 
-export function Kpi({ label, value, sub, color, onClick, active }: {
+export function Kpi({ label, value, sub, color, onClick, active, className }: {
   label: string; value: ReactNode; sub?: ReactNode; color?: string; onClick?: () => void; active?: boolean;
+  className?: string;
 }) {
   return (
     <div
-      className={`kpi ${onClick ? 'link' : ''} ${active ? 'active' : ''}`}
+      className={`kpi ${onClick ? 'link' : ''} ${active ? 'active' : ''} ${className ?? ''}`}
       style={{ ['--kpi-color' as any]: color }}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
@@ -180,9 +181,14 @@ export function MockBadge({ mode }: { mode: string | null }) {
   return <span className="badge medium" title="Produced by the mock scanner (simulated data)">SIMULATED</span>;
 }
 
-export function ErrorBox({ error }: { error: string | null | undefined }) {
+export function ErrorBox({ error, onRetry }: { error: string | null | undefined; onRetry?: () => void }) {
   if (!error) return null;
-  return <div className="alert error">{error}</div>;
+  return (
+    <div className="alert error">
+      {error}
+      {onRetry && <> <button type="button" className="btn sm ghost" onClick={onRetry}>Retry</button></>}
+    </div>
+  );
 }
 
 export function Loading() {

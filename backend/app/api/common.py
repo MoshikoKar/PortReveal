@@ -264,6 +264,7 @@ def vuln_finding_out(dpv: DevicePortVuln, port: DevicePort, device: Device, vuln
         "version": port.version,
         "matched_cpe": dpv.matched_cpe,
         "state": dpv.state,
+        "dismiss_reason": dpv.dismiss_reason,
         "source": dpv.source,
         "cvss_base": vuln.cvss_base,
         "cvss_vector": vuln.cvss_vector,

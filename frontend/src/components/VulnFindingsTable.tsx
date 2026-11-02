@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { del, post } from '../api';
 import { useApp } from '../context';
-import type { VulnFindingsPage } from '../types';
+import type { VulnFindingListItem, VulnFindingsPage } from '../types';
 import { fmtTime, relTime, useApi } from '../util';
-import { buildVulnQuery, displayHiddenReasons, type VulnFilters } from '../vulnFilters';
-import { dismissBusyKey, findingRowKey, formatCvss, formatEpss } from '../vulnFormat';
+import { buildVulnQuery, displayHiddenReasons, type VulnFilterKey, type VulnFilters } from '../vulnFilters';
+import { dismissBusyKey, findingRowKey, formatEpss } from '../vulnFormat';
+import { CvssScore } from './VulnTopLists';
 import { Card, Empty, ErrorBox, Pager, SkeletonRows, SortTh } from './ui';
 
 const PAGE_SIZE = 50;
@@ -16,11 +17,18 @@ export type FindingSort = (typeof FINDING_SORTS)[number];
 /** Scores and dates read best largest/newest first; names and numbers ascending. */
 export const FINDING_DESC_FIRST: readonly FindingSort[] = ['cvss', 'first_seen'];
 
+/** Plain-language meaning of each match state; shown in the legend and on each badge. */
+export const STATE_HELP: Record<string, string> = {
+  confirmed: 'The exact product version reported by the service is listed as affected.',
+  potential: 'The version is imprecise or falls in an affected range. Verify it on the device.',
+  dismissed: 'An admin marked this finding as not applicable.',
+};
+
 /** Paginated CVE-centric findings table. Dismiss/undismiss reuse the existing per-device endpoints;
  * after a mutation the parent reloads the summary so cards stay in sync. */
 export function VulnFindingsTable({
   filters, q, onlyHidden, onToggleOnlyHidden, page, onPage, sort, onSort,
-  onToggleDismissed, onToggleNetwork, onChanged,
+  onToggleFilter, epssValue, epssPct, onToggleNetwork, onChanged,
 }: {
   filters: VulnFilters;
   /** Debounced search term from the URL (`q`); lifts the display floor when non-empty. */
@@ -31,7 +39,10 @@ export function VulnFindingsTable({
   onPage: (page: number) => void;
   sort: { key: FindingSort; desc: boolean };
   onSort: (key: FindingSort) => void;
-  onToggleDismissed: (show: boolean) => void;
+  /** Toggle a state / EPSS filter without scrolling (the toolbar is already beside the table). */
+  onToggleFilter: (key: VulnFilterKey, value: string) => void;
+  epssValue: string;
+  epssPct: number;
   onToggleNetwork: (networkId: number | null) => void;
   onChanged: () => void;
 }) {
@@ -49,29 +60,37 @@ export function VulnFindingsTable({
   );
   const { data, error, reload } = useApi<VulnFindingsPage>('/vulns', params, 30000);
   const [busy, setBusy] = useState<string | null>(null);
-  const showingDismissed = filters.state === 'dismissed';
+  // Row whose inline "why dismiss?" form is open, and the reason being typed.
+  const [dismissing, setDismissing] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [announce, setAnnounce] = useState('');
 
-  const dismiss = async (deviceUuid: string, cveId: string) => {
-    const key = dismissBusyKey(deviceUuid, cveId);
-    if (busy) return;
-    setBusy(key);
-    try {
-      await post(`/devices/${deviceUuid}/vulns/${encodeURIComponent(cveId)}/dismiss`);
-      await reload();
-      onChanged();
-    } finally {
-      setBusy(null);
-    }
+  // Closing the inline form unmounts the focused field; hand focus back to the row's Dismiss button.
+  const cancelDismiss = (key: string) => {
+    setDismissing(null);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLButtonElement>(`button[data-dismiss-key="${key}"]`)?.focus();
+    });
   };
 
-  const undismiss = async (deviceUuid: string, cveId: string) => {
-    const key = dismissBusyKey(deviceUuid, cveId);
+  const mutate = async (v: VulnFindingListItem, undo: boolean, note?: string) => {
+    const key = dismissBusyKey(v.device_uuid, v.cve_id);
     if (busy) return;
     setBusy(key);
+    setActionError(null);
+    const path = `/devices/${v.device_uuid}/vulns/${encodeURIComponent(v.cve_id)}/dismiss`;
     try {
-      await del(`/devices/${deviceUuid}/vulns/${encodeURIComponent(cveId)}/dismiss`);
+      if (undo) await del(path);
+      else await post(path, { reason: note?.trim() || null });
+      setDismissing(null);
+      setReason('');
+      setAnnounce(`${v.cve_id} on ${v.device_ip} ${undo ? 'restored' : 'dismissed'}.`);
       await reload();
       onChanged();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Request failed.';
+      setActionError(`Could not ${undo ? 'restore' : 'dismiss'} ${v.cve_id} on ${v.device_ip}: ${msg} Try again.`);
     } finally {
       setBusy(null);
     }
@@ -80,45 +99,72 @@ export function VulnFindingsTable({
   const items = data?.items ?? [];
   const matchTotal = data?.total_matches ?? data?.total ?? 0;
   const hiddenTotal = data?.hidden_total ?? 0;
+  const showingDismissed = filters.state === 'dismissed';
+  const colCount = isAdmin ? 8 : 7;
+  const stateToggle = (value: 'confirmed' | 'potential', label: string) => {
+    const on = filters.state === value;
+    return (
+      <button type="button" className={`btn sm toggle ${on ? 'on' : ''}`} aria-pressed={on}
+        title={STATE_HELP[value]} onClick={() => onToggleFilter('state', value)}>
+        {label}
+      </button>
+    );
+  };
+  const epssOn = filters.epss_min === epssValue;
 
   return (
     <Card title="Findings" flush actions={
-      <>
-        {sort.key !== 'risk' && (
-          <button type="button" className="btn sm ghost" onClick={() => onSort('risk')}
-            title="Back to the default order: actively exploited (KEV) first, then highest CVSS">
-            Triage order
-          </button>
-        )}
-        <label className="check small">
-          <input type="checkbox" checked={showingDismissed}
-            onChange={(e) => onToggleDismissed(e.target.checked)} />
-          show dismissed only
-        </label>
-      </>
+      sort.key !== 'risk' ? (
+        <button type="button" className="btn sm ghost" onClick={() => onSort('risk')}
+          title="Back to the default order: actively exploited (KEV) first, then highest CVSS">
+          Triage order
+        </button>
+      ) : undefined
     }>
-      {searching && (
-        <div className="row wrap gap-2" style={{ padding: '10px 14px 0', alignItems: 'center' }}>
-          <span className="small">
-            <strong>{matchTotal.toLocaleString()}</strong> matches
-            {hiddenTotal > 0 && (
-              <> · <strong>{hiddenTotal.toLocaleString()}</strong> normally hidden</>
-            )}
-          </span>
-          <label className="check small" title="Show only findings the default list would hide">
-            <input type="checkbox" checked={onlyHidden} onChange={onToggleOnlyHidden} />
-            Only hidden
+      <div className="card-toolbar vuln-findings-toolbar">
+        <div className="row wrap gap-2" role="group" aria-label="Narrow findings">
+          {stateToggle('confirmed', 'Confirmed')}
+          {stateToggle('potential', 'Potential')}
+          <button type="button" className={`btn sm toggle ${epssOn ? 'on' : ''}`} aria-pressed={epssOn}
+            title="FIRST.org EPSS: estimated probability of exploitation in the next 30 days"
+            onClick={() => onToggleFilter('epss_min', epssValue)}>
+            Likely exploited (EPSS ≥ {epssPct}%)
+          </button>
+          <label className="check small">
+            <input type="checkbox" checked={showingDismissed}
+              onChange={() => onToggleFilter('state', 'dismissed')} />
+            Dismissed only
           </label>
-          <span className="badge accent">Includes hidden findings</span>
+          {searching && (
+            <label className="check small" title="Show only findings the default list would hide">
+              <input type="checkbox" checked={onlyHidden} onChange={onToggleOnlyHidden} />
+              Only normally hidden
+            </label>
+          )}
         </div>
+        <p className="vuln-state-legend small muted">
+          <span className="badge state-confirmed">confirmed</span> exact version match
+          <span className="vuln-legend-sep" aria-hidden>·</span>
+          <span className="badge state-potential">potential</span> version range or imprecise version, verify on the device
+        </p>
+      </div>
+      {searching && data && (
+        <p className="vuln-findings-count small">
+          <strong>{matchTotal.toLocaleString()}</strong> matches
+          {hiddenTotal > 0 && <> · <strong>{hiddenTotal.toLocaleString()}</strong> normally hidden</>}
+        </p>
       )}
+      <p className="sr-only" aria-live="polite">
+        {announce || (data ? `${data.total.toLocaleString()} findings` : '')}
+      </p>
       <ErrorBox error={error} />
-      {!data ? (!error && <SkeletonRows cols={isAdmin ? 8 : 7} rows={5} />) : !items.length ? (
+      {actionError && <div className="alert error" role="alert">{actionError}</div>}
+      {!data ? (!error && <SkeletonRows cols={colCount} rows={5} />) : !items.length ? (
         <Empty>
           {showingDismissed
             ? 'No dismissed findings.'
             : searching
-              ? (onlyHidden ? 'No normally-hidden findings match this search.' : 'No findings match this search.')
+              ? (onlyHidden ? 'No normally hidden findings match this search.' : 'No findings match this search.')
               : (
               <>
                 No findings match the current filters.
@@ -133,7 +179,7 @@ export function VulnFindingsTable({
       ) : (
         <>
           <div className="table-wrap">
-            <table className="compact domain-table fit-table">
+            <table className="compact domain-table fit-table vuln-findings-table" aria-label="Vulnerability findings">
               <thead>
                 <tr>
                   {sortTh('cve', 'CVE')}
@@ -143,7 +189,7 @@ export function VulnFindingsTable({
                   {sortTh('cvss', 'CVSS')}
                   {sortTh('state', 'State')}
                   {sortTh('first_seen', 'First seen')}
-                  {isAdmin && <th />}
+                  {isAdmin && <th><span className="sr-only">Actions</span></th>}
                 </tr>
               </thead>
               <tbody>
@@ -157,17 +203,19 @@ export function VulnFindingsTable({
                   const portText = [v.protocol.toUpperCase() + '/' + v.port, v.product ?? v.service, v.version].filter(Boolean).join(' ');
                   const cveTip = [
                     v.cve_id,
-                    v.kev ? 'CISA KEV' : null,
-                    v.epss != null ? `EPSS ${formatEpss(v.epss)}` : null,
+                    v.kev ? 'CISA KEV: known to be exploited' : null,
+                    formatEpss(v.epss) || null,
                     ...reasons,
                   ].filter(Boolean).join('\n');
                   const deviceTip = [v.device_ip, v.device_hostname].filter(Boolean).join('\n');
-                  return (
+                  const formOpen = dismissing === key;
+                  const rowName = `${v.cve_id} on ${v.device_ip}`;
+                  return [
                     <tr key={key} className={v.state === 'dismissed' ? 'dim' : ''}>
-                      <td className="mono domain-col-fluid">
+                      <td className="mono" data-label="CVE">
                         <span className="cell-ellipsis" title={cveTip}>
                           <Link to={`/vulnerabilities/${encodeURIComponent(v.cve_id)}`}>{v.cve_id}</Link>
-                          {v.kev && <span className="badge high" style={{ marginLeft: 6 }}>KEV</span>}
+                          {v.kev && <span className="badge kev" style={{ marginLeft: 6 }}>KEV</span>}
                           {reasons.length > 0 && (
                             <span className="badge outline" style={{ marginLeft: 6 }} title={reasons.join('\n')}>
                               {reasons.length === 1 ? reasons[0] : `+${reasons.length}`}
@@ -175,13 +223,13 @@ export function VulnFindingsTable({
                           )}
                         </span>
                       </td>
-                      <td className="domain-col-fluid" title={deviceTip}>
+                      <td className="domain-col-fluid" title={deviceTip} data-label="Device">
                         <span className="cell-ellipsis">
                           <Link className="mono" to={`/devices/${v.device_uuid}`}>{v.device_ip}</Link>
                           {v.device_hostname && <span className="muted small"> · {v.device_hostname}</span>}
                         </span>
                       </td>
-                      <td className="domain-col-fluid">
+                      <td className="domain-col-fluid" data-label="Network">
                         <button
                           type="button"
                           className={`heatmap-network-btn cell-ellipsis ${netActive ? 'active' : ''}`}
@@ -192,36 +240,58 @@ export function VulnFindingsTable({
                           {netLabel}
                         </button>
                       </td>
-                      <td className="small domain-col-fluid">
+                      <td className="small domain-col-fluid" data-label="Service">
                         <span className="cell-ellipsis" title={portText}>{portText}</span>
                       </td>
-                      <td className="mono small">{formatCvss(v.cvss_base)}</td>
-                      <td>
-                        <span className={`badge ${v.state === 'confirmed' ? 'high' : v.state === 'potential' ? 'medium' : 'outline'}`}
-                          title={
-                            v.state === 'dismissed' && (v.hidden_reasons ?? []).includes('Dismissed')
-                              ? 'Dismissed (normally hidden from the default list)'
-                              : v.state === 'potential' && (v.hidden_reasons ?? []).includes('Potential (hidden)')
-                                ? 'Potential (normally hidden when include_potential is off)'
-                                : undefined
-                          }>
-                          {v.state}
-                        </span>
+                      <td data-label="CVSS"><CvssScore cvss={v.cvss_base} /></td>
+                      <td data-label="State">
+                        <span className={`badge state-${v.state}`} title={STATE_HELP[v.state]}>{v.state}</span>
+                        {v.state === 'dismissed' && v.dismiss_reason && (
+                          <span className="muted small vuln-dismiss-reason" title={v.dismiss_reason}> {v.dismiss_reason}</span>
+                        )}
                       </td>
-                      <td className="small muted" title={fmtTime(v.first_seen_at)}>{relTime(v.first_seen_at)}</td>
+                      <td className="small muted" title={fmtTime(v.first_seen_at)} data-label="First seen">{relTime(v.first_seen_at)}</td>
                       {isAdmin && (
-                        <td className="right">
+                        <td className="right vuln-row-action">
                           {v.state === 'dismissed' ? (
                             <button type="button" className="btn sm ghost" disabled={busy === busyKey}
-                              onClick={() => undismiss(v.device_uuid, v.cve_id)}>Undo</button>
+                              aria-label={`Restore ${rowName}`}
+                              onClick={() => { void mutate(v, true); }}>Restore</button>
                           ) : (
                             <button type="button" className="btn sm ghost" disabled={busy === busyKey}
-                              onClick={() => dismiss(v.device_uuid, v.cve_id)}>Dismiss</button>
+                              aria-expanded={formOpen} aria-label={`Dismiss ${rowName}`} data-dismiss-key={key}
+                              onClick={() => { setDismissing(formOpen ? null : key); setReason(''); }}>
+                              Dismiss
+                            </button>
                           )}
                         </td>
                       )}
-                    </tr>
-                  );
+                    </tr>,
+                    formOpen && (
+                      <tr key={`${key}-dismiss`} className="vuln-dismiss-row">
+                        <td colSpan={colCount}>
+                          <form className="row wrap gap-2" style={{ alignItems: 'center' }}
+                            onSubmit={(e) => { e.preventDefault(); void mutate(v, false, reason); }}>
+                            <label className="small" htmlFor={`dismiss-${key}`}>
+                              Dismiss <span className="mono">{v.cve_id}</span> on <span className="mono">{v.device_ip}</span>. Why?
+                            </label>
+                            <input id={`dismiss-${key}`} type="text" maxLength={200} autoFocus
+                              placeholder="Optional: e.g. not reachable, patched by vendor backport"
+                              value={reason} onChange={(e) => setReason(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Escape') cancelDismiss(key); }}
+                              style={{ flex: '1 1 16rem', minWidth: 0 }} />
+                            <button type="submit" className="btn sm" disabled={busy === busyKey}>
+                              {busy === busyKey ? 'Dismissing…' : 'Dismiss finding'}
+                            </button>
+                            <button type="button" className="btn sm ghost" onClick={() => cancelDismiss(key)}>Cancel</button>
+                          </form>
+                          <p className="muted small" style={{ margin: '6px 0 0' }}>
+                            It stays dismissed across rescans until restored. The reason appears in reports.
+                          </p>
+                        </td>
+                      </tr>
+                    ),
+                  ];
                 })}
               </tbody>
             </table>
