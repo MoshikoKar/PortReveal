@@ -156,6 +156,8 @@ function WordlistLibraryCard({ lib, error, loading, reload, onDirtyChange }: {
         Paths tried for app discovery (and subdomain lists, selectable per domain under Domains for wordlist brute force).
         Plain UTF-8 text, one entry per line, <code>#</code> comments ignored; {acceptedExtensions(limits).split(',').join(' ')}.
         {limits && <> Up to {formatBytes(limits.max_upload_bytes)} ({formatBytes(limits.max_decompressed_bytes)} uncompressed), {limits.max_entries.toLocaleString('en-US')} entries.</>}
+        {' '}Path lists longer than {(limits?.max_discovery_paths ?? 500).toLocaleString('en-US')} entries can still be imported;
+        Web capture app discovery only checks the first {(limits?.max_discovery_paths ?? 500).toLocaleString('en-US')}.
         {' '}Invalid lines are skipped; URL imports run only when you click and refuse private or internal addresses.
       </div>
       <ErrorBox error={error} />

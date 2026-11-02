@@ -31,8 +31,8 @@ def test_wordlist_upload_select_save_and_delete(live_app, browser, tmp_path):  #
         expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
         page.goto(f"{base}/settings/web-capture")
         expect(page.get_by_role("heading", name="Wordlists")).to_be_visible(timeout=15_000)
-        select = page.get_by_label("Discovery wordlist")
-        expect(select).to_have_value("")  # built-in
+        lists = page.get_by_role("group", name="Discovery wordlists")
+        expect(lists.get_by_label("Built-in", exact=False)).to_be_checked()
 
         # Upload
         page.get_by_role("button", name="Upload wordlist").click()
@@ -46,11 +46,11 @@ def test_wordlist_upload_select_save_and_delete(live_app, browser, tmp_path):  #
         expect(row).to_contain_text("Upload")
 
         # Select in Web capture and save
-        select.select_option(label="e2e paths (2 paths)")
+        lists.get_by_label("e2e paths (2 paths)").check()
         page.get_by_role("button", name="Save Web Capture settings").click()
         expect(page.get_by_text("Saved.", exact=True)).to_be_visible(timeout=10_000)
         page.reload()
-        expect(page.get_by_label("Discovery wordlist")).not_to_have_value("", timeout=15_000)
+        expect(lists.get_by_label("e2e paths (2 paths)")).to_be_checked(timeout=15_000)
         expect(row.get_by_text("in use", exact=True)).to_be_visible()
 
         # Delete (in use: confirm explains the fallback to the built-in list)
@@ -65,7 +65,8 @@ def test_wordlist_upload_select_save_and_delete(live_app, browser, tmp_path):  #
         expect(row).to_have_count(0, timeout=10_000)
         assert messages and "built-in" in messages[0]
         page.reload()
-        expect(page.get_by_label("Discovery wordlist")).to_have_value("", timeout=15_000)
+        expect(lists.get_by_label("e2e paths (2 paths)")).to_have_count(0, timeout=15_000)
+        expect(lists.get_by_label("Built-in", exact=False)).to_be_checked()
         assert not errors, errors
     finally:
         page.close()

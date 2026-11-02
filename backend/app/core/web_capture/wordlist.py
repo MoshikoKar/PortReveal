@@ -1,7 +1,9 @@
-"""Discovery path wordlist: built-in list, or a stored "paths" list from the wordlist library."""
+"""Discovery path wordlists: the built-in list and/or stored "paths" lists from the wordlist library."""
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
+from itertools import zip_longest
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -12,13 +14,27 @@ from .classify import APP_PATHS
 
 log = logging.getLogger(__name__)
 
-# Hard ceiling regardless of settings, so a huge file cannot turn one capture into a brute-force run.
-MAX_WORDLIST_PATHS = 2000
+# Hard ceiling for Web capture app discovery (security monitoring / inventory enrichment).
+# Matches WebCaptureSettings.max_discovery_paths; longer stored lists are kept, but only the
+# first N paths are candidates for discovery probes.
+MAX_DISCOVERY_PATHS = 500
+# Back-compat alias for callers/tests that still import the old name.
+MAX_WORDLIST_PATHS = MAX_DISCOVERY_PATHS
 _cache: dict[str, tuple[float, tuple[str, ...]]] = {}
 
 
+def discovery_truncation_warning(kind: str, entries: int) -> str | None:
+    """Warn when a paths list is longer than the discovery probe ceiling."""
+    if kind != KIND_PATHS or entries <= MAX_DISCOVERY_PATHS:
+        return None
+    return (
+        f"Only the first {MAX_DISCOVERY_PATHS:,} paths are used for Web capture app discovery "
+        f"({entries:,} in this list)."
+    )
+
+
 def load_wordlist(path: Path) -> tuple[str, ...]:
-    """Load a stored list (first MAX_WORDLIST_PATHS entries); cached on path + mtime. Empty on any problem.
+    """Load a stored list (first MAX_DISCOVERY_PATHS entries); cached on path + mtime. Empty on any problem.
 
     Stored files hold sanitized entries already; they are validated again as defense in depth.
     """
@@ -42,7 +58,7 @@ def load_wordlist(path: Path) -> tuple[str, ...]:
                 if norm and norm not in seen:
                     seen.add(norm)
                     out.append(norm)
-                    if len(out) >= MAX_WORDLIST_PATHS:
+                    if len(out) >= MAX_DISCOVERY_PATHS:
                         break
     except OSError as exc:
         log.warning("discovery wordlist read failed (%s): %s", path.name, exc)
@@ -53,16 +69,24 @@ def load_wordlist(path: Path) -> tuple[str, ...]:
     return result
 
 
-def discovery_paths(db: Session, wordlist_id: int | None) -> tuple[str, ...]:
-    """The selected stored list if it exists and is usable, else the built-in list."""
-    if not wordlist_id:
-        return APP_PATHS
+def _stored_paths(db: Session, wordlist_id: int) -> tuple[str, ...]:
     row = db.get(Wordlist, wordlist_id)
     if row is None or row.kind != KIND_PATHS:
-        log.warning("discovery wordlist %s missing or not a paths list; using built-in", wordlist_id)
-        return APP_PATHS
+        log.warning("discovery wordlist %s missing or not a paths list; skipped", wordlist_id)
+        return ()
     try:
         path = stored_path(row.storage_name)
     except WordlistError:
+        return ()
+    return load_wordlist(path)
+
+
+def discovery_paths(db: Session, wordlist_ids: Iterable[int], builtin: bool = False) -> tuple[str, ...]:
+    """The selected lists (built-in first) merged round-robin without duplicates, so each one
+    contributes to the first few paths a capture tries. Nothing usable selected: the built-in list."""
+    sources = [APP_PATHS] if builtin else []
+    sources += [p for p in (_stored_paths(db, i) for i in wordlist_ids) if p]
+    if not sources:
         return APP_PATHS
-    return load_wordlist(path) or APP_PATHS
+    merged = dict.fromkeys(p for row in zip_longest(*sources) for p in row if p is not None)
+    return tuple(merged)[:MAX_DISCOVERY_PATHS]

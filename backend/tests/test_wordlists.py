@@ -17,7 +17,7 @@ from app.api.auth import limiter
 from app.config import reset_settings_cache
 from app.core import wordlists as wl
 from app.core.web_capture.classify import APP_PATHS
-from app.core.web_capture.wordlist import discovery_paths
+from app.core.web_capture.wordlist import MAX_DISCOVERY_PATHS, discovery_paths, discovery_truncation_warning
 from app.main import app
 from app.migrate import alembic_config
 from app.models import AuditLog, Wordlist
@@ -400,17 +400,39 @@ def test_upload_select_and_scan_uses_list(client, db):
     lib = client.get("/api/wordlists").json()
     assert lib["builtin"]["in_use"] and lib["builtin"]["entries"] == len(APP_PATHS)
     assert lib["limits"]["max_entries"] == 1_000_000 and lib["subdomain_discovery"]
+    assert lib["limits"]["max_discovery_paths"] == MAX_DISCOVERY_PATHS
 
     cfg = client.get("/api/settings/web-capture").json()
-    assert cfg["discovery_wordlist_id"] is None and "discovery_wordlist" not in cfg
-    r = client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_id": w["id"]}, headers=csrf(client))
+    assert cfg["discovery_builtin"] and cfg["discovery_wordlist_ids"] == [] and "discovery_wordlist" not in cfg
+    r = client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_ids": [w["id"]]}, headers=csrf(client))
     assert r.status_code == 200, r.text
     assert client.get("/api/wordlists").json()["items"][0]["in_use"]
 
     stored = db.get(Wordlist, w["id"])
     assert wl.STORAGE_RE.fullmatch(stored.storage_name)
-    assert discovery_paths(db, w["id"]) == ("/admin", "/console")
+    assert discovery_paths(db, [w["id"]]) == ("/admin", "/console")
     assert {"wordlist.upload", "wordlist.select"} <= set(audit_actions(db))
+
+
+def test_paths_upload_warns_when_longer_than_discovery_ceiling(client):
+    assert discovery_truncation_warning("paths", MAX_DISCOVERY_PATHS) is None
+    body = "\n".join(f"p{i}" for i in range(MAX_DISCOVERY_PATHS + 3)).encode()
+    r = upload(client, body, filename="long-paths.txt", name="Long paths")
+    assert r.status_code == 201, r.text
+    assert r.json()["summary"]["accepted"] == MAX_DISCOVERY_PATHS + 3
+    assert r.json()["warning"] == discovery_truncation_warning("paths", MAX_DISCOVERY_PATHS + 3)
+    # Subdomain lists are not capped by Web capture discovery; no warning.
+    sub = upload(client, body, filename="long-subs.txt", kind="subdomains", name="Long subs")
+    assert sub.status_code == 201 and "warning" not in sub.json()
+
+
+def test_max_discovery_paths_accepts_500_rejects_above(client):
+    cfg = client.get("/api/settings/web-capture").json()
+    h = csrf(client)
+    ok = client.put("/api/settings/web-capture", json={**cfg, "max_discovery_paths": 500}, headers=h)
+    assert ok.status_code == 200 and ok.json()["max_discovery_paths"] == 500
+    bad = client.put("/api/settings/web-capture", json={**cfg, "max_discovery_paths": 501}, headers=h)
+    assert bad.status_code == 422
 
 
 def test_upload_rejects_bad_type_and_binary(client):
@@ -434,8 +456,31 @@ def test_select_rejects_unknown_or_subdomain_list(client):
     sub = upload(client, b"www\n", filename="subs.txt", kind="subdomains").json()["wordlist"]
     cfg = client.get("/api/settings/web-capture").json()
     for bad in (sub["id"], 9999):
-        r = client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_id": bad}, headers=csrf(client))
+        r = client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_ids": [bad]}, headers=csrf(client))
         assert r.status_code == 422
+
+
+def test_select_several_lists_merges_round_robin(client, db):
+    a = upload(client, b"a1\na2\na3\n", filename="a.txt").json()["wordlist"]
+    b = upload(client, b"b1\na1\n", filename="b.txt").json()["wordlist"]
+    cfg = client.get("/api/settings/web-capture").json()
+    h = csrf(client)
+    none = {**cfg, "discovery_builtin": False, "discovery_wordlist_ids": []}
+    assert client.put("/api/settings/web-capture", json=none, headers=h).status_code == 422
+    both = {**cfg, "discovery_builtin": False, "discovery_wordlist_ids": [a["id"], b["id"], a["id"]]}
+    r = client.put("/api/settings/web-capture", json=both, headers=h)
+    assert r.status_code == 200 and r.json()["discovery_wordlist_ids"] == [a["id"], b["id"]]
+    lib = client.get("/api/wordlists").json()
+    assert all(w["in_use"] for w in lib["items"]) and not lib["builtin"]["in_use"]
+    assert discovery_paths(db, [a["id"], b["id"]]) == ("/a1", "/b1", "/a2", "/a3")
+    assert discovery_paths(db, [b["id"]], builtin=True)[:3] == (APP_PATHS[0], "/b1", APP_PATHS[1])
+
+    assert client.delete(f"/api/wordlists/{a['id']}?force=true", headers=h).status_code == 204
+    cfg = client.get("/api/settings/web-capture").json()
+    assert (cfg["discovery_builtin"], cfg["discovery_wordlist_ids"]) == (False, [b["id"]])
+    assert client.delete(f"/api/wordlists/{b['id']}?force=true", headers=h).status_code == 204
+    cfg = client.get("/api/settings/web-capture").json()
+    assert (cfg["discovery_builtin"], cfg["discovery_wordlist_ids"]) == (True, [])
 
 
 def test_rename_rules(client, db):
@@ -452,17 +497,17 @@ def test_rename_rules(client, db):
 def test_delete_in_use_blocked_then_force_falls_back(client, db):
     w = upload(client, b"admin\n").json()["wordlist"]
     cfg = client.get("/api/settings/web-capture").json()
-    client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_id": w["id"]}, headers=csrf(client))
+    client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_ids": [w["id"]]}, headers=csrf(client))
     path = wl.stored_path(db.get(Wordlist, w["id"]).storage_name)
     assert path.is_file()
 
     assert client.delete(f"/api/wordlists/{w['id']}", headers=csrf(client)).status_code == 409
     assert client.delete(f"/api/wordlists/{w['id']}?force=true", headers=csrf(client)).status_code == 204
     assert not path.exists()
-    assert client.get("/api/settings/web-capture").json()["discovery_wordlist_id"] is None
+    assert client.get("/api/settings/web-capture").json()["discovery_wordlist_ids"] == []
     assert client.get("/api/wordlists").json()["builtin"]["in_use"]
     db.expire_all()
-    assert discovery_paths(db, w["id"]) == APP_PATHS
+    assert discovery_paths(db, [w["id"]]) == APP_PATHS
     assert "wordlist.delete" in audit_actions(db)
 
 
@@ -561,12 +606,12 @@ def test_failed_import_leaves_no_files(client, fake_net):
 def test_selection_change_is_audited_with_section_audit(client, db):
     w = upload(client, b"admin\n").json()["wordlist"]
     cfg = client.get("/api/settings/web-capture").json()
-    client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_id": w["id"]}, headers=csrf(client))
-    client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_id": None}, headers=csrf(client))
+    client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_ids": [w["id"]]}, headers=csrf(client))
+    client.put("/api/settings/web-capture", json={**cfg, "discovery_wordlist_ids": []}, headers=csrf(client))
     db.expire_all()
     selects = db.scalars(select(AuditLog).where(AuditLog.action == "wordlist.select").order_by(AuditLog.id)).all()
-    assert [json.loads(a.details)["to"] for a in selects] == [w["id"], None]
-    assert get_section(db, WebCaptureSettings).discovery_wordlist_id is None
+    assert [json.loads(a.details)["to"]["ids"] for a in selects] == [[w["id"]], []]
+    assert get_section(db, WebCaptureSettings).discovery_wordlist_ids == []
 
 
 # --- legacy setting migration --------------------------------------------------------------------
@@ -601,7 +646,7 @@ def test_legacy_wordlist_file_is_imported_and_selected(legacy_db):
     (legacy_db["data"] / "lists").mkdir()
     (legacy_db["data"] / "lists" / "custom.txt").write_bytes(b"admin\n/portal/\nhttp://evil.example.test/\n")
     legacy_db["set_legacy"]("lists/custom.txt")
-    command.upgrade(legacy_db["cfg"], "head")
+    command.upgrade(legacy_db["cfg"], "0034")
 
     value = legacy_db["setting"]()
     assert "discovery_wordlist" not in value and value["max_discovery_paths"] == 12
@@ -621,8 +666,23 @@ def test_legacy_wordlist_file_is_imported_and_selected(legacy_db):
 @pytest.mark.parametrize("legacy", ["missing/nothing.txt", ""])
 def test_legacy_missing_file_falls_back_to_builtin(legacy_db, legacy):
     legacy_db["set_legacy"](legacy)
-    command.upgrade(legacy_db["cfg"], "head")
+    command.upgrade(legacy_db["cfg"], "0034")
     value = legacy_db["setting"]()
     assert value["discovery_wordlist_id"] is None and "discovery_wordlist" not in value
     with legacy_db["engine"].connect() as conn:
         assert conn.execute(text("SELECT COUNT(*) FROM wordlists")).scalar() == 0
+
+
+def test_single_selection_becomes_a_list_and_back(legacy_db):
+    (legacy_db["data"] / "custom.txt").write_bytes(b"admin\n")
+    legacy_db["set_legacy"]("custom.txt")
+    command.upgrade(legacy_db["cfg"], "0034")
+    selected = legacy_db["setting"]()["discovery_wordlist_id"]
+    assert selected
+    command.upgrade(legacy_db["cfg"], "head")
+    value = legacy_db["setting"]()
+    assert "discovery_wordlist_id" not in value
+    assert (value["discovery_builtin"], value["discovery_wordlist_ids"]) == (False, [selected])
+    command.downgrade(legacy_db["cfg"], "0039")
+    value = legacy_db["setting"]()
+    assert value["discovery_wordlist_id"] == selected and "discovery_wordlist_ids" not in value

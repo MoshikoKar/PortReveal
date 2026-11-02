@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..auth.deps import client_ip, require_admin
 from ..core.audit import audit
 from ..core.web_capture.classify import APP_PATHS
+from ..core.web_capture.wordlist import MAX_DISCOVERY_PATHS, discovery_truncation_warning
 from ..core.wordlists import (
     KIND_PATHS,
     KINDS,
@@ -53,8 +54,8 @@ class RenameIn(BaseModel):
     name: str = Field(..., max_length=200)
 
 
-def _selected_id(db: Session) -> int | None:
-    return get_section(db, WebCaptureSettings).discovery_wordlist_id
+def _selected_ids(db: Session) -> list[int]:
+    return get_section(db, WebCaptureSettings).discovery_wordlist_ids
 
 
 def _domain_users(db: Session, ids: list[int]) -> dict[int, list[dict]]:
@@ -73,7 +74,7 @@ def in_use_message(domains: list[dict]) -> str:
     return f"In use by {len(domains)} domain(s): {names}. Choose another wordlist for them first."
 
 
-def _out(w: Wordlist, selected: int | None, domains: list[dict] | None = None) -> dict:
+def _out(w: Wordlist, selected: list[int], domains: list[dict] | None = None) -> dict:
     return {
         "id": w.id,
         "name": w.name,
@@ -89,9 +90,23 @@ def _out(w: Wordlist, selected: int | None, domains: list[dict] | None = None) -
         "created_at": w.created_at,
         "updated_at": w.updated_at,
         "created_by": w.created_by,
-        "in_use": w.id == selected,
+        "in_use": w.id in selected,
         "domains": domains or [],
     }
+
+
+def _import_payload(w: Wordlist, selected: list[int], domains: list[dict] | None, result: ParseResult,
+                    **extra) -> dict:
+    """Upload / import / re-import response; warns when a paths list exceeds discovery's probe ceiling."""
+    out = {
+        "wordlist": _out(w, selected, domains),
+        "summary": result.summary(),
+        **extra,
+    }
+    warning = discovery_truncation_warning(w.kind, result.accepted)
+    if warning:
+        out["warning"] = warning
+    return out
 
 
 def _http(exc: WordlistError) -> HTTPException:
@@ -153,14 +168,16 @@ def _create(db: Session, user: User, *, name: str, kind: str, source: str, stora
 
 @router.get("")
 def list_wordlists(db: Session = Depends(get_db), user: User = Depends(require_admin)):
-    selected = _selected_id(db)
+    cfg = get_section(db, WebCaptureSettings)
     rows = db.scalars(select(Wordlist).order_by(func.lower(Wordlist.name))).all()
     users = _domain_users(db, [w.id for w in rows])
+    limits = Limits.from_settings().as_dict()
+    limits["max_discovery_paths"] = MAX_DISCOVERY_PATHS
     return {
-        "items": [_out(w, selected, users.get(w.id)) for w in rows],
-        "builtin": {"name": "Built-in", "kind": KIND_PATHS, "source": SOURCE_BUILTIN,
-                    "entries": len(APP_PATHS), "in_use": not selected},
-        "limits": Limits.from_settings().as_dict(),
+        "items": [_out(w, cfg.discovery_wordlist_ids, users.get(w.id)) for w in rows],
+        "builtin": {"name": "Built-in", "kind": KIND_PATHS, "source": SOURCE_BUILTIN, "entries": len(APP_PATHS),
+                    "in_use": cfg.discovery_builtin or not cfg.discovery_wordlist_ids},
+        "limits": limits,
         "subdomain_discovery": True,  # subdomain lists feed Domain scans (wordlist brute force with dnsx)
     }
 
@@ -189,7 +206,7 @@ def upload_wordlist(
           {"id": w.id, "kind": kind, "file": filename, "sha256": result.sha256, **result.summary()},
           client_ip(request))
     db.commit()
-    return {"wordlist": _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id)), "summary": result.summary()}
+    return _import_payload(w, _selected_ids(db), _domain_users(db, [w.id]).get(w.id), result)
 
 
 def _fetch_into_store(db: Session, user: User, request: Request, url: str, kind: str, action: str,
@@ -224,7 +241,7 @@ def import_wordlist(body: ImportIn, request: Request, db: Session = Depends(get_
           {"id": w.id, "kind": kind, "url": redact_url(url)[:300], "sha256": result.sha256, **result.summary()},
           client_ip(request))
     db.commit()
-    return {"wordlist": _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id)), "summary": result.summary()}
+    return _import_payload(w, _selected_ids(db), _domain_users(db, [w.id]).get(w.id), result)
 
 
 @router.post("/{wordlist_id}/reimport")
@@ -244,12 +261,10 @@ def reimport_wordlist(wordlist_id: int, request: Request, db: Session = Depends(
            "sha256": result.sha256, "changed": old_sha != result.sha256}, client_ip(request))
     db.commit()
     remove_stored(old_storage)
-    return {
-        "wordlist": _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id)),
-        "summary": result.summary(),
-        "previous_entries": previous,
-        "changed": old_sha != result.sha256,
-    }
+    return _import_payload(
+        w, _selected_ids(db), _domain_users(db, [w.id]).get(w.id), result,
+        previous_entries=previous, changed=old_sha != result.sha256,
+    )
 
 
 @router.patch("/{wordlist_id}")
@@ -266,26 +281,28 @@ def rename_wordlist(wordlist_id: int, body: RenameIn, request: Request, db: Sess
     w.name, w.updated_at = name, utcnow()
     audit(db, user.username, "wordlist.rename", name, {"id": w.id, "from": old, "to": name}, client_ip(request))
     db.commit()
-    return _out(w, _selected_id(db), _domain_users(db, [w.id]).get(w.id))
+    return _out(w, _selected_ids(db), _domain_users(db, [w.id]).get(w.id))
 
 
 @router.delete("/{wordlist_id}", status_code=204)
 def delete_wordlist(wordlist_id: int, request: Request, force: bool = False, db: Session = Depends(get_db),
                     user: User = Depends(require_admin)):
-    """In use by Web capture: refused (409) unless ``force``, which reverts discovery to the built-in list.
+    """In use by Web capture: refused (409) unless ``force``, which drops it from the discovery selection
+    (falling back to the built-in list when nothing else is selected).
     In use by a domain (wordlist brute force): always refused (409, with the domains); never a silent fallback."""
     w = _get(db, wordlist_id)
     domains = _domain_users(db, [w.id]).get(w.id)
     if domains:
         return JSONResponse(status_code=409, content=error_body(409, in_use_message(domains), "wordlist_in_use",
                                                                 domains=domains))
-    in_use = _selected_id(db) == w.id
+    in_use = w.id in _selected_ids(db)
     if in_use and not force:
         raise HTTPException(409, "this wordlist is selected for Web capture discovery; "
-                                 "select another list first or delete with fallback to the built-in list")
+                                 "deselect it first or delete it anyway (the built-in list is used if nothing else is selected)")
     if in_use:
         cfg = get_section(db, WebCaptureSettings)
-        cfg.discovery_wordlist_id = None
+        cfg.discovery_wordlist_ids = [i for i in cfg.discovery_wordlist_ids if i != w.id]
+        cfg.discovery_builtin = cfg.discovery_builtin or not cfg.discovery_wordlist_ids
         put_section(db, cfg)
     storage = w.storage_name
     audit(db, user.username, "wordlist.delete", w.name,

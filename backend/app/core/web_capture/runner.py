@@ -271,7 +271,7 @@ def run_web_capture(capture_id: int, ctx: CaptureContext) -> str:
             capture_uuid = job_row.uuid
             mock = job_row.mock_mode
             internal = InternalHosts.load(db, excl)
-            discovery_app_paths = discovery_paths(db, cfg.discovery_wordlist_id)
+            discovery_app_paths = discovery_paths(db, cfg.discovery_wordlist_ids, cfg.discovery_builtin)
 
         _update(capture_id, endpoints_found=len(endpoint_data), stage="probing", progress=0.15)
 

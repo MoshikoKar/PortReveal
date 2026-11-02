@@ -138,13 +138,15 @@ Devices multi-select, or **Scans → Web captures**. On **Remote**, admins can
 **Recapture remotes** (RDP/VNC inventory only) and filter **With screenshot** vs
 **Open · no screenshot**.
 
-App-discovery paths come from the built-in list or a stored list chosen under
-**Settings → Web capture → Wordlists** (admin only, audited). Upload or import from an
-`https://` URL: `.txt`/`.lst`/`.list`/`.dic`, optionally `.gz`; UTF-8 text, one entry per
-line, `#` comments ignored. Invalid lines are skipped and reported. Limits default to
-10 MB / 50 MB uncompressed / 1,000,000 entries (`WORDLIST_*` in `.env`). URL imports
-refuse private, loopback, link-local and metadata addresses (re-checked on every
-redirect) and run only on an explicit click, never during scans.
+App-discovery paths come from one or more lists chosen under **Settings → Web capture**
+(built-in and/or stored *paths* lists, merged round-robin; admin only, audited). Path
+lists longer than the discovery ceiling (500) can still be imported; only the first 500
+entries are probe candidates. Upload or import from an `https://` URL:
+`.txt`/`.lst`/`.list`/`.dic`, optionally `.gz`; UTF-8 text, one entry per line, `#`
+comments ignored. Invalid lines are skipped and reported. Limits default to 10 MB /
+50 MB uncompressed / 1,000,000 entries (`WORDLIST_*` in `.env`). URL imports refuse
+private, loopback, link-local and metadata addresses (re-checked on every redirect) and
+run only on an explicit click, never during scans.
 
 | Target | Tool on `PATH` | Install |
 |---|---|---|

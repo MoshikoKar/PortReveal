@@ -510,8 +510,9 @@ export interface WebCaptureSettings {
   max_screenshots_per_job: number;
   max_candidate_probes: number;
   max_discovery_paths: number;
-  /** Stored "paths" wordlist; null = built-in list. */
-  discovery_wordlist_id: number | null;
+  /** Discovery wordlists, merged round-robin: the built-in list (when true) and stored "paths" lists. */
+  discovery_builtin: boolean;
+  discovery_wordlist_ids: number[];
   max_response_bytes: number;
   max_job_minutes: number;
   http_timeout_seconds: number;
@@ -550,6 +551,8 @@ export interface WordlistLimits {
   max_entries: number;
   allow_http: boolean;
   extensions: string[];
+  /** Web capture app discovery uses at most this many paths from selected lists (server ceiling). */
+  max_discovery_paths?: number;
 }
 
 export interface WordlistLibrary {
@@ -573,6 +576,8 @@ export interface WordlistImportResult {
   /** Re-import only. */
   previous_entries?: number;
   changed?: boolean;
+  /** Paths lists longer than max_discovery_paths: only the first N are tried by app discovery. */
+  warning?: string;
 }
 
 /** Gateway whose ARP table (read over SNMP) supplies MACs across a routed / VPN path. Secrets are write-only. */

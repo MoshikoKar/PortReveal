@@ -1,5 +1,5 @@
 // Wordlist library UI rules: client-side prechecks (the server re-validates everything) and status text.
-import type { Wordlist, WordlistImportResult, WordlistImportSummary, WordlistLibrary, WordlistLimits } from './types';
+import type { Wordlist, WordlistImportResult, WordlistImportSummary, WordlistKind, WordlistLibrary, WordlistLimits } from './types';
 
 export const NAME_MAX = 64;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,63}$/;
@@ -82,7 +82,15 @@ export function doneState(verb: 'Uploaded' | 'Imported' | 'Re-imported', r: Word
       ? ' Source unchanged.'
       : ` Entries ${r.previous_entries.toLocaleString('en-US')} → ${r.wordlist.entries.toLocaleString('en-US')} (${delta >= 0 ? '+' : ''}${delta.toLocaleString('en-US')}).`;
   }
+  if (r.warning) text += ` ${r.warning}`;
   return { status: 'done', text, samples: r.summary.samples, reasons: skipReasons(r.summary) };
+}
+
+/** Client-side note when a paths list exceeds the discovery probe ceiling (server also returns `warning`). */
+export function discoveryTruncationNote(kind: WordlistKind, entries: number, maxDiscoveryPaths?: number): string | null {
+  const cap = maxDiscoveryPaths ?? 500;
+  if (kind !== 'paths' || entries <= cap) return null;
+  return `Only the first ${cap.toLocaleString('en-US')} paths are used for Web capture app discovery (${entries.toLocaleString('en-US')} in this list).`;
 }
 
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -91,18 +99,21 @@ export function errorState(e: unknown): ImportState {
   return { status: 'error', text: errorText(e) };
 }
 
-/** Options for the "Discovery wordlist" select: built-in first, then stored paths lists. */
-export function discoveryOptions(lib: WordlistLibrary | null): { value: string; label: string }[] {
-  const builtin = { value: '', label: `Built-in (${lib?.builtin.entries ?? '…'} paths)` };
+/** Choices for "Discovery wordlists": built-in (id null) first, then stored paths lists. */
+export function discoveryOptions(lib: WordlistLibrary | null): { id: number | null; label: string }[] {
+  const builtin = { id: null, label: `Built-in (${lib?.builtin.entries ?? '…'} paths)` };
   const lists = (lib?.items ?? []).filter((w) => w.kind === 'paths')
-    .map((w) => ({ value: String(w.id), label: `${w.name} (${w.entries.toLocaleString('en-US')} paths)` }));
+    .map((w) => ({ id: w.id, label: `${w.name} (${w.entries.toLocaleString('en-US')} paths)` }));
   return [builtin, ...lists];
 }
 
-/** The id to show/save: a selection that no longer exists (deleted elsewhere) falls back to built-in. */
-export function effectiveSelection(id: number | null, lib: WordlistLibrary | null): number | null {
-  if (id == null || !lib) return id;
-  return lib.items.some((w) => w.id === id && w.kind === 'paths') ? id : null;
+export type DiscoverySelection = { builtin: boolean; ids: number[] };
+
+/** The selection to show/save: lists that no longer exist (deleted elsewhere) are dropped, and with
+ *  nothing left the built-in list is used. */
+export function effectiveSelection(sel: DiscoverySelection, lib: WordlistLibrary | null): DiscoverySelection {
+  const ids = lib ? sel.ids.filter((id) => lib.items.some((w) => w.id === id && w.kind === 'paths')) : sel.ids;
+  return { builtin: sel.builtin || ids.length === 0, ids };
 }
 
 export type DomainRef = { id: number; name: string };
@@ -122,6 +133,6 @@ export function domainsFromError(e: unknown): DomainRef[] | null {
 
 export function deleteConfirmText(w: Pick<Wordlist, 'name' | 'in_use'>): string {
   return w.in_use
-    ? `“${w.name}” is selected as the Web capture discovery wordlist. Delete it and fall back to the built-in list?`
+    ? `“${w.name}” is selected as a Web capture discovery wordlist. Delete it? If no other list is selected, discovery will fall back to the built-in list.`
     : `Delete the wordlist “${w.name}”?`;
 }

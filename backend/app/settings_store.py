@@ -226,9 +226,12 @@ class WebCaptureSettings(BaseModel):
     max_screenshots_per_job: int = Field(64, ge=0, le=512)
     max_candidate_probes: int = Field(10, ge=1, le=30)
     # When "/" serves only an error or a web server's default page, try this many extra app paths.
-    max_discovery_paths: int = Field(12, ge=0, le=200)
-    # Stored "paths" wordlist (Settings > Web capture > Wordlists); None means the built-in list.
-    discovery_wordlist_id: int | None = Field(None, ge=1)
+    # Hard ceiling matches MAX_DISCOVERY_PATHS (Web capture inventory enrichment, not dirbusting).
+    max_discovery_paths: int = Field(12, ge=0, le=500)
+    # Discovery wordlists, merged round-robin: the built-in list (when on), then stored "paths" lists
+    # (Settings > Web capture > Wordlists). Nothing usable selected means the built-in list.
+    discovery_builtin: bool = True
+    discovery_wordlist_ids: list[int] = Field(default_factory=list, max_length=50)
     max_response_bytes: int = Field(512_000, ge=8_000, le=5_000_000)
     max_job_minutes: int = Field(30, ge=1, le=240)
     http_timeout_seconds: float = Field(8.0, ge=1.0, le=60.0)

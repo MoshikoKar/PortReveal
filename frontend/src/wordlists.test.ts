@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Wordlist, WordlistImportResult, WordlistLibrary, WordlistLimits } from './types';
 import {
-  acceptedExtensions, deleteConfirmText, discoveryOptions, domainsFromError, doneState, effectiveSelection, errorState,
-  fileError, formatBytes, inUseByDomainsText, nameError, shortSha, skipReasons, skipReasonsText, summaryText, urlError,
+  acceptedExtensions, deleteConfirmText, discoveryOptions, discoveryTruncationNote, domainsFromError, doneState,
+  effectiveSelection, errorState, fileError, formatBytes, inUseByDomainsText, nameError, shortSha, skipReasons,
+  skipReasonsText, summaryText, urlError,
 } from './wordlists';
 import { ApiError } from './api';
 
@@ -101,6 +102,18 @@ describe('import states and summaries', () => {
     expect(doneState('Imported', result()).status).toBe('done');
   });
 
+  it('appends the discovery truncation warning from the server', () => {
+    const warn = 'Only the first 500 paths are used for Web capture app discovery (1,200 in this list).';
+    const s = doneState('Uploaded', result({ warning: warn }));
+    expect(s.status === 'done' && s.text).toContain(warn);
+  });
+
+  it('builds the same truncation note client-side for paths lists over the cap', () => {
+    expect(discoveryTruncationNote('paths', 500)).toBeNull();
+    expect(discoveryTruncationNote('paths', 501)).toMatch(/first 500/);
+    expect(discoveryTruncationNote('subdomains', 5000)).toBeNull();
+  });
+
   it('re-import shows the entry-count change, or that the source is unchanged', () => {
     const grown = doneState('Re-imported', result({ wordlist: wordlist({ entries: 1250 }), previous_entries: 1200, changed: true }));
     expect(grown.status === 'done' && grown.text).toContain('Entries 1,200 → 1,250 (+50).');
@@ -123,18 +136,19 @@ describe('discovery select', () => {
 
   it('offers built-in first and only paths lists', () => {
     expect(discoveryOptions(lib)).toEqual([
-      { value: '', label: 'Built-in (80 paths)' },
-      { value: '1', label: 'Common paths (120 paths)' },
+      { id: null, label: 'Built-in (80 paths)' },
+      { id: 1, label: 'Common paths (120 paths)' },
     ]);
-    expect(discoveryOptions(null)).toEqual([{ value: '', label: 'Built-in (… paths)' }]);
+    expect(discoveryOptions(null)).toEqual([{ id: null, label: 'Built-in (… paths)' }]);
   });
 
-  it('falls back to built-in for a missing or non-paths selection', () => {
-    expect(effectiveSelection(1, lib)).toBe(1);
-    expect(effectiveSelection(2, lib)).toBeNull();
-    expect(effectiveSelection(99, lib)).toBeNull();
-    expect(effectiveSelection(null, lib)).toBeNull();
-    expect(effectiveSelection(5, null)).toBe(5); // library not loaded yet: keep the saved value
+  it('drops missing or non-paths lists and falls back to built-in when none are left', () => {
+    expect(effectiveSelection({ builtin: false, ids: [1] }, lib)).toEqual({ builtin: false, ids: [1] });
+    expect(effectiveSelection({ builtin: false, ids: [1, 2, 99] }, lib)).toEqual({ builtin: false, ids: [1] });
+    expect(effectiveSelection({ builtin: false, ids: [2, 99] }, lib)).toEqual({ builtin: true, ids: [] });
+    expect(effectiveSelection({ builtin: true, ids: [1] }, lib)).toEqual({ builtin: true, ids: [1] });
+    // library not loaded yet: keep the saved value
+    expect(effectiveSelection({ builtin: false, ids: [5] }, null)).toEqual({ builtin: false, ids: [5] });
   });
 });
 

@@ -555,8 +555,22 @@ def test_wordlist_missing_selection_falls_back_to_builtin(tmp_path, db):
     from app.core.web_capture.classify import APP_PATHS
 
     assert wordlist.load_wordlist(tmp_path / "no-such-file.txt") == ()
-    assert wordlist.discovery_paths(db, None) == APP_PATHS
-    assert wordlist.discovery_paths(db, 9999) == APP_PATHS
+    assert wordlist.discovery_paths(db, []) == APP_PATHS
+    assert wordlist.discovery_paths(db, [9999]) == APP_PATHS
+
+
+def test_wordlist_load_caps_at_discovery_ceiling(tmp_path):
+    from app.core.web_capture import wordlist
+
+    wordlist._cache.clear()
+    f = tmp_path / "big.txt"
+    f.write_text("\n".join(f"/p{i}" for i in range(wordlist.MAX_DISCOVERY_PATHS + 50)), encoding="utf-8")
+    out = wordlist.load_wordlist(f)
+    assert len(out) == wordlist.MAX_DISCOVERY_PATHS
+    assert out[0] == "/p0" and out[-1] == f"/p{wordlist.MAX_DISCOVERY_PATHS - 1}"
+    assert wordlist.discovery_truncation_warning("paths", 501)
+    assert wordlist.discovery_truncation_warning("paths", 500) is None
+    assert wordlist.discovery_truncation_warning("subdomains", 5000) is None
 
 
 def test_screenshot_served_inline(db, client):

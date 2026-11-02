@@ -204,8 +204,12 @@ export function WebCaptureForm({ onDirtyChange, wordlists = null }: {
   if (!f.form) return <Card title="Web capture"><ErrorBox error={f.error} /><Loading /></Card>;
   const s = f.form;
   const set = (patch: Partial<WebCaptureSettings>) => f.setForm({ ...s, ...patch });
-  // A list deleted since this form loaded shows (and saves) as the built-in list.
-  const wordlistId = effectiveSelection(s.discovery_wordlist_id, wordlists);
+  // Lists deleted since this form loaded are dropped; with none left it shows (and saves) the built-in list.
+  const sel = effectiveSelection({ builtin: s.discovery_builtin, ids: s.discovery_wordlist_ids }, wordlists);
+  const selCount = (sel.builtin ? 1 : 0) + sel.ids.length;
+  const toggleList = (id: number | null, on: boolean) => set(id == null
+    ? { discovery_builtin: on, discovery_wordlist_ids: sel.ids }
+    : { discovery_builtin: sel.builtin, discovery_wordlist_ids: on ? [...sel.ids, id] : sel.ids.filter((i) => i !== id) });
   return (
     <Card title="Web capture">
       <div className="stack">
@@ -230,7 +234,7 @@ export function WebCaptureForm({ onDirtyChange, wordlists = null }: {
           <Num label="Max addresses per job" value={s.max_addresses} min={1} max={4096} onChange={(v) => set({ max_addresses: v })} />
           <Num label="Max web endpoints per job" value={s.max_endpoints} min={1} max={1024} onChange={(v) => set({ max_endpoints: v })} />
           <Num label="Max pages per endpoint" value={s.max_pages_per_endpoint} min={1} max={10} onChange={(v) => set({ max_pages_per_endpoint: v })} />
-          <Num label="App-discovery paths" value={s.max_discovery_paths} min={0} max={200} onChange={(v) => set({ max_discovery_paths: v })} hint="When '/' is an error or a server's default page, try this many common app paths (0 = off)" />
+          <Num label="App-discovery paths" value={s.max_discovery_paths} min={0} max={500} onChange={(v) => set({ max_discovery_paths: v })} hint="When '/' is an error or a server's default page, try this many paths from the selected discovery wordlists (0 = off; max 500)" />
           <Num label="Max screenshots per job" value={s.max_screenshots_per_job} min={0} max={512} onChange={(v) => set({ max_screenshots_per_job: v })} />
           <Num label="Max HTTP response (bytes)" value={s.max_response_bytes} min={8000} max={5000000} onChange={(v) => set({ max_response_bytes: v })} />
           <Num label="Max job time (min)" value={s.max_job_minutes} min={1} max={240} onChange={(v) => set({ max_job_minutes: v })} />
@@ -238,14 +242,28 @@ export function WebCaptureForm({ onDirtyChange, wordlists = null }: {
           <Num label="Browser timeout (sec)" value={s.browser_timeout_seconds} min={3} max={120} onChange={(v) => set({ browser_timeout_seconds: v })} />
           <Num label="Page settle time (sec)" value={s.page_settle_seconds} min={0} max={60} onChange={(v) => set({ page_settle_seconds: v })} hint="Max wait after load for delayed redirects and slow rendering before the screenshot; still-blank pages are skipped" />
         </div>
-        <label className="field">Discovery wordlist
-          <select value={wordlistId ?? ''} onChange={(e) => set({ discovery_wordlist_id: e.target.value ? Number(e.target.value) : null })}>
-            {discoveryOptions(wordlists).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <span className="hint">Paths tried by app discovery. Manage lists under Wordlists below.</span>
-        </label>
+        <div className="field" role="group" aria-labelledby="discovery-wordlists-label">
+          <span id="discovery-wordlists-label">Discovery wordlists</span>
+          <div className="row wrap" style={{ gap: '0 16px' }}>
+            {discoveryOptions(wordlists).map((o) => {
+              const on = o.id == null ? sel.builtin : sel.ids.includes(o.id);
+              return (
+                <label key={o.id ?? 'builtin'} className="check">
+                  <input type="checkbox" checked={on} disabled={on && selCount === 1}
+                    onChange={(e) => toggleList(o.id, e.target.checked)} />
+                  {o.label}
+                </label>
+              );
+            })}
+          </div>
+          <span className="hint">
+            Paths tried by app discovery (max 500 per endpoint). Several lists are merged in turn (built-in first),
+            so each one contributes to the first App-discovery paths tried. Longer path lists are kept, but only
+            their first 500 entries are candidates. Manage lists under Wordlists below.
+          </span>
+        </div>
         <Msg msg={f.msg} />
-        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save({ ...s, discovery_wordlist_id: wordlistId })}>Save Web Capture settings</button></div>
+        <div><button className="btn primary" disabled={f.saving} onClick={() => f.save({ ...s, discovery_builtin: sel.builtin, discovery_wordlist_ids: sel.ids })}>Save Web Capture settings</button></div>
       </div>
     </Card>
   );

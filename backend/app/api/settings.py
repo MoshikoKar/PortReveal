@@ -116,16 +116,20 @@ def get_web_capture_settings(db: Session = Depends(get_db), user: User = Depends
 def put_web_capture_settings(
     body: WebCaptureSettings, request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)
 ):
-    selected = body.discovery_wordlist_id
-    if selected is not None:
-        w = db.get(Wordlist, selected)
-        if w is None or w.kind != KIND_PATHS:
-            raise HTTPException(422, "discovery_wordlist_id must reference a stored 'paths' wordlist")
-    previous = get_section(db, WebCaptureSettings).discovery_wordlist_id
+    body.discovery_wordlist_ids = list(dict.fromkeys(body.discovery_wordlist_ids))
+    lists = [db.get(Wordlist, i) for i in body.discovery_wordlist_ids]
+    if any(w is None or w.kind != KIND_PATHS for w in lists):
+        raise HTTPException(422, "discovery_wordlist_ids must reference stored 'paths' wordlists")
+    if not body.discovery_builtin and not lists:
+        raise HTTPException(422, "select at least one discovery wordlist")
+    prev = get_section(db, WebCaptureSettings)
+    previous = {"builtin": prev.discovery_builtin, "ids": prev.discovery_wordlist_ids}
+    selected = {"builtin": body.discovery_builtin, "ids": body.discovery_wordlist_ids}
     put_section(db, body)
     if selected != previous:
-        audit(db, user.username, "wordlist.select", w.name if selected is not None else "Built-in",
-              {"setting": "discovery_wordlist_id", "from": previous, "to": selected}, _ip(request))
+        names = (["Built-in"] if body.discovery_builtin else []) + [w.name for w in lists]
+        audit(db, user.username, "wordlist.select", ", ".join(names)[:255],
+              {"setting": "discovery_wordlists", "from": previous, "to": selected}, _ip(request))
     audit(db, user.username, "settings.web_capture", None, body.model_dump(), _ip(request))
     db.commit()
     return body.model_dump()
