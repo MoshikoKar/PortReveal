@@ -298,6 +298,20 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
     });
   };
 
+  const runBaseline = async (n: Network) => {
+    if (pending(`net-${n.id}`)) return;
+    setActionError(null);
+    await track(`net-${n.id}`, async () => {
+      try {
+        await post('/scans', { scan_type: 'standard', network_ids: [n.id] });
+      } catch (e: any) {
+        setActionError(`Could not start the baseline scan of "${n.name}": ${e.message}`);
+        return;
+      }
+      reload();
+    });
+  };
+
   return (
     <Card
       title="Network scopes"
@@ -358,6 +372,11 @@ export function NetworksSettings({ compact, onCount, onDirtyChange }: {
                         ) : (
                           <>
                             <button className="btn ghost sm" onClick={() => openDraft(draftOf(n))}>Edit</button>
+                            {!n.baseline_at && (
+                              <button className="btn sm" disabled={pending(`net-${n.id}`)}
+                                title="Run a standard scan of this network; when it completes, its result becomes the baseline"
+                                onClick={() => runBaseline(n)}>Run baseline</button>
+                            )}
                             {n.baseline_at && (
                               <button className="btn danger sm" disabled={pending(`net-${n.id}`)} title="Reset baseline" onClick={() => resetBaseline(n)}>Reset</button>
                             )}
