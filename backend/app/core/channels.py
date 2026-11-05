@@ -37,7 +37,7 @@ from ..models import (
 )
 from ..security import decrypt_secret
 from ..settings_store import NotificationSettings, get_section
-from .notify import SUBJECT_PREFIX, format_daily_digest, send_email
+from .notify import DIGEST_TITLES, SUBJECT_PREFIX, _network_names, format_daily_digest, send_email
 from .webhooks import HTTP_DEADLINE, USER_AGENT, _host, _http_post, _sign
 
 log = logging.getLogger(__name__)
@@ -375,6 +375,7 @@ def _route_event_ids(event_ids: list[int]) -> None:
                     {
                         "group_id": group.id,
                         "group_name": group.name,
+                        "delivery_mode": group.delivery_mode,
                         "event_ids": [e.id for e in matched],
                         "destinations": _dest_snaps(db, dests),
                         "cfg": cfg_snap,
@@ -400,6 +401,8 @@ def _cfg_snap(cfg: NotificationSettings) -> dict:
         "password_enc": cfg.password_enc,
         "sender": cfg.sender,
         "recipients": list(cfg.recipients),
+        "public_base_url": cfg.public_base_url,
+        "digest_sensitive_ports": list(cfg.digest_sensitive_ports),
     }
 
 
@@ -630,6 +633,7 @@ def flush_due_holds(*, hourly: bool = False) -> None:
                     {
                         "group_id": group.id,
                         "group_name": group.name,
+                        "delivery_mode": group.delivery_mode,
                         "event_ids": [e.id for e in events],
                         "hold_ids": hold_ids,
                         "destinations": dest_snaps,
@@ -688,10 +692,15 @@ def _deliver_job(job: dict) -> None:
         email_cards = [_event_card(ev) for ev in email_events]
         html_pack = None
         if any(d["kind"] == DEST_EMAIL for d in destinations) and email_events:
-            subject, plain, html_body = format_daily_digest(email_events)
-            n = len(email_events)
-            subject = f"{SUBJECT_PREFIX} {job['group_name']} — {n} event{'s' if n != 1 else ''}"
-            html_pack = (subject, plain, html_body)
+            cfg = job.get("cfg") or {}
+            html_pack = format_daily_digest(
+                email_events,
+                _network_names(db, email_events),
+                base_url=cfg.get("public_base_url") or "",
+                sensitive_ports=cfg.get("digest_sensitive_ports"),
+                title=DIGEST_TITLES.get(job.get("delivery_mode") or "", DIGEST_TITLES["daily"]),
+                group_name=job["group_name"],
+            )
     finally:
         db.close()
 
@@ -1023,10 +1032,8 @@ def _send_email_events(
     # SMTP timeout must finish inside the concurrent wait (HTTP_DEADLINE + 2).
     smtp_timeout = max(1.0, HTTP_DEADLINE - 0.5)
     if html_pack:
+        # Subject comes from the formatter so it matches the HTML header (group name is a subtitle).
         subject, plain, html_body = html_pack
-        # Prefer group name in subject; keep categorized HTML body.
-        n = len(payloads)
-        subject = f"{SUBJECT_PREFIX} {group_name} — {n} event{'s' if n != 1 else ''}"
         send_email(local, subject, plain, html_body, timeout=smtp_timeout, message_id=message_id)
         return
     n = len(payloads)

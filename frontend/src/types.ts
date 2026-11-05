@@ -715,6 +715,10 @@ export interface NotificationSettings {
   watchlist_email_enabled: boolean;
   /** Deliver cve_watch_match through configured webhooks. */
   watchlist_webhooks_enabled: boolean;
+  /** Public app URL used only for links in outbound email; empty = no links. */
+  public_base_url: string;
+  /** Ports listed first and highlighted in the digest Attention block. */
+  digest_sensitive_ports: number[];
 }
 
 export interface WebhookEndpoint {

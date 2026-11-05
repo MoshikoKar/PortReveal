@@ -25,7 +25,7 @@ No data leaves the host except through the integrations below.
 
 | Integration | Data sent | When |
 |---|---|---|
-| SMTP server (Settings → Notifications) | Daily digest: device labels, IPs, ports, services, change descriptions | Daily, when changes are pending; test emails on demand |
+| SMTP server (Settings → Notifications) | Daily digest: device labels, IPs, network names (multi-network installs), ports, services, change descriptions, and links to the public app URL when set | Daily, when changes are pending; test emails on demand |
 | LDAP / Active Directory (Settings → LDAP sign-in) | Username and password of the person signing in; group lookups | Each LDAP sign-in |
 | Scanned networks | nmap probes and HTTP/RTSP requests; OS detection (`-O`) sends one UDP probe to a closed port (U1 fingerprint) when privileged | Scans and web captures |
 | Local discovery (optional) | mDNS/SSDP multicast listen/query and NetBIOS unicast to already-known device IPs - stays on the LAN | After scans, when Settings → Local discovery is enabled |

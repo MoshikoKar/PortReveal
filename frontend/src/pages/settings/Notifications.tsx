@@ -174,8 +174,9 @@ function GeneralTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) 
 }
 
 // --- Email (SMTP only; recipients live on the Recipients tab) ----------------
-const SMTP_KEYS = ['smtp_host', 'smtp_port', 'security', 'username', 'sender'] as const;
+const SMTP_KEYS = ['smtp_host', 'smtp_port', 'security', 'username', 'sender', 'public_base_url'] as const;
 const smtpSnapshot = (n: NotificationSettings) => JSON.stringify(SMTP_KEYS.map((k) => n[k]));
+const parsePorts = (text: string) => text.split(/[\s,]+/).filter(Boolean).map(Number);
 
 function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const res = useApi<NotificationSettings>('/settings/notifications');
@@ -188,9 +189,17 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
 
-  useEffect(() => { if (res.data) setForm(res.data); }, [res.data]);
+  const [portsText, setPortsText] = useState('');
 
-  const formDirty = !!form && !!res.data && smtpSnapshot(form) !== smtpSnapshot(res.data);
+  useEffect(() => {
+    if (res.data) {
+      setForm(res.data);
+      setPortsText(res.data.digest_sensitive_ports.join(', '));
+    }
+  }, [res.data]);
+
+  const portsDirty = !!res.data && JSON.stringify(parsePorts(portsText)) !== JSON.stringify(res.data.digest_sensitive_ports);
+  const formDirty = !!form && !!res.data && (smtpSnapshot(form) !== smtpSnapshot(res.data) || portsDirty);
   const dirty = formDirty || password !== null;
   useReportDirty(dirty, onDirtyChange);
 
@@ -210,6 +219,8 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
         security: form.security,
         username: form.username,
         sender: form.sender,
+        public_base_url: form.public_base_url,
+        digest_sensitive_ports: parsePorts(portsText),
         ...(password !== null ? { password } : {}),
       });
       res.setData(out);
@@ -292,6 +303,18 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
           </Field>
         </div>
         <fieldset className="settings-group">
+          <legend>Digest content</legend>
+          <div className="form-grid">
+            <Field label="Public app URL" hint="Used only for Open Changes and “…and N more” links in email. Leave empty for no links.">
+              {(p) => <input {...p} type="url" value={form.public_base_url} placeholder="https://portreveal.example.com"
+                onChange={(e) => set({ public_base_url: e.target.value })} />}
+            </Field>
+            <Field label="Sensitive ports" hint="Listed first and shown under Attention when newly opened. Comma-separated.">
+              {(p) => <input {...p} type="text" value={portsText} onChange={(e) => setPortsText(e.target.value)} />}
+            </Field>
+          </div>
+        </fieldset>
+        <fieldset className="settings-group">
           <legend>Test with the values above (nothing is saved)</legend>
           <div className="row wrap">
             <input type="email" aria-label="Test recipient" placeholder="test recipient" value={testTo}
@@ -302,7 +325,7 @@ function EmailTab({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }) {
           </div>
           {testMsg && <div className={`alert ${testMsg.ok ? 'ok' : 'error'}`} role="status">{testMsg.text}</div>}
         </fieldset>
-        <SaveBar dirty={dirty} saving={saving} msg={msg} onRevert={() => { if (res.data) setForm(res.data); setPassword(null); }} />
+        <SaveBar dirty={dirty} saving={saving} msg={msg} onRevert={() => { if (res.data) { setForm(res.data); setPortsText(res.data.digest_sensitive_ports.join(', ')); } setPassword(null); }} />
       </SettingsForm>
     </Card>
   );

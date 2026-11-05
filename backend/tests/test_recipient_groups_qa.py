@@ -921,3 +921,35 @@ def test_stable_email_message_id_is_deterministic():
     b = _stable_email_message_id(3, [2, 10], "ops@example.com")
     assert a == b and a.startswith("<pr-") and a.endswith("@portreveal>")
     assert a != _stable_email_message_id(3, [10, 2], "other@example.com")
+
+
+def test_mixed_daily_group_email_skips_already_emailed_cve(db, monkeypatch):
+    """Email + Slack daily group: Slack still gets the CVE, but the email digest must not repeat it."""
+    from app.security import encrypt_secret
+
+    g = _group(
+        db, name="Mixed", delivery_mode=DELIVERY_DAILY, digest_time="00:00", event_types=[EV_CVE_WATCH_MATCH, "port_opened"]
+    )
+    db.add(RecipientDestination(group_id=g.id, kind=DEST_EMAIL, enabled=True, target="ops@example.com"))
+    db.add(
+        RecipientDestination(
+            group_id=g.id, kind=DEST_SLACK, enabled=True, url_enc=encrypt_secret("https://hooks.slack.example/x")
+        )
+    )
+    put_section(db, NotificationSettings(enabled=True, smtp_host="smtp.example.com", recipients=["ops@example.com"]))
+    cve = _event(db, event_type=EV_CVE_WATCH_MATCH, severity="high", message="CVE-2026-7 on 10.0.0.1")
+    port = _event(db, message="port opened")
+    db.commit()
+
+    deliver_channel_event_ids([cve.id, port.id])
+    # Immediate watchlist email already went out for the CVE.
+    cve.notified_at = cve.created_at
+    db.commit()
+
+    mails: list[str] = []
+    posts: list[dict] = []
+    monkeypatch.setattr(channels, "send_email", lambda cfg, subject, plain, html=None, **kw: mails.append(plain))
+    monkeypatch.setattr(channels, "_post_json", lambda url, payload, **kw: posts.append(payload))
+    flush_due_holds(hourly=False)
+    assert len(mails) == 1 and "CVE-2026-7" not in mails[0]
+    assert len(posts) == 1 and "CVE-2026-7" in json.dumps(posts[0])

@@ -104,13 +104,13 @@ def test_email_format_is_categorized_html(db):
              network_id=net.id)
     ev = events(db, s.id)[0]
     subject, plain, html_body = format_daily_digest([ev], {net.id: net.name})
-    assert "Daily summary" in subject and "1 change" in subject
+    assert "Daily summary" in subject and "1 port ·" in subject
     assert "Ports" in plain and "server01" in plain and "10.0.0.10" in plain
     assert "TCP/8080" in plain
     assert "Ports opened" in html_body and "server01" in html_body
     assert "MAC " not in html_body and "<thead>" not in html_body
     subject60, plain60, html60 = format_daily_digest([ev] * 60, {net.id: net.name})
-    assert "60 changes" in subject60 and "Ports (60)" in plain60
+    assert "60 ports" in subject60 and "Ports (60)" in plain60
     # Many identical port events on one host collapse to a single line in the mail.
     assert "…and" not in plain60 or "server01" in plain60
     assert "Ports opened" in html60

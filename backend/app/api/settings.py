@@ -428,6 +428,8 @@ class NotificationIn(BaseModel):
     webhooks_enabled: bool | None = None
     watchlist_email_enabled: bool | None = None
     watchlist_webhooks_enabled: bool | None = None
+    public_base_url: str | None = Field(None, max_length=255)
+    digest_sensitive_ports: list[int] | None = Field(None, max_length=50)
 
 
 def notifications_out(cfg: NotificationSettings) -> dict:
@@ -530,7 +532,7 @@ def test_notifications(body: TestEmailIn, request: Request, db: Session = Depend
         raise HTTPException(422, "SMTP host and at least one recipient are required to send a test")
     db.commit()  # end the read transaction: no DB connection is held during SMTP I/O
     try:
-        subject, plain, html_body = format_sample_digest()
+        subject, plain, html_body = format_sample_digest(cfg.public_base_url, cfg.digest_sensitive_ports)
         send_email(cfg, subject, plain + f"\nSent by: {user.username}\n", html_body)
     except Exception as exc:
         reason = smtp_failure_reason(exc)

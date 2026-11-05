@@ -114,6 +114,10 @@ class ScanSettings(BaseModel):
     raw_retention_days: int = Field(7, ge=1, le=90)
 
 
+# Ports listed first in the digest and highlighted in its Attention block (RDP, SMB, WinRM, VNC, …).
+DEFAULT_SENSITIVE_PORTS = [21, 22, 23, 135, 139, 445, 1433, 3306, 3389, 5432, 5900, 5985, 5986, 6379, 27017]
+
+
 class NotificationSettings(BaseModel):
     enabled: bool = False  # master switch for the daily email digest (and SMTP-backed channels)
     smtp_host: str = ""
@@ -140,6 +144,24 @@ class NotificationSettings(BaseModel):
     # CVE watchlist delivery channels (in-app events are always on).
     watchlist_email_enabled: bool = True  # immediate email (not waiting for the daily digest)
     watchlist_webhooks_enabled: bool = True
+    # Public app URL used only for links in outbound email (e.g. https://portreveal.example.com).
+    public_base_url: str = ""
+    digest_sensitive_ports: list[int] = Field(default_factory=lambda: list(DEFAULT_SENSITIVE_PORTS))
+
+    @field_validator("public_base_url")
+    @classmethod
+    def _base_url(cls, v: str) -> str:
+        v = v.strip().rstrip("/")
+        if v and not re.fullmatch(r"https?://[^\s/?#]+(/[^\s?#]*)?", v):
+            raise ValueError("public app URL must look like https://host[:port][/path]")
+        return v
+
+    @field_validator("digest_sensitive_ports")
+    @classmethod
+    def _sensitive_ports(cls, v: list[int]) -> list[int]:
+        if any(p < 1 or p > 65535 for p in v):
+            raise ValueError("sensitive ports must be between 1 and 65535")
+        return list(dict.fromkeys(v))
 
     @field_validator("digest_time")
     @classmethod
