@@ -140,6 +140,94 @@ def test_fetch_prefers_physical_table_then_falls_back_to_media():
     assert NET_TO_MEDIA_PHYS in walked
 
 
+def test_stale_physical_same_ip_media_is_never_revived():
+    """Rejecting a stale physical row must not revive the same IP from unaged media."""
+    uptime = 1_000_000
+    stale_last = uptime - int((ARP_MAX_AGE_S + 60) * 100)
+    sub = "4.1.4.10.9.0.5"
+    rows = [
+        (f"{NET_TO_PHYSICAL_PHYS}.{sub}", MAC_A),
+        (f"{NET_TO_PHYSICAL_TYPE}.{sub}", 3),
+        (f"{NET_TO_PHYSICAL_LAST}.{sub}", stale_last),
+        _media("10.9.0.5", MAC_B),
+        _media_type("10.9.0.5", 3),
+    ]
+    assert parse_arp_table_fresh(rows, sys_uptime=uptime) == {}
+
+
+def test_media_supplements_only_ips_absent_from_physical():
+    """Unique complementary media entries (no physical row for that IP) may be kept; shared IPs may not."""
+    uptime = 500_000
+    fresh_last = uptime - 1000
+    phys_sub = "4.1.4.10.9.0.5"
+    rows = [
+        (f"{NET_TO_PHYSICAL_PHYS}.{phys_sub}", MAC_A),
+        (f"{NET_TO_PHYSICAL_TYPE}.{phys_sub}", 3),
+        (f"{NET_TO_PHYSICAL_LAST}.{phys_sub}", fresh_last),
+        _media("10.9.0.5", MAC_PROXY),  # same IP as physical — must not override / revive
+        _media_type("10.9.0.5", 3),
+        _media("10.9.0.6", MAC_B),  # no physical row — complementary
+        _media_type("10.9.0.6", 3),
+    ]
+    assert parse_arp_table_fresh(rows, sys_uptime=uptime) == {
+        "10.9.0.5": "02:AA:00:00:00:01",
+        "10.9.0.6": "02:AA:00:00:00:02",
+    }
+
+
+def test_fetch_with_physical_rows_does_not_walk_media_even_when_all_stale():
+    """When physical PHYS is non-empty, media is never consulted — empty after age filter is intentional."""
+    uptime = 500_000
+    stale = uptime - int((ARP_MAX_AGE_S + 1) * 100)
+    sub = "4.1.4.10.9.0.5"
+    walked: list[str] = []
+
+    def walk(target, root, timeout):
+        walked.append(root)
+        if root == NET_TO_PHYSICAL_PHYS:
+            return [(f"{NET_TO_PHYSICAL_PHYS}.{sub}", MAC_A)]
+        if root == NET_TO_PHYSICAL_TYPE:
+            return [(f"{NET_TO_PHYSICAL_TYPE}.{sub}", 3)]
+        if root == NET_TO_PHYSICAL_LAST:
+            return [(f"{NET_TO_PHYSICAL_LAST}.{sub}", stale)]
+        if root == SYS_UPTIME_OID:
+            return [(SYS_UPTIME_OID, uptime)]
+        if root in (NET_TO_MEDIA_PHYS, NET_TO_MEDIA_TYPE):
+            raise AssertionError("media table must not be walked when physical PHYS is non-empty")
+        return []
+
+    assert fetch_arp_table(SnmpTarget("192.0.2.1", community="c"), walk=walk) == {}
+    assert NET_TO_MEDIA_PHYS not in walked
+
+
+def test_fetch_malformed_physical_rows_yield_empty():
+    """Unsupported / non-IPv4 physical indices and unusable MACs produce {} (no media mix-in)."""
+    walked: list[str] = []
+
+    def walk(target, root, timeout):
+        walked.append(root)
+        if root == NET_TO_PHYSICAL_PHYS:
+            return [
+                (f"{NET_TO_PHYSICAL_PHYS}.4.2.16." + ".".join(["0"] * 15 + ["1"]), MAC_A),  # IPv6
+                (f"{NET_TO_PHYSICAL_PHYS}.4.1.4.10.9.0.5", b"\x00" * 6),  # unset MAC
+            ]
+        if root in (NET_TO_PHYSICAL_TYPE, NET_TO_PHYSICAL_LAST, SYS_UPTIME_OID):
+            return []
+        if root in (NET_TO_MEDIA_PHYS, NET_TO_MEDIA_TYPE):
+            raise AssertionError("media must not be walked when physical PHYS returned rows")
+        return []
+
+    assert fetch_arp_table(SnmpTarget("192.0.2.1", community="c"), walk=walk) == {}
+    assert NET_TO_MEDIA_PHYS not in walked
+
+
+def test_fetch_empty_walks_yield_empty():
+    def walk(target, root, timeout):
+        return []
+
+    assert fetch_arp_table(SnmpTarget("192.0.2.1", community="c"), walk=walk) == {}
+
+
 # --- enrichment --------------------------------------------------------------------------------
 
 def _fake_walk(rows):

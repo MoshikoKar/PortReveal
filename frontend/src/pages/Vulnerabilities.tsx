@@ -19,6 +19,7 @@ import {
   toggleNetworkFilter, toggleVulnFilter, toggleVendorProductFilter, withPendingVulnSearchQ,
   vulnExportFilename, VULN_FILTER_KEYS, type VulnFilterKey, type VulnFilters,
 } from '../vulnFilters';
+import { isVulnSummaryReady, nextLoadedSummaryKey } from '../vulnSummaryReady';
 
 /** Merge optimistic filters into the current URL (keeps page/sort until applySp drops page). */
 function spWithFilters(base: URLSearchParams, filters: VulnFilters): URLSearchParams {
@@ -168,15 +169,19 @@ export default function Vulnerabilities() {
   // with an all-networks (or network-A) summary.
   // Stamp the key only when a fetch completes (loading true→false). Never stamp on
   // wantedSummaryKey alone: that raced ahead of useApi's setLoading(true) and briefly
-  // marked stale all-networks data as ready for the new filter.
+  // marked stale all-networks data as ready for the new filter. Omitting wantedSummaryKey
+  // from deps is intentional (see vulnSummaryReady.ts + tests).
   const [loadedSummaryKey, setLoadedSummaryKey] = useState<string | null>(null);
   useEffect(() => {
-    if (summaryLoading || !data) return;
-    setLoadedSummaryKey(wantedSummaryKey);
-    // wantedSummaryKey is read when loading finishes; do not re-stamp when only the key changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
+    setLoadedSummaryKey((prev) => nextLoadedSummaryKey({
+      loading: summaryLoading,
+      data,
+      wantedKey: wantedSummaryKey,
+      prevLoadedKey: prev,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- wantedSummaryKey read on complete only
   }, [summaryLoading, data]);
-  const summaryReady = !!data && !summaryLoading && loadedSummaryKey === wantedSummaryKey;
+  const summaryReady = isVulnSummaryReady(data, summaryLoading, loadedSummaryKey, wantedSummaryKey);
 
   const networks = useApi<Network[]>('/networks');
   const [exporting, setExporting] = useState(false);

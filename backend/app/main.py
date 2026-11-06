@@ -92,6 +92,18 @@ def _stop_background_workers() -> None:
     manager.stop()
 
 
+def _become_background_leader() -> None:
+    """Start workers after acquiring the lock; roll back partial starts on failure so failover can retry."""
+    try:
+        _start_background_workers()
+    except Exception:
+        # Managers/scheduler/delivery start are individually idempotent, but a mid-list failure
+        # can leave some threads running. Stop everything before releasing the lock for retry.
+        log.exception("background worker startup failed; stopping any workers that did start")
+        _stop_background_workers()
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
@@ -126,9 +138,13 @@ async def lifespan(app: FastAPI):
     owns_background = s.background_jobs and acquire_background_leadership(get_engine())
     if s.background_jobs and not owns_background:
         log.info("background workers are owned by another process; this process serves HTTP only")
-        start_failover_watch(get_engine(), _start_background_workers)
+        start_failover_watch(
+            get_engine(),
+            _become_background_leader,
+            on_become_leader_failed=_stop_background_workers,
+        )
     if owns_background:
-        _start_background_workers()
+        _become_background_leader()
     stop_watcher = watcher_from_env()  # set by scripts/run.ps1 (Windows production)
     if stop_watcher:
         stop_watcher.start()

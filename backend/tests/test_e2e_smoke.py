@@ -1058,6 +1058,8 @@ def test_vulnerabilities_export_disabled_during_network_filter_transition(live_a
         assert held.wait(timeout=15), "filtered /vulns/summary was never requested after filter change"
 
         # Re-open if the popover closed on re-render; stale all-networks data must not enable Print.
+        # Payload-key binding: wantedSummaryKey already matches Lab Alpha in the URL, but
+        # loadedSummaryKey must not stamp until this held fetch completes (omit wanted-key-only).
         panel = _open_vuln_export_menu(page)
         print_btn = panel.get_by_role("button", name="Print or save as PDF")
         preview_btn = panel.get_by_role("button", name="Preview printable report")
@@ -1065,6 +1067,11 @@ def test_vulnerabilities_export_disabled_during_network_filter_transition(live_a
         expect(preview_btn).to_be_disabled()
         expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
         assert page.evaluate("() => window.__pr_print_calls") == 0
+        # Dwell while the matching response is still parked: a wanted-key-only stamp race would
+        # enable Print against the stale all-networks payload before release.
+        page.wait_for_timeout(750)
+        expect(print_btn).to_be_disabled()
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
 
         release.set()
         expect(print_btn).to_be_enabled(timeout=15_000)

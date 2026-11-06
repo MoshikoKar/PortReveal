@@ -6,6 +6,7 @@ server when one is available.
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -121,6 +122,68 @@ def test_failover_watch_acquires_lock_and_starts_workers(monkeypatch):
     assert leader.is_background_leader() is True
     leader.stop_failover_watch()
     leader.release_background_leadership()
+
+
+def test_failover_retries_after_on_become_leader_failure(monkeypatch):
+    """Transient startup failure must not leave a sole standby with a permanent vacant lock.
+
+    First acquire succeeds but the callback raises; lock is released and cleanup runs. A later
+    poll re-acquires and the callback succeeds without process restart.
+    """
+    engine = FakePgEngine(granted=[True, True])
+    _use_fake(monkeypatch, engine)
+    attempts = {"n": 0}
+    cleanups = {"n": 0}
+    started = threading.Event()
+
+    def on_become():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("transient worker startup failure")
+        started.set()
+
+    def on_failed():
+        cleanups["n"] += 1
+
+    leader.start_failover_watch(
+        engine, on_become, interval_s=0.05, on_become_leader_failed=on_failed
+    )
+    assert started.wait(timeout=3.0)
+    assert attempts["n"] == 2
+    assert cleanups["n"] == 1
+    assert leader.is_background_leader() is True
+    # Normal stop remains clean: watch exits, lock can be released.
+    leader.stop_failover_watch()
+    assert leader._failover_thread is None or not leader._failover_thread.is_alive()
+    leader.release_background_leadership()
+    assert leader.is_background_leader() is False
+
+
+def test_failover_stop_during_retry_after_failure_is_clean(monkeypatch):
+    """Stopping while waiting to retry after a failed become must not leave the lock held."""
+    engine = FakePgEngine(granted=[True])
+    _use_fake(monkeypatch, engine)
+    failed = threading.Event()
+
+    def on_become():
+        failed.set()
+        raise RuntimeError("always fails")
+
+    leader.start_failover_watch(engine, on_become, interval_s=0.5)
+    assert failed.wait(timeout=2.0)
+    # Give the loop time to release after the failure before we stop.
+    assert _wait_until(lambda: leader._held is None, timeout=1.0)
+    leader.stop_failover_watch()
+    assert leader.is_background_leader() is False
+
+
+def _wait_until(pred, *, timeout: float) -> bool:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return pred()
 
 
 def test_migration_lock_is_a_no_op_on_sqlite():

@@ -97,11 +97,15 @@ def start_failover_watch(
     on_become_leader: Callable[[], None],
     *,
     interval_s: float = FAILOVER_POLL_S,
+    on_become_leader_failed: Callable[[], None] | None = None,
 ) -> None:
     """Poll for the background lock on non-owner PostgreSQL processes; call ``on_become_leader`` once acquired.
 
-    No-op on SQLite (always owner) or when this process already holds the lock. Safe to call once
-    at lifespan start; ``stop_failover_watch`` must run on shutdown.
+    If ``on_become_leader`` raises, the lock is released and (optional) ``on_become_leader_failed``
+    runs so partial worker startup can be cleaned up; the loop keeps polling after ``interval_s``
+    instead of exiting forever (a sole standby must recover from a transient startup failure).
+    Success ends the watch thread (this process is now the leader). No-op on SQLite or when this
+    process already holds the lock. ``stop_failover_watch`` must run on shutdown.
     """
     global _failover_stop, _failover_thread
     stop_failover_watch()
@@ -113,15 +117,23 @@ def start_failover_watch(
     def _loop() -> None:
         while not stop.wait(interval_s):
             if _held is not None:
+                # Another path took leadership (should not happen on a standby); stop watching.
                 return
-            if acquire_background_leadership(engine):
-                log.info("background-worker lock acquired after failover poll; starting workers")
-                try:
-                    on_become_leader()
-                except Exception:
-                    log.exception("failover on_become_leader failed; releasing lock")
-                    release_background_leadership()
-                return
+            if not acquire_background_leadership(engine):
+                continue
+            log.info("background-worker lock acquired after failover poll; starting workers")
+            try:
+                on_become_leader()
+            except Exception:
+                log.exception("failover on_become_leader failed; releasing lock and retrying later")
+                if on_become_leader_failed is not None:
+                    try:
+                        on_become_leader_failed()
+                    except Exception:
+                        log.exception("failover on_become_leader_failed cleanup raised")
+                release_background_leadership()
+                continue
+            return  # workers started; this process is the leader
 
     _failover_thread = threading.Thread(target=_loop, name="background-leader-failover", daemon=True)
     _failover_thread.start()
