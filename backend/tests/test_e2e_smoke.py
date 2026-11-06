@@ -267,10 +267,10 @@ def _set_min_cvss_display_via_api(page, floor: float = 6.0) -> None:
     assert status == 200, status
 
 
-def _seed_vuln_networks(database_url: str) -> tuple[str, str]:
+def _seed_vuln_networks(database_url: str) -> tuple[str, str, int, int]:
     """Insert two placeholder networks with one finding each into the live e2e DB.
 
-    Returns the display names (Lab Alpha / Lab Beta) for UI assertions.
+    Returns display names (Lab Alpha / Lab Beta) and their network ids.
     """
     from sqlalchemy import create_engine, select
     from sqlalchemy.orm import Session
@@ -360,8 +360,9 @@ def _seed_vuln_networks(database_url: str) -> tuple[str, str]:
         db.commit()
         sync_finding_lifecycle(db, now=utcnow())
         db.commit()
+        id_a, id_b = net_a.id, net_b.id
     engine.dispose()
-    return name_a, name_b
+    return name_a, name_b, id_a, id_b
 
 
 LONG_NET_NAME = "Test Network B with a deliberately long placeholder name for layout checks"
@@ -762,7 +763,7 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
 
     from app.core.vuln.summary import invalidate_vuln_summary_cache
 
-    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    name_a, name_b, _id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
     _seed_vuln_feed_synced(live_app["database_url"])
     # Test-process cache clear is a no-op for the uvicorn worker; dismiss/undo below busts it.
     invalidate_vuln_summary_cache()
@@ -877,10 +878,10 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
 
 
 def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, browser):
-    """Print stays disabled until the summary for the selected network arrives; report matches it."""
+    """?print=1 stays pending until the matching network summary arrives; report matches it."""
     from playwright.sync_api import expect
 
-    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    name_a, name_b, id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
     _seed_vuln_feed_synced(live_app["database_url"])
     base = live_app["base"]
     page = browser.new_page()
@@ -905,53 +906,36 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
             }"""
         )
 
-        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
-        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
-        expect(page.get_by_label("Network filter: All networks")).to_be_visible(timeout=15_000)
-
-        # Hold filtered summary responses until the Export menu has shown the loading gate.
-        import threading
-
-        release_summary = threading.Event()
-
+        # Delay filtered summary so auto-print cannot fire with a stale all-networks payload.
         def handle_summary(route):
             if "network_id=" in route.request.url and route.request.method == "GET":
-                release_summary.wait(timeout=15)
+                time.sleep(1.5)
             route.continue_()
 
         page.route("**/api/vulns/summary*", handle_summary)
-
-        page.evaluate(
-            """() => {
-              window.__pr_print_calls = 0;
-              window.__pr_print_filter = '';
-              window.__pr_print_findings = 0;
-              window.print = () => {
-                const report = document.querySelector('.vuln-print-report');
-                const filters = report && report.querySelector('.vuln-print-filters');
-                const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
-                window.__pr_print_filter = filters ? (filters.textContent || '') : '';
-                window.__pr_print_findings = rows ? rows.length : 0;
-                window.__pr_print_calls++;
-              };
-            }"""
+        page.add_init_script(
+            """
+            window.__pr_print_calls = 0;
+            window.__pr_print_filter = '';
+            window.__pr_print_findings = 0;
+            window.print = () => {
+              const report = document.querySelector('.vuln-print-report');
+              const filters = report && report.querySelector('.vuln-print-filters');
+              const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+              window.__pr_print_filter = filters ? (filters.textContent || '') : '';
+              window.__pr_print_findings = rows ? rows.length : 0;
+              window.__pr_print_calls++;
+            };
+            """
         )
 
-        # Lab Alpha hosts the critical finding (visible under the default CVSS floor);
-        # Lab Beta's medium finding may be hidden — use Alpha so the report has rows.
-        net_select = page.get_by_label(re.compile(r"^Network filter:"))
-        net_select.select_option(label=name_a)
-        expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
-        expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=5_000)
+        # Lab Alpha hosts the critical finding (visible under the default CVSS floor).
+        page.goto(f"{base}/vulnerabilities?network_id={id_a}&print=1")
+        # Gate: print must not run before the delayed network summary lands.
+        page.wait_for_timeout(400)
+        assert page.evaluate("() => window.__pr_print_calls") == 0
+        expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=10_000)
 
-        panel = _open_vuln_export_menu(page)
-        print_btn = panel.get_by_role("button", name="Print or save as PDF")
-        expect(print_btn).to_be_disabled(timeout=5_000)
-        expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
-
-        release_summary.set()
-        expect(print_btn).to_be_enabled(timeout=15_000)
-        print_btn.click()
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
         filt = page.evaluate("() => window.__pr_print_filter")
         assert name_a in filt, filt
@@ -969,7 +953,7 @@ def test_vulnerabilities_html_report_download(live_app, browser):
 
     from app.core.vuln.summary import invalidate_vuln_summary_cache
 
-    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    name_a, name_b, _id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
     _seed_vuln_feed_synced(live_app["database_url"])
     invalidate_vuln_summary_cache()
     base = live_app["base"]

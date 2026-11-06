@@ -166,14 +166,16 @@ export default function Vulnerabilities() {
   // useApi keeps the previous payload while a new filter fetch is in flight — track which
   // filter key the current `data` actually belongs to so print cannot pair network-B findings
   // with an all-networks (or network-A) summary.
+  // Stamp the key only when a fetch completes (loading true→false). Never stamp on
+  // wantedSummaryKey alone: that raced ahead of useApi's setLoading(true) and briefly
+  // marked stale all-networks data as ready for the new filter.
   const [loadedSummaryKey, setLoadedSummaryKey] = useState<string | null>(null);
   useEffect(() => {
-    if (summaryLoading) {
-      setLoadedSummaryKey(null);
-      return;
-    }
-    if (data) setLoadedSummaryKey(wantedSummaryKey);
-  }, [summaryLoading, data, wantedSummaryKey]);
+    if (summaryLoading || !data) return;
+    setLoadedSummaryKey(wantedSummaryKey);
+    // wantedSummaryKey is read when loading finishes; do not re-stamp when only the key changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
+  }, [summaryLoading, data]);
   const summaryReady = !!data && !summaryLoading && loadedSummaryKey === wantedSummaryKey;
 
   const networks = useApi<Network[]>('/networks');
