@@ -167,13 +167,18 @@ def _open_vuln_breakdowns(page) -> None:
 
 
 def _open_vuln_export_menu(page):
-    """Open the Export & print popover; returns the panel group locator."""
+    """Open the Export & print popover; returns the panel group locator.
+
+    The trigger is a ``<summary class="btn">`` (Popover), which Playwright does not
+    always expose as role=button — click the summary by text instead.
+    """
     from playwright.sync_api import expect
 
-    trigger = page.get_by_role("button", name=re.compile(r"^(Export & print|Preparing report…)$"))
     panel = page.get_by_role("group", name="Export and print")
     if not panel.is_visible():
-        trigger.click()
+        page.locator(".page-head details.dash-popover > summary").filter(
+            has_text=re.compile(r"Export & print|Preparing report")
+        ).click()
     expect(panel).to_be_visible(timeout=5_000)
     return panel
 
