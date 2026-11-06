@@ -47,13 +47,14 @@ from .api.errors import error_body, validation_message
 from .config import check_production_config, get_settings
 from .core.domains.manager import domain_scan_manager
 from .core.domains.tools import tool_status
+from .core.leader import acquire_background_leadership, release_background_leadership
 from .core.manager import manager
 from .core.query import QueryError
 from .core.scheduler import scheduler
 from .core.vuln.manager import vuln_job_manager
 from .core.web_capture import web_capture_manager
 from .core.webhooks import start_delivery_worker, stop_delivery_worker
-from .db import init_engine
+from .db import get_engine, init_engine
 from .logging_setup import setup_logging
 from .migrate import upgrade
 from .netutils import TargetError
@@ -95,7 +96,11 @@ async def lifespan(app: FastAPI):
         log.warning("%s not found - Domain scan passive/wordlist steps are disabled until installed "
                     "(npm run setup:capture-tools on Windows, npm run setup on Linux)", "/".join(missing))
     seed_dev()
-    if s.background_jobs:
+    # One process per deployment owns the background threads; other uvicorn workers serve HTTP only.
+    owns_background = s.background_jobs and acquire_background_leadership(get_engine())
+    if s.background_jobs and not owns_background:
+        log.info("background workers are owned by another process; this process serves HTTP only")
+    if owns_background:
         manager.start()
         web_capture_manager.start()
         vuln_job_manager.start()
@@ -108,12 +113,14 @@ async def lifespan(app: FastAPI):
     yield
     if stop_watcher:
         stop_watcher.stop()
-    stop_delivery_worker()
-    scheduler.stop()
-    web_capture_manager.stop()
-    vuln_job_manager.stop()
-    domain_scan_manager.stop()
-    manager.stop()
+    if owns_background:
+        stop_delivery_worker()
+        scheduler.stop()
+        web_capture_manager.stop()
+        vuln_job_manager.stop()
+        domain_scan_manager.stop()
+        manager.stop()
+    release_background_leadership()
     log.info("PortReveal stopped")
 
 

@@ -11,6 +11,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine
 
 from .config import get_settings
+from .core.leader import migration_lock
 
 log = logging.getLogger(__name__)
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -45,14 +46,15 @@ def upgrade(url: str | None = None) -> None:
     if url.startswith("sqlite:///"):
         Path(url.replace("sqlite:///", "", 1)).parent.mkdir(parents=True, exist_ok=True)
     cfg = alembic_config(url)
-    before = _current_revision(url)
-    log.info("running alembic upgrade head (%s)", kind)
-    try:
-        command.upgrade(cfg, "head")
-    except Exception:
-        log.exception("alembic upgrade failed (%s)", kind)
-        raise
-    after = _current_revision(url)
+    with migration_lock(url):
+        before = _current_revision(url)
+        log.info("running alembic upgrade head (%s)", kind)
+        try:
+            command.upgrade(cfg, "head")
+        except Exception:
+            log.exception("alembic upgrade failed (%s)", kind)
+            raise
+        after = _current_revision(url)
     head = _head_revision(cfg)
     if before == after:
         log.info("database schema is up to date (%s, revision %s)", kind, after or "empty")
