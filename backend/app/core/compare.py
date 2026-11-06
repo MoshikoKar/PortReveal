@@ -331,8 +331,10 @@ class _Applier:
                 self.db.add(dev)
             else:
                 label = device_label(dev)
+                via = self.match_reasons.get(h.ip)
+                if via:
+                    dev.identity_match, dev.identity_matched_at = via, now
                 if dev.current_ip != h.ip:
-                    via = self.match_reasons.get(h.ip)
                     suffix = f" (matched by {via})" if via else ""
                     self.emit(dev, EV_IP_CHANGED, mode, f"{label} changed IP address {dev.current_ip} -> {h.ip}{suffix}",
                               ip=h.ip, old=dev.current_ip, new=h.ip)

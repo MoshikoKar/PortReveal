@@ -396,6 +396,9 @@ class Device(Base):
     current_ip: Mapped[str] = mapped_column(String(45), index=True)
     mac: Mapped[str | None] = mapped_column(String(17), index=True)
     mac_source: Mapped[str | None] = mapped_column(String(20))  # arp | snmp | netbios (None: pre-0026 rows)
+    # Evidence of the last identity match that kept this device across an address change: mac | ip | hostname.
+    identity_match: Mapped[str | None] = mapped_column(String(16))
+    identity_matched_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     vendor: Mapped[str | None] = mapped_column(String(200))
     hostname: Mapped[str | None] = mapped_column(String(255), index=True)
     dns_name: Mapped[str | None] = mapped_column(String(255))
