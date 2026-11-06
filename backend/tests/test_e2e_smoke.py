@@ -13,9 +13,10 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,63 @@ def _bust_vuln_summary_cache(page) -> None:
         }"""
     )
     assert status == 200, status
+
+
+def _hold_filtered_vuln_summary(page) -> tuple[threading.Event, threading.Event, Callable[[], None]]:
+    """Park GET /api/vulns/summary?*network_id=* until ``release`` is set.
+
+    Continues the route from a worker thread so the Playwright sync protocol is not blocked
+    (a wait inside the route callback deadlocks later expects). Returns ``(release, held, cleanup)``:
+    ``held`` is set when at least one matching request is parked; ``cleanup`` always releases and
+    unroutes.
+    """
+    release = threading.Event()
+    held = threading.Event()
+
+    def handle(route) -> None:
+        req = route.request
+        if req.method == "GET" and "network_id=" in req.url:
+            def continue_when_released(r=route) -> None:
+                held.set()
+                release.wait(timeout=30)
+                r.continue_()
+
+            threading.Thread(target=continue_when_released, daemon=True).start()
+            return
+        route.continue_()
+
+    page.route("**/api/vulns/summary*", handle)
+
+    def cleanup() -> None:
+        release.set()
+        try:
+            page.unroute("**/api/vulns/summary*")
+        except Exception:
+            pass
+
+    return release, held, cleanup
+
+
+def _install_vuln_print_capture(page) -> None:
+    """Mock window.print and record filter text + finding row count from the print report."""
+    page.evaluate(
+        """() => {
+          window.__pr_print_calls = 0;
+          window.__pr_print_filter = '';
+          window.__pr_print_findings = 0;
+          window.__pr_print_had_summary = false;
+          window.print = () => {
+            const report = document.querySelector('.vuln-print-report');
+            const filters = report && report.querySelector('.vuln-print-filters');
+            const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
+            const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+            window.__pr_print_filter = filters ? (filters.textContent || '') : '';
+            window.__pr_print_findings = rows ? rows.length : 0;
+            window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
+            window.__pr_print_calls++;
+          };
+        }"""
+    )
 
 
 def _seed_below_floor_finding(database_url: str, cve_id: str = "CVE-2024-99901") -> None:
@@ -878,7 +936,7 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
 
 
 def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, browser):
-    """?print=1 stays pending until the matching network summary arrives; report matches it."""
+    """Cold-start ?print=1 stays pending until the matching network summary arrives; report matches it."""
     from playwright.sync_api import expect
 
     name_a, name_b, id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
@@ -887,6 +945,7 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
     page = browser.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
+    release = held = cleanup = None
     try:
         _sign_in(page, base)
 
@@ -906,24 +965,21 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
             }"""
         )
 
-        # Delay filtered summary so auto-print cannot fire with a stale all-networks payload.
-        def handle_summary(route):
-            if "network_id=" in route.request.url and route.request.method == "GET":
-                time.sleep(1.5)
-            route.continue_()
-
-        page.route("**/api/vulns/summary*", handle_summary)
+        release, held, cleanup = _hold_filtered_vuln_summary(page)
         page.add_init_script(
             """
             window.__pr_print_calls = 0;
             window.__pr_print_filter = '';
             window.__pr_print_findings = 0;
+            window.__pr_print_had_summary = false;
             window.print = () => {
               const report = document.querySelector('.vuln-print-report');
               const filters = report && report.querySelector('.vuln-print-filters');
+              const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
               const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
               window.__pr_print_filter = filters ? (filters.textContent || '') : '';
               window.__pr_print_findings = rows ? rows.length : 0;
+              window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
               window.__pr_print_calls++;
             };
             """
@@ -931,18 +987,101 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
 
         # Lab Alpha hosts the critical finding (visible under the default CVSS floor).
         page.goto(f"{base}/vulnerabilities?network_id={id_a}&print=1")
-        # Gate: print must not run before the delayed network summary lands.
-        page.wait_for_timeout(400)
+        assert held.wait(timeout=15), "filtered /vulns/summary was never requested"
+        # Gate: while the matching summary is parked, auto-print must not have run.
         assert page.evaluate("() => window.__pr_print_calls") == 0
         expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=10_000)
 
+        release.set()
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
         filt = page.evaluate("() => window.__pr_print_filter")
         assert name_a in filt, filt
         assert name_b not in filt, filt
         assert page.evaluate("() => window.__pr_print_findings") >= 1
-        page.unroute("**/api/vulns/summary*")
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
     finally:
+        if cleanup is not None:
+            cleanup()
+        page.close()
+    assert errors == []
+
+
+def test_vulnerabilities_export_disabled_during_network_filter_transition(live_app, browser):
+    """In-page network filter change: Export/Print stay disabled + waiting note until the matching
+    summary arrives; a stale all-networks payload must not enable print for the new network."""
+    from playwright.sync_api import expect
+
+    name_a, name_b, _id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
+    _seed_vuln_feed_synced(live_app["database_url"])
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    release = held = cleanup = None
+    try:
+        _sign_in(page, base)
+        page.evaluate(
+            """async () => {
+              const list = await fetch('/api/vulns?cve_id=CVE-2024-ALPHA', { credentials: 'same-origin' })
+                .then((r) => r.json());
+              if (!list.items || !list.items.length) return;
+              const d = list.items[0];
+              const m = document.cookie.match(/(?:^|;\\s*)nf_csrf=([^;]+)/);
+              const csrf = m ? decodeURIComponent(m[1]) : '';
+              const hdr = { 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'POST', credentials: 'same-origin', headers: hdr, body: '{}' });
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'DELETE', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf } });
+            }"""
+        )
+
+        page.goto(f"{base}/vulnerabilities")
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_label("Network filter: All networks")).to_be_visible(timeout=15_000)
+        # All-networks summary must be ready so Print starts enabled (stale payload after transition).
+        panel = _open_vuln_export_menu(page)
+        print_btn = panel.get_by_role("button", name="Print or save as PDF")
+        preview_btn = panel.get_by_role("button", name="Preview printable report")
+        expect(print_btn).to_be_enabled(timeout=15_000)
+        expect(preview_btn).to_be_enabled()
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_have_count(0)
+
+        release, held, cleanup = _hold_filtered_vuln_summary(page)
+        _install_vuln_print_capture(page)
+
+        # Transition while the Export menu is open: select Lab Alpha; its summary is parked.
+        net_select = page.get_by_label(re.compile(r"^Network filter:"))
+        net_select.select_option(label=name_a)
+        expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
+        expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=5_000)
+        assert held.wait(timeout=15), "filtered /vulns/summary was never requested after filter change"
+
+        # Re-open if the popover closed on re-render; stale all-networks data must not enable Print.
+        panel = _open_vuln_export_menu(page)
+        print_btn = panel.get_by_role("button", name="Print or save as PDF")
+        preview_btn = panel.get_by_role("button", name="Preview printable report")
+        expect(print_btn).to_be_disabled(timeout=5_000)
+        expect(preview_btn).to_be_disabled()
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
+        assert page.evaluate("() => window.__pr_print_calls") == 0
+
+        release.set()
+        expect(print_btn).to_be_enabled(timeout=15_000)
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_have_count(0)
+        print_btn.click()
+        page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
+        filt = page.evaluate("() => window.__pr_print_filter")
+        assert name_a in filt, filt
+        assert name_b not in filt, filt
+        assert page.evaluate("() => window.__pr_print_findings") >= 1
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
+        report = page.locator(".vuln-print-report")
+        page.add_style_tag(content=".vuln-print-report { display: block !important; }")
+        expect(report.locator(".vuln-print-filters")).to_contain_text(f"network: {name_a}", timeout=10_000)
+    finally:
+        if cleanup is not None:
+            cleanup()
         page.close()
     assert errors == []
 
