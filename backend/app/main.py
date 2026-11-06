@@ -47,7 +47,13 @@ from .api.errors import error_body, validation_message
 from .config import check_production_config, get_settings
 from .core.domains.manager import domain_scan_manager
 from .core.domains.tools import tool_status
-from .core.leader import acquire_background_leadership, release_background_leadership
+from .core.leader import (
+    acquire_background_leadership,
+    is_background_leader,
+    release_background_leadership,
+    start_failover_watch,
+    stop_failover_watch,
+)
 from .core.manager import manager
 from .core.query import QueryError
 from .core.scheduler import scheduler
@@ -65,6 +71,37 @@ from .stopfile import watcher_from_env
 
 log = logging.getLogger("app")
 perf_log = logging.getLogger("app.perf")
+
+
+def _start_background_workers() -> None:
+    """Idempotent: each manager/scheduler ignores a second start."""
+    manager.start()
+    web_capture_manager.start()
+    vuln_job_manager.start()
+    domain_scan_manager.start()
+    scheduler.start()
+    start_delivery_worker()
+
+
+def _stop_background_workers() -> None:
+    stop_delivery_worker()
+    scheduler.stop()
+    web_capture_manager.stop()
+    vuln_job_manager.stop()
+    domain_scan_manager.stop()
+    manager.stop()
+
+
+def _become_background_leader() -> None:
+    """Start workers after acquiring the lock; roll back partial starts on failure so failover can retry."""
+    try:
+        _start_background_workers()
+    except Exception:
+        # Managers/scheduler/delivery start are individually idempotent, but a mid-list failure
+        # can leave some threads running. Stop everything before releasing the lock for retry.
+        log.exception("background worker startup failed; stopping any workers that did start")
+        _stop_background_workers()
+        raise
 
 
 @asynccontextmanager
@@ -97,29 +134,26 @@ async def lifespan(app: FastAPI):
                     "(npm run setup:capture-tools on Windows, npm run setup on Linux)", "/".join(missing))
     seed_dev()
     # One process per deployment owns the background threads; other uvicorn workers serve HTTP only.
+    # Non-owners poll the advisory lock so a dead owner fails over without a full process restart.
     owns_background = s.background_jobs and acquire_background_leadership(get_engine())
     if s.background_jobs and not owns_background:
         log.info("background workers are owned by another process; this process serves HTTP only")
+        start_failover_watch(
+            get_engine(),
+            _become_background_leader,
+            on_become_leader_failed=_stop_background_workers,
+        )
     if owns_background:
-        manager.start()
-        web_capture_manager.start()
-        vuln_job_manager.start()
-        domain_scan_manager.start()
-        scheduler.start()
-        start_delivery_worker()
+        _become_background_leader()
     stop_watcher = watcher_from_env()  # set by scripts/run.ps1 (Windows production)
     if stop_watcher:
         stop_watcher.start()
     yield
     if stop_watcher:
         stop_watcher.stop()
-    if owns_background:
-        stop_delivery_worker()
-        scheduler.stop()
-        web_capture_manager.stop()
-        vuln_job_manager.stop()
-        domain_scan_manager.stop()
-        manager.stop()
+    stop_failover_watch()
+    if is_background_leader():
+        _stop_background_workers()
     release_background_leadership()
     log.info("PortReveal stopped")
 

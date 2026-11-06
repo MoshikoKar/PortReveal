@@ -36,10 +36,16 @@ NET_TO_MEDIA_PHYS = "1.3.6.1.2.1.4.22.1.2"     # .<ifIndex>.<a.b.c.d> = MAC
 NET_TO_MEDIA_TYPE = "1.3.6.1.2.1.4.22.1.4"     # 2 = invalid
 NET_TO_PHYSICAL_PHYS = "1.3.6.1.2.1.4.35.1.4"  # .<ifIndex>.<addrType>.<len>.<addr...> = MAC
 NET_TO_PHYSICAL_TYPE = "1.3.6.1.2.1.4.35.1.6"  # 2 = invalid
+# RFC 4293: TimeStamp (TimeTicks) of last ARP refresh; compare with sysUpTime for age.
+NET_TO_PHYSICAL_LAST = "1.3.6.1.2.1.4.35.1.7"
+SYS_UPTIME_OID = "1.3.6.1.2.1.1.3.0"
 _INVALID = 2
 
 DEFAULT_TIMEOUT_S = 3.0
 MAX_ROWS = 50_000  # ceiling for one walk; far above any single router's ARP table
+# Skip physical-table entries older than this when LastUpdated is available (DHCP churn window).
+# Media-table-only agents have no age: those entries are still filled; matching treats snmp as weak.
+ARP_MAX_AGE_S = 600
 
 AUTH_PROTOCOLS = ("MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512")
 # AES192/AES256 = Blumenthal key extension (net-snmp); the "C" variants = Reeder (Cisco and others).
@@ -142,6 +148,66 @@ def parse_arp_table(rows: Iterable[tuple[str, object]]) -> dict[str, str]:
     return table
 
 
+def _age_seconds(sys_uptime: int | None, last_updated: object) -> float | None:
+    """Age of an ipNetToPhysical entry in seconds, or None when either stamp is missing."""
+    if sys_uptime is None or not isinstance(last_updated, int):
+        return None
+    # TimeTicks wrap at 2^32; unsigned difference handles wrap.
+    return ((sys_uptime - last_updated) & 0xFFFFFFFF) / 100.0
+
+
+def parse_arp_table_fresh(
+    rows: Iterable[tuple[str, object]],
+    *,
+    sys_uptime: int | None = None,
+    max_age_s: float = ARP_MAX_AGE_S,
+) -> dict[str, str]:
+    """Like parse_arp_table, but drops physical-table rows whose LastUpdated age exceeds max_age_s.
+
+    Precedence when both tables appear in ``rows``:
+    - Physical entries are authoritative. Age-stale physical rows are omitted.
+    - An IP that appears in the physical table (even when its row is dropped as stale or
+      unusable) is never filled from the media table afterward — reviving an unaged media
+      MAC after rejecting stale physical evidence would bypass freshness.
+    - Media may only supplement IPs with no physical row at all (no age column; matching
+      still treats snmp as weak). Losing a stale physical MAC (empty for that IP) is not a bug.
+    """
+    rows = list(rows)
+    table: dict[str, str] = {}
+    # Physical table first: apply age when both stamps exist; record every IP seen so media
+    # cannot revive contradictory/stale authoritative evidence.
+    invalid_phys = {_suffix(oid, NET_TO_PHYSICAL_TYPE) for oid, value in rows if value == _INVALID} - {()}
+    last_by_sub = {_suffix(oid, NET_TO_PHYSICAL_LAST): value
+                   for oid, value in rows if _suffix(oid, NET_TO_PHYSICAL_LAST)}
+    phys_ips_seen: set[str] = set()
+    for oid, value in rows:
+        sub = _suffix(oid, NET_TO_PHYSICAL_PHYS)
+        if not sub or sub in invalid_phys:
+            continue
+        ip = _physical_ip(sub)
+        if not ip:
+            continue
+        phys_ips_seen.add(ip)
+        mac = _usable_mac(value)
+        if not mac:
+            continue
+        age = _age_seconds(sys_uptime, last_by_sub.get(sub))
+        if age is not None and age > max_age_s:
+            continue
+        table[ip] = mac
+    # Media table: no age column — keep usable entries only for IPs absent from physical.
+    invalid_media = {_suffix(oid, NET_TO_MEDIA_TYPE) for oid, value in rows if value == _INVALID} - {()}
+    for oid, value in rows:
+        sub = _suffix(oid, NET_TO_MEDIA_PHYS)
+        if not sub or sub in invalid_media:
+            continue
+        ip, mac = _media_ip(sub), _usable_mac(value)
+        if not ip or not mac or ip in phys_ips_seen:
+            continue
+        table.setdefault(ip, mac)
+    return table
+
+
 def unique_macs(table: dict[str, str]) -> dict[str, str]:
     """Drop every MAC listed for more than one IP: it identifies a router/proxy, not a host."""
     counts = Counter(table.values())
@@ -220,14 +286,44 @@ def walk_subtree(target: SnmpTarget, root: str, timeout: float) -> list[tuple[st
     return asyncio.run(_walk(target, root, timeout))
 
 
+def _read_sys_uptime(target: SnmpTarget, walk: Walker, timeout: float) -> int | None:
+    """sysUpTime.0 as TimeTicks integer, or None when the agent does not answer."""
+    try:
+        rows = walk(target, SYS_UPTIME_OID, timeout)
+    except Exception:
+        return None
+    for oid, value in rows:
+        if oid == SYS_UPTIME_OID or oid.startswith(SYS_UPTIME_OID + "."):
+            return value if isinstance(value, int) else None
+    return None
+
+
 def fetch_arp_table(target: SnmpTarget, *, timeout: float = DEFAULT_TIMEOUT_S,
-                    walk: Walker | None = None) -> dict[str, str]:
-    """{ip: MAC} for every usable, single-IP entry in the gateway's ARP table. Raises on SNMP errors."""
+                    walk: Walker | None = None, max_age_s: float = ARP_MAX_AGE_S) -> dict[str, str]:
+    """{ip: MAC} for every usable, single-IP entry in the gateway's ARP table. Raises on SNMP errors.
+
+    Table precedence (intentional, conservative — do not "fix" empty results by mixing tables):
+    - When the physical PHYS walk returns any rows, ipNetToPhysicalTable alone is authoritative
+      for this poll. LastUpdated age drops stale DHCP leftovers. The media table is not walked
+      afterward: falling back to the same IP's unaged media row after rejecting its physical row
+      as stale would bypass freshness and reintroduce false identity. An empty result after
+      filtering all physical rows as stale is therefore not a bug (loss of a stale MAC).
+    - ipNetToMediaTable is used only when the physical PHYS walk is empty (classic-only agents).
+      Those entries have no age; matching still treats snmp MACs as weak.
+    - Walks that yield no usable IPv4 MAC rows return {}.
+    """
     walk = walk or walk_subtree
-    for phys_root, type_root, _ip_of in _TABLES:
-        rows = walk(target, phys_root, timeout)
-        if rows:
-            return unique_macs(parse_arp_table(rows + walk(target, type_root, timeout)))
+    # Prefer the RFC 4293 table when the agent fills it (age available). Do not mix in media.
+    phys_rows = walk(target, NET_TO_PHYSICAL_PHYS, timeout)
+    if phys_rows:
+        rows = (phys_rows
+                + walk(target, NET_TO_PHYSICAL_TYPE, timeout)
+                + walk(target, NET_TO_PHYSICAL_LAST, timeout))
+        uptime = _read_sys_uptime(target, walk, timeout)
+        return unique_macs(parse_arp_table_fresh(rows, sys_uptime=uptime, max_age_s=max_age_s))
+    media_rows = walk(target, NET_TO_MEDIA_PHYS, timeout)
+    if media_rows:
+        return unique_macs(parse_arp_table(media_rows + walk(target, NET_TO_MEDIA_TYPE, timeout)))
     return {}
 
 

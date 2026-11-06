@@ -64,7 +64,14 @@ from ..scanner.known_ports import merge_port_scope
 from ..scanner.types import VERIFIED_METHOD, HostObservation, PortObservation
 from ..scanner.verify_services import WEAK_SERVICE_LABELS
 from ..settings_store import PresenceSettings, RetentionSettings, ScanSettings, get_section
-from .identity import identity_hostname, match_hosts_detailed, normalize_hostname, normalize_mac
+from .identity import (
+    identity_hostname,
+    match_evidence,
+    match_hosts_detailed,
+    normalize_hostname,
+    normalize_mac,
+)
+from .identity_diag import classify_unmatched, format_identity_notes
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +128,8 @@ class ApplyResult:
     guard_tripped: bool = False
     notes: list[str] = field(default_factory=list)
     hosts_failed: int = 0
+    # Privacy-preserving counts of why unmatched hosts became new devices (no addresses).
+    identity_new_reasons: dict[str, int] = field(default_factory=dict)
 
 
 def describe_service(service: str | None, product: str | None, version: str | None) -> str:
@@ -307,6 +316,7 @@ class _Applier:
         seen_devices: dict[str, Device] = {}  # ip -> device
         pending_closures: list[tuple[Device, DevicePort, str]] = []
         open_ports_scanned = 0
+        new_reasons: dict[str, int] = {}
 
         for h in hosts:
             net = self.network_for(h.ip)
@@ -318,6 +328,8 @@ class _Applier:
             dev = matches.get(h.ip)
             is_new = dev is None
             if dev is None:
+                reason = classify_unmatched(h, mac_counts)
+                new_reasons[reason] = new_reasons.get(reason, 0) + 1
                 dev = Device(
                     current_ip=h.ip, mac=mac, mac_source=(h.mac_source or "arp") if mac else None,
                     vendor=h.vendor if mac else None, hostname=hostname,
@@ -334,6 +346,7 @@ class _Applier:
                 via = self.match_reasons.get(h.ip)
                 if via:
                     dev.identity_match, dev.identity_matched_at = via, now
+                    dev.identity_evidence = match_evidence(via, h)
                 if dev.current_ip != h.ip:
                     suffix = f" (matched by {via})" if via else ""
                     self.emit(dev, EV_IP_CHANGED, mode, f"{label} changed IP address {dev.current_ip} -> {h.ip}{suffix}",
@@ -399,6 +412,8 @@ class _Applier:
         self._apply_closures(pending_closures, open_ports_scanned)
         self._apply_disappearance(devices, {id(d) for d in seen_devices.values()})
         self.db.flush()
+        self.result.identity_new_reasons = new_reasons
+        self.result.notes.extend(format_identity_notes(new_reasons))
 
         for ip, dev in seen_devices.items():
             h = outcome.hosts[ip]

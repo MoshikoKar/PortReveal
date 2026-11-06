@@ -13,9 +13,10 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -105,10 +106,183 @@ def browser():
 
 
 def _sign_in(page, base: str) -> None:
+    """Sign in and wait until the session is usable.
+
+    Clicking Sign in alone is not enough: a following ``page.goto`` can race the
+    session cookie and land on the login form again (domains inventory e2e).
+    """
+    from playwright.sync_api import expect
+
     page.goto(base)
     page.get_by_label("Username").fill("admin")
     page.get_by_label("Password").fill(PASSWORD)
     page.get_by_role("button", name="Sign in").click()
+    expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
+
+
+def _seed_vuln_feed_synced(database_url: str) -> None:
+    """Mark NVD/KEV/EPSS as recently synced so VulnGlance renders the severity strip.
+
+    Without a feed row the page shows the never-synced warning and hides Critical/High
+    chips that several vulns e2e tests target.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.db import utcnow
+    from app.models import VulnFeedState
+
+    now = utcnow()
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    with Session(engine) as db:
+        for source, age in (("nvd", timedelta(hours=1)), ("kev", timedelta(minutes=30)), ("epss", timedelta(hours=2))):
+            row = db.get(VulnFeedState, source)
+            if row is None:
+                db.add(VulnFeedState(
+                    source=source,
+                    last_synced_at=now - age,
+                    record_count=1,
+                    mirror_complete=True,
+                ))
+            else:
+                row.last_synced_at = now - age
+                row.mirror_complete = True
+        db.commit()
+    engine.dispose()
+
+
+def _open_vuln_breakdowns(page) -> None:
+    """Expand the Breakdowns disclosure so network/OS facet bar-rows are visible."""
+    from playwright.sync_api import expect
+
+    details = page.locator("details.vuln-breakdowns")
+    expect(details).to_be_attached(timeout=15_000)
+    if not details.evaluate("el => el.open"):
+        details.locator("summary").click()
+    page.wait_for_function(
+        "() => document.querySelector('details.vuln-breakdowns')?.open === true",
+        timeout=5_000,
+    )
+
+
+def _open_vuln_export_menu(page):
+    """Open the Export & print popover; returns the panel group locator.
+
+    The trigger is a ``<summary class="btn">`` (Popover), which Playwright does not
+    always expose as role=button — click the summary by text instead.
+    """
+    from playwright.sync_api import expect
+
+    panel = page.get_by_role("group", name="Export and print")
+    if not panel.is_visible():
+        page.locator(".page-head details.dash-popover > summary").filter(
+            has_text=re.compile(r"Export & print|Preparing report")
+        ).click()
+    expect(panel).to_be_visible(timeout=5_000)
+    return panel
+
+
+def _bust_vuln_summary_cache(page) -> None:
+    """Force the live app worker to drop its process-local vuln summary cache."""
+    status = page.evaluate(
+        """async () => {
+          const m = document.cookie.match(/(?:^|;\\s*)nf_csrf=([^;]+)/);
+          const csrf = m ? decodeURIComponent(m[1]) : '';
+          const cur = await fetch('/api/settings/vuln', { credentials: 'same-origin' }).then((r) => r.json());
+          const { nvd_api_key_set, ...body } = cur;
+          const r = await fetch('/api/settings/vuln', {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify(body),
+          });
+          return r.status;
+        }"""
+    )
+    assert status == 200, status
+
+
+def _hold_filtered_vuln_summary(page) -> tuple[Callable[[], None], threading.Event, Callable[[], None]]:
+    """Park GET /api/vulns/summary?*network_id=* until ``release`` is called.
+
+    Leaving the route unsettled keeps the request pending without blocking the Playwright
+    protocol thread (a wait inside the route callback deadlocks later expects). Continuing
+    from a worker thread is unsafe with the sync API — park here and ``continue_`` on the
+    test thread via ``release()``. Returns ``(release, held, cleanup)``: ``held`` is set when
+    at least one matching request is parked; ``cleanup`` always resumes parked routes and unroutes.
+
+    Wait with ``_wait_until_held(page, held)`` — never ``held.wait()`` on the Playwright thread
+    (that freezes the sync dispatcher so SPA fetches after ``goto`` never run the route handler).
+    """
+    held = threading.Event()
+    parked: list = []
+    seen_summary: list[str] = []
+    held.seen_summary = seen_summary  # type: ignore[attr-defined]
+    route_pattern = re.compile(r".*/api/vulns/summary(?:\?.*)?$")
+
+    def handle(route) -> None:
+        req = route.request
+        url = req.url or ""
+        if "vulns/summary" in url:
+            seen_summary.append(url)
+        if req.method == "GET" and "network_id=" in url:
+            parked.append(route)
+            held.set()
+            return  # leave pending until release()
+        route.continue_()
+
+    page.route(route_pattern, handle)
+
+    def release() -> None:
+        for r in parked:
+            try:
+                r.continue_()
+            except Exception:
+                pass
+        parked.clear()
+
+    def cleanup() -> None:
+        release()
+        try:
+            page.unroute(route_pattern)
+        except Exception:
+            pass
+
+    return release, held, cleanup
+
+
+def _wait_until_held(page, held: threading.Event, *, timeout_s: float = 15) -> bool:
+    """Pump the Playwright sync event loop until the hold fires (or timeout)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if held.is_set():
+            return True
+        page.wait_for_timeout(50)
+    return held.is_set()
+
+
+def _install_vuln_print_capture(page) -> None:
+    """Mock window.print and record filter text + finding row count from the print report."""
+    page.evaluate(
+        """() => {
+          window.__pr_print_calls = 0;
+          window.__pr_print_filter = '';
+          window.__pr_print_findings = 0;
+          window.__pr_print_had_summary = false;
+          window.print = () => {
+            const report = document.querySelector('.vuln-print-report');
+            const filters = report && report.querySelector('.vuln-print-filters');
+            const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
+            const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+            window.__pr_print_filter = filters ? (filters.textContent || '') : '';
+            window.__pr_print_findings = rows ? rows.length : 0;
+            window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
+            window.__pr_print_calls++;
+          };
+        }"""
+    )
 
 
 def _seed_below_floor_finding(database_url: str, cve_id: str = "CVE-2024-99901") -> None:
@@ -175,10 +349,10 @@ def _set_min_cvss_display_via_api(page, floor: float = 6.0) -> None:
     assert status == 200, status
 
 
-def _seed_vuln_networks(database_url: str) -> tuple[str, str]:
+def _seed_vuln_networks(database_url: str) -> tuple[str, str, int, int]:
     """Insert two placeholder networks with one finding each into the live e2e DB.
 
-    Returns the display names (Lab Alpha / Lab Beta) for UI assertions.
+    Returns display names (Lab Alpha / Lab Beta) and their network ids.
     """
     from sqlalchemy import create_engine, select
     from sqlalchemy.orm import Session
@@ -268,8 +442,9 @@ def _seed_vuln_networks(database_url: str) -> tuple[str, str]:
         db.commit()
         sync_finding_lifecycle(db, now=utcnow())
         db.commit()
+        id_a, id_b = net_a.id, net_b.id
     engine.dispose()
-    return name_a, name_b
+    return name_a, name_b, id_a, id_b
 
 
 LONG_NET_NAME = "Test Network B with a deliberately long placeholder name for layout checks"
@@ -374,14 +549,15 @@ def test_dashboard_cards_fit_rows_without_overflow(live_app, browser):
         assert errors == []
 
 
-# Per row: the IP under the device and how often it occurs in the row's text; plus sideways overflow.
+# Per row: the IP beside the device label and how often it occurs in the row's text; plus sideways overflow.
+# Device cell markup is ``name · ip`` (``.event-device .mono``), not the older stacked ``.event-device-cell``.
 _EVENT_TABLE_REPORT = """(root) => {
   const table = root.querySelector('table.event-table');
   const scroller = table.parentElement;
   const rows = [...table.querySelectorAll('tbody tr')].map((tr) => {
-    const ip = tr.querySelector('.event-device-cell .mono');
+    const ipEl = tr.querySelector('.event-device .mono');
     const text = tr.innerText;
-    const needle = ip ? ip.textContent.trim() : null;
+    const needle = ipEl ? ipEl.textContent.replace(/^[·\\s]+/, '').trim() : null;
     const hits = needle ? text.split(needle).length - 1 : null;
     return { ip: needle, hits };
   });
@@ -595,13 +771,13 @@ def test_vulnerabilities_search_debounce_respects_clear_all_and_facet(live_app, 
 
     from playwright.sync_api import expect
 
+    _seed_vuln_feed_synced(live_app["database_url"])
     base = live_app["base"]
     page = browser.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
         _sign_in(page, base)
-        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
 
         # --- Clear all must not be undone by a pending search debounce ---
         page.goto(f"{base}/vulnerabilities?severity=high&q=openssh&only_hidden=1")
@@ -631,11 +807,12 @@ def test_vulnerabilities_search_debounce_respects_clear_all_and_facet(live_app, 
         assert "q" not in qs, page.url
         assert "only_hidden" not in qs, page.url
 
-        # --- Facet click during debounce must keep the facet in the final URL ---
+        # --- Severity-strip click during debounce must keep the facet in the final URL ---
+        _bust_vuln_summary_cache(page)
         page.goto(f"{base}/vulnerabilities")
         expect(page.get_by_label("Search findings")).to_be_visible(timeout=15_000)
-        # Wait for summary KPIs (facet targets) to render.
-        expect(page.get_by_text("Critical", exact=True).first).to_be_visible(timeout=15_000)
+        # VulnGlance severity strip (Critical is a .vuln-sev-item, not a top-level KPI).
+        expect(page.locator(".vuln-sev-item .vuln-sev-name", has_text="Critical")).to_be_visible(timeout=15_000)
         page.evaluate(
             """() => {
               const input = document.querySelector('[aria-label="Search findings"]');
@@ -648,9 +825,9 @@ def test_vulnerabilities_search_debounce_respects_clear_all_and_facet(live_app, 
         page.wait_for_timeout(50)
         page.evaluate(
             """() => {
-              const kpi = [...document.querySelectorAll('.kpi[role="button"]')]
-                .find((el) => el.querySelector('.label')?.textContent.trim() === 'Critical');
-              kpi.click();
+              const btn = [...document.querySelectorAll('.vuln-sev-item')]
+                .find((el) => el.querySelector('.vuln-sev-name')?.textContent.trim() === 'Critical');
+              btn.click();
             }"""
         )
         page.wait_for_timeout(600)
@@ -668,7 +845,8 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
 
     from app.core.vuln.summary import invalidate_vuln_summary_cache
 
-    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    name_a, name_b, _id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
+    _seed_vuln_feed_synced(live_app["database_url"])
     # Test-process cache clear is a no-op for the uvicorn worker; dismiss/undo below busts it.
     invalidate_vuln_summary_cache()
     base = live_app["base"]
@@ -678,7 +856,6 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
         _sign_in(page, base)
-        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
 
         # Invalidate the app-process summary cache so seeded findings appear in facets.
         page.evaluate(
@@ -700,7 +877,9 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
         page.get_by_role("link", name="Vulnerabilities", exact=True).click()
         expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
 
-        facet_btn = page.locator(".bar-row", has_text=name_a).first
+        # Network facets live under the closed Breakdowns disclosure.
+        _open_vuln_breakdowns(page)
+        facet_btn = page.locator(".vuln-breakdowns .bar-row", has_text=name_a).first
         expect(facet_btn).to_be_visible(timeout=30_000)
         facet_btn.click()
         expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
@@ -708,7 +887,8 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
 
         # Export CSV for the active network filter; verify only Lab Alpha rows.
         with page.expect_download() as dl_info:
-            page.get_by_role("button", name="Export CSV").click()
+            panel = _open_vuln_export_menu(page)
+            panel.get_by_role("button", name="Download CSV").click()
         download = dl_info.value
         path = download.path()
         assert path is not None
@@ -721,6 +901,7 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
         assert name_b not in text
 
         # Print report: must wait for filtered summary + findings before window.print().
+        # Report markup uses executive summary + findings table (no longer `.vuln-print-kpis`).
         def install_print_mock() -> None:
             page.evaluate(
                 """() => {
@@ -729,9 +910,9 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
                   window.__pr_print_had_findings = false;
                   window.print = () => {
                     const report = document.querySelector('.vuln-print-report');
-                    const kpis = report && report.querySelector('.vuln-print-kpis');
+                    const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
                     const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
-                    window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+                    window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
                     window.__pr_print_had_findings = !!(rows && rows.length > 0);
                     window.__pr_print_calls++;
                   };
@@ -739,7 +920,8 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
             )
 
         install_print_mock()
-        page.get_by_role("button", name="Print / PDF report").click()
+        panel = _open_vuln_export_menu(page)
+        panel.get_by_role("button", name="Print or save as PDF").click()
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=15_000)
         assert page.evaluate("() => window.__pr_print_had_summary") is True
         assert page.evaluate("() => window.__pr_print_had_findings") is True
@@ -760,9 +942,9 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
             window.__pr_print_had_findings = false;
             window.print = () => {
               const report = document.querySelector('.vuln-print-report');
-              const kpis = report && report.querySelector('.vuln-print-kpis');
+              const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
               const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
-              window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+              window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
               window.__pr_print_had_findings = !!(rows && rows.length > 0);
               window.__pr_print_calls++;
             };
@@ -778,17 +960,18 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
 
 
 def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, browser):
-    """Print stays disabled until the summary for the selected network arrives; report matches it."""
+    """Cold-start ?print=1 stays pending until the matching network summary arrives; report matches it."""
     from playwright.sync_api import expect
 
-    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    name_a, name_b, id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
+    _seed_vuln_feed_synced(live_app["database_url"])
     base = live_app["base"]
     page = browser.new_page()
     errors: list[str] = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
+    release = held = cleanup = None
     try:
         _sign_in(page, base)
-        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
 
         page.evaluate(
             """async () => {
@@ -806,55 +989,136 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
             }"""
         )
 
-        page.get_by_role("link", name="Vulnerabilities", exact=True).click()
-        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
-        expect(page.get_by_label("Network filter: All networks")).to_be_visible(timeout=15_000)
+        release, held, cleanup = _hold_filtered_vuln_summary(page)
+        page.add_init_script(
+            """
+            window.__pr_print_calls = 0;
+            window.__pr_print_filter = '';
+            window.__pr_print_findings = 0;
+            window.__pr_print_had_summary = false;
+            window.print = () => {
+              const report = document.querySelector('.vuln-print-report');
+              const filters = report && report.querySelector('.vuln-print-filters');
+              const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
+              const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
+              window.__pr_print_filter = filters ? (filters.textContent || '') : '';
+              window.__pr_print_findings = rows ? rows.length : 0;
+              window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
+              window.__pr_print_calls++;
+            };
+            """
+        )
 
-        # Delay filtered summary responses so the Print button observes the loading gate.
-        def handle_summary(route):
-            if "network_id=" in route.request.url and route.request.method == "GET":
-                time.sleep(1.2)
-            route.continue_()
+        # Lab Alpha hosts the critical finding (visible under the default CVSS floor).
+        page.goto(f"{base}/vulnerabilities?network_id={id_a}&print=1")
+        assert _wait_until_held(page, held), (
+            "filtered /vulns/summary was never requested; "
+            f"seen={getattr(held, 'seen_summary', None)}"
+        )
+        # Gate: while the matching summary is parked, auto-print must not have run.
+        assert page.evaluate("() => window.__pr_print_calls") == 0
+        expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=10_000)
 
-        page.route("**/api/vulns/summary*", handle_summary)
+        release()
+        page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
+        filt = page.evaluate("() => window.__pr_print_filter")
+        assert name_a in filt, filt
+        assert name_b not in filt, filt
+        assert page.evaluate("() => window.__pr_print_findings") >= 1
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
+    finally:
+        if cleanup is not None:
+            cleanup()
+        page.close()
+    assert errors == []
 
+
+def test_vulnerabilities_export_disabled_during_network_filter_transition(live_app, browser):
+    """In-page network filter change: Export/Print stay disabled + waiting note until the matching
+    summary arrives; a stale all-networks payload must not enable print for the new network."""
+    from playwright.sync_api import expect
+
+    name_a, name_b, _id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
+    _seed_vuln_feed_synced(live_app["database_url"])
+    base = live_app["base"]
+    page = browser.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    release = held = cleanup = None
+    try:
+        _sign_in(page, base)
         page.evaluate(
-            """() => {
-              window.__pr_print_calls = 0;
-              window.__pr_print_filter = '';
-              window.__pr_print_findings = 0;
-              window.print = () => {
-                const report = document.querySelector('.vuln-print-report');
-                const filters = report && report.querySelector('.vuln-print-filters');
-                const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
-                window.__pr_print_filter = filters ? (filters.textContent || '') : '';
-                window.__pr_print_findings = rows ? rows.length : 0;
-                window.__pr_print_calls++;
-              };
+            """async () => {
+              const list = await fetch('/api/vulns?cve_id=CVE-2024-ALPHA', { credentials: 'same-origin' })
+                .then((r) => r.json());
+              if (!list.items || !list.items.length) return;
+              const d = list.items[0];
+              const m = document.cookie.match(/(?:^|;\\s*)nf_csrf=([^;]+)/);
+              const csrf = m ? decodeURIComponent(m[1]) : '';
+              const hdr = { 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'POST', credentials: 'same-origin', headers: hdr, body: '{}' });
+              await fetch(`/api/devices/${d.device_uuid}/vulns/${encodeURIComponent(d.cve_id)}/dismiss`,
+                { method: 'DELETE', credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf } });
             }"""
         )
 
-        # Lab Alpha hosts the critical finding (visible under the default CVSS floor);
-        # Lab Beta's medium finding may be hidden — use Alpha so the report has rows.
+        page.goto(f"{base}/vulnerabilities")
+        expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_label("Network filter: All networks")).to_be_visible(timeout=15_000)
+        # All-networks summary must be ready so Print starts enabled (stale payload after transition).
+        panel = _open_vuln_export_menu(page)
+        print_btn = panel.get_by_role("button", name="Print or save as PDF")
+        preview_btn = panel.get_by_role("button", name="Preview printable report")
+        expect(print_btn).to_be_enabled(timeout=15_000)
+        expect(preview_btn).to_be_enabled()
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_have_count(0)
+
+        release, held, cleanup = _hold_filtered_vuln_summary(page)
+        _install_vuln_print_capture(page)
+
+        # Transition while the Export menu is open: select Lab Alpha; its summary is parked.
         net_select = page.get_by_label(re.compile(r"^Network filter:"))
         net_select.select_option(label=name_a)
         expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
         expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=5_000)
+        assert _wait_until_held(page, held), (
+            "filtered /vulns/summary was never requested after filter change; "
+            f"seen={getattr(held, 'seen_summary', None)}"
+        )
 
-        preparing = page.get_by_role("button", name="Preparing…")
-        expect(preparing).to_be_visible(timeout=5_000)
-        expect(preparing).to_be_disabled()
+        # Re-open if the popover closed on re-render; stale all-networks data must not enable Print.
+        # Payload-key binding: wantedSummaryKey already matches Lab Alpha in the URL, but
+        # loadedSummaryKey must not stamp until this held fetch completes (omit wanted-key-only).
+        panel = _open_vuln_export_menu(page)
+        print_btn = panel.get_by_role("button", name="Print or save as PDF")
+        preview_btn = panel.get_by_role("button", name="Preview printable report")
+        expect(print_btn).to_be_disabled(timeout=5_000)
+        expect(preview_btn).to_be_disabled()
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
+        assert page.evaluate("() => window.__pr_print_calls") == 0
+        # Dwell while the matching response is still parked: a wanted-key-only stamp race would
+        # enable Print against the stale all-networks payload before release.
+        page.wait_for_timeout(750)
+        expect(print_btn).to_be_disabled()
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
 
-        print_btn = page.get_by_role("button", name="Print / PDF report")
+        release()
         expect(print_btn).to_be_enabled(timeout=15_000)
+        expect(panel.get_by_text("Waiting for the summary to load…")).to_have_count(0)
         print_btn.click()
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
         filt = page.evaluate("() => window.__pr_print_filter")
         assert name_a in filt, filt
         assert name_b not in filt, filt
         assert page.evaluate("() => window.__pr_print_findings") >= 1
-        page.unroute("**/api/vulns/summary*")
+        assert page.evaluate("() => window.__pr_print_had_summary") is True
+        report = page.locator(".vuln-print-report")
+        page.add_style_tag(content=".vuln-print-report { display: block !important; }")
+        expect(report.locator(".vuln-print-filters")).to_contain_text(f"network: {name_a}", timeout=10_000)
     finally:
+        if cleanup is not None:
+            cleanup()
         page.close()
     assert errors == []
 
@@ -865,7 +1129,8 @@ def test_vulnerabilities_html_report_download(live_app, browser):
 
     from app.core.vuln.summary import invalidate_vuln_summary_cache
 
-    name_a, name_b = _seed_vuln_networks(live_app["database_url"])
+    name_a, name_b, _id_a, _id_b = _seed_vuln_networks(live_app["database_url"])
+    _seed_vuln_feed_synced(live_app["database_url"])
     invalidate_vuln_summary_cache()
     base = live_app["base"]
     page = browser.new_page()
@@ -873,7 +1138,6 @@ def test_vulnerabilities_html_report_download(live_app, browser):
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     try:
         _sign_in(page, base)
-        expect(page.get_by_role("heading", name="Network overview")).to_be_visible(timeout=15_000)
         page.evaluate(
             """async () => {
               const list = await fetch('/api/vulns?cve_id=CVE-2024-ALPHA', { credentials: 'same-origin' })
@@ -891,13 +1155,15 @@ def test_vulnerabilities_html_report_download(live_app, browser):
         )
         page.get_by_role("link", name="Vulnerabilities", exact=True).click()
         expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
-        facet_btn = page.locator(".bar-row", has_text=name_a).first
+        _open_vuln_breakdowns(page)
+        facet_btn = page.locator(".vuln-breakdowns .bar-row", has_text=name_a).first
         expect(facet_btn).to_be_visible(timeout=30_000)
         facet_btn.click()
         expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
 
         with page.expect_download() as dl_info:
-            page.get_by_role("button", name="HTML report").click()
+            panel = _open_vuln_export_menu(page)
+            panel.get_by_role("button", name="Download HTML report").click()
         download = dl_info.value
         path = download.path()
         assert path is not None
@@ -1082,13 +1348,21 @@ def test_web_gallery_pages_filters_and_preview(live_app, browser):
         expect(cards.first).to_be_visible(timeout=5_000)
         assert time.monotonic() - started < 5
         expect(cards).to_have_count(36)
-        # Opens on "With preview": only cards that have a screenshot.
-        expect(page.get_by_role("button", name=re.compile(r"^With preview"))).to_have_attribute("aria-pressed", "true")
+        # Default is every status ("All"); Screenshot narrows to cards with a captured image.
+        expect(page.get_by_role("button", name=re.compile(r"^All"))).to_have_attribute("aria-pressed", "true")
+        page.get_by_role("button", name=re.compile(r"^Screenshot")).click()
+        expect(page).to_have_url(re.compile(r"status=ok"), timeout=10_000)
+        expect(page.get_by_role("button", name=re.compile(r"^Screenshot"))).to_have_attribute("aria-pressed", "true")
+        expect(cards).to_have_count(36, timeout=10_000)
         assert cards.evaluate_all("els => els.every((e) => e.dataset.status === 'ok')")
         shown = page.get_by_text(re.compile(r"^Showing \d+ of \d+$"))
         total = int(re.search(r"of (\d+)", shown.inner_text()).group(1))
         assert total > 36
-        # Only cards near the viewport fetched their thumbnail; the rest show a placeholder.
+        # Fresh navigation so thumbnail requests are not satisfied only from the All-page HTTP cache.
+        thumbs.clear()
+        page.goto(f"{base}/web?status=ok")
+        expect(cards.first).to_be_visible(timeout=5_000)
+        expect(cards).to_have_count(36, timeout=10_000)
         page.wait_for_timeout(500)
         assert 0 < len(set(thumbs)) < 36, len(set(thumbs))
         assert page.locator(".host-card .shot-skeleton").count() > 0
@@ -1102,7 +1376,7 @@ def test_web_gallery_pages_filters_and_preview(live_app, browser):
         expect(cards).to_have_count(36, timeout=10_000)
         assert all(ip.startswith("10.0.2.") or "10.0.2." in ip
                    for ip in cards.locator(".mono").all_inner_texts())
-        page.get_by_role("button", name=re.compile(r"^Errors")).click()
+        page.get_by_role("button", name=re.compile(r"^No usable page")).click()
         expect(page).to_have_url(re.compile(r"status=error"))
         expect(cards).to_have_count(2, timeout=10_000)
         page.reload()
@@ -1110,7 +1384,8 @@ def test_web_gallery_pages_filters_and_preview(live_app, browser):
         assert cards.evaluate_all("els => els.every((e) => e.dataset.status === 'error')")
 
         page.get_by_role("button", name=re.compile(r"^All")).click()
-        expect(page).to_have_url(re.compile(r"status=all"))
+        expect(page.get_by_role("button", name=re.compile(r"^All"))).to_have_attribute("aria-pressed", "true")
+        expect(page).not_to_have_url(re.compile(r"status="))
         page.get_by_label("Search web interfaces").fill("host-07")
         expect(page).to_have_url(re.compile(r"q=host-07"), timeout=5_000)
         expect(cards).to_have_count(1, timeout=10_000)
