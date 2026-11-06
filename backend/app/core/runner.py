@@ -48,10 +48,13 @@ from ..scanner.types import (
     ScanStageError,
     StageResult,
 )
-from ..settings_store import ScanSettings, get_section, get_value, set_value
+from ..settings_store import DiscoverySettings, ScanSettings, get_section, get_value, set_value
 from .arp_snmp import enrich_from_arp, load_arp_sources
 from .compare import ScanOutcome, apply_outcome
+from .discovery import collect_netbios_macs
+from .identity import normalize_mac
 from .intel import after_scan, run_watches
+from .oui import vendor_for
 from .snapshots import create_snapshot
 from .vuln.manager import vuln_job_manager
 from .web_capture.auto import maybe_enqueue_auto_web_capture
@@ -371,6 +374,17 @@ def _run_scan(scan_id: int, ctx: ScanContext | None, scanner: Scanner | None) ->
                     h.ports = None
 
         ctx.check_cancelled()
+        # NetBIOS MACs come before router ARP and before identity matching: a device's own adapter
+        # MAC beats a router snapshot, and a host without a MAC would otherwise become a new device.
+        if live and scanner.mode != "mock":
+            with session_scope() as db:
+                dcfg = get_section(db, DiscoverySettings)
+            if dcfg.enabled and dcfg.netbios:
+                for ip, raw in collect_netbios_macs([ip for ip, h in live.items() if not h.mac]).items():
+                    mac = normalize_mac(raw)
+                    if mac:
+                        live[ip].mac, live[ip].mac_source = mac, "netbios"
+                        live[ip].vendor = live[ip].vendor or vendor_for(mac)
         arp_notes: list[str] = []
         if arp_sources and live:
             _update(scan_id, stage="router ARP (SNMP)")
