@@ -204,39 +204,63 @@ def _bust_vuln_summary_cache(page) -> None:
     assert status == 200, status
 
 
-def _hold_filtered_vuln_summary(page) -> tuple[threading.Event, threading.Event, Callable[[], None]]:
-    """Park GET /api/vulns/summary?*network_id=* until ``release`` is set.
+def _hold_filtered_vuln_summary(page) -> tuple[Callable[[], None], threading.Event, Callable[[], None]]:
+    """Park GET /api/vulns/summary?*network_id=* until ``release`` is called.
 
-    Continues the route from a worker thread so the Playwright sync protocol is not blocked
-    (a wait inside the route callback deadlocks later expects). Returns ``(release, held, cleanup)``:
-    ``held`` is set when at least one matching request is parked; ``cleanup`` always releases and
-    unroutes.
+    Leaving the route unsettled keeps the request pending without blocking the Playwright
+    protocol thread (a wait inside the route callback deadlocks later expects). Continuing
+    from a worker thread is unsafe with the sync API — park here and ``continue_`` on the
+    test thread via ``release()``. Returns ``(release, held, cleanup)``: ``held`` is set when
+    at least one matching request is parked; ``cleanup`` always resumes parked routes and unroutes.
+
+    Wait with ``_wait_until_held(page, held)`` — never ``held.wait()`` on the Playwright thread
+    (that freezes the sync dispatcher so SPA fetches after ``goto`` never run the route handler).
     """
-    release = threading.Event()
     held = threading.Event()
+    parked: list = []
+    seen_summary: list[str] = []
+    held.seen_summary = seen_summary  # type: ignore[attr-defined]
+    route_pattern = re.compile(r".*/api/vulns/summary(?:\?.*)?$")
 
     def handle(route) -> None:
         req = route.request
-        if req.method == "GET" and "network_id=" in req.url:
-            def continue_when_released(r=route) -> None:
-                held.set()
-                release.wait(timeout=30)
-                r.continue_()
-
-            threading.Thread(target=continue_when_released, daemon=True).start()
-            return
+        url = req.url or ""
+        if "vulns/summary" in url:
+            seen_summary.append(url)
+        if req.method == "GET" and "network_id=" in url:
+            parked.append(route)
+            held.set()
+            return  # leave pending until release()
         route.continue_()
 
-    page.route("**/api/vulns/summary*", handle)
+    page.route(route_pattern, handle)
+
+    def release() -> None:
+        for r in parked:
+            try:
+                r.continue_()
+            except Exception:
+                pass
+        parked.clear()
 
     def cleanup() -> None:
-        release.set()
+        release()
         try:
-            page.unroute("**/api/vulns/summary*")
+            page.unroute(route_pattern)
         except Exception:
             pass
 
     return release, held, cleanup
+
+
+def _wait_until_held(page, held: threading.Event, *, timeout_s: float = 15) -> bool:
+    """Pump the Playwright sync event loop until the hold fires (or timeout)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if held.is_set():
+            return True
+        page.wait_for_timeout(50)
+    return held.is_set()
 
 
 def _install_vuln_print_capture(page) -> None:
@@ -987,12 +1011,15 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
 
         # Lab Alpha hosts the critical finding (visible under the default CVSS floor).
         page.goto(f"{base}/vulnerabilities?network_id={id_a}&print=1")
-        assert held.wait(timeout=15), "filtered /vulns/summary was never requested"
+        assert _wait_until_held(page, held), (
+            "filtered /vulns/summary was never requested; "
+            f"seen={getattr(held, 'seen_summary', None)}"
+        )
         # Gate: while the matching summary is parked, auto-print must not have run.
         assert page.evaluate("() => window.__pr_print_calls") == 0
         expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=10_000)
 
-        release.set()
+        release()
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
         filt = page.evaluate("() => window.__pr_print_filter")
         assert name_a in filt, filt
@@ -1055,7 +1082,10 @@ def test_vulnerabilities_export_disabled_during_network_filter_transition(live_a
         net_select.select_option(label=name_a)
         expect(page).to_have_url(re.compile(r"network_id="), timeout=10_000)
         expect(page.get_by_label(f"Network filter: {name_a}")).to_be_visible(timeout=5_000)
-        assert held.wait(timeout=15), "filtered /vulns/summary was never requested after filter change"
+        assert _wait_until_held(page, held), (
+            "filtered /vulns/summary was never requested after filter change; "
+            f"seen={getattr(held, 'seen_summary', None)}"
+        )
 
         # Re-open if the popover closed on re-render; stale all-networks data must not enable Print.
         # Payload-key binding: wantedSummaryKey already matches Lab Alpha in the URL, but
@@ -1073,7 +1103,7 @@ def test_vulnerabilities_export_disabled_during_network_filter_transition(live_a
         expect(print_btn).to_be_disabled()
         expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
 
-        release.set()
+        release()
         expect(print_btn).to_be_enabled(timeout=15_000)
         expect(panel.get_by_text("Waiting for the summary to load…")).to_have_count(0)
         print_btn.click()
