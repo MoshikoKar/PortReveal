@@ -121,6 +121,11 @@ export interface DeviceSummary {
   mac: string | null;
   /** Where the MAC came from: the scanner's own ARP, the site router's ARP table (SNMP), or NetBIOS. */
   mac_source: 'arp' | 'snmp' | 'netbios' | null;
+  /** Last identity pass that kept this device (mac | ip | hostname). */
+  identity_match?: 'mac' | 'ip' | 'hostname' | null;
+  identity_matched_at?: string | null;
+  /** Structured evidence for the last match (overwritten each time; not a history log). */
+  identity_evidence?: Record<string, string> | null;
   vendor: string | null;
   hostname: string | null;
   os_name: string | null;

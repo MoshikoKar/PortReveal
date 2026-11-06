@@ -6,13 +6,15 @@ copy: one scheduled scan would be queued N times and notifications would be sent
 
 On PostgreSQL, only the process holding a session-level advisory lock starts those threads;
 the others serve HTTP only (their background endpoints fall back to running inline). If the
-holder dies, its connection closes, the lock is released, and the next process to start
-takes over. SQLite is a single-file dev database and always has one owner.
+holder dies, its connection closes and the lock is released. Non-owners poll with
+``pg_try_advisory_lock`` and start workers when they acquire the lock (failover without waiting
+for a full process restart). SQLite is a single-file dev database and always has one owner.
 """
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine, text
@@ -22,8 +24,14 @@ log = logging.getLogger("app.leader")
 
 BACKGROUND_LOCK_KEY = 0x504F5254  # "PORT"
 MIGRATION_LOCK_KEY = 0x50524D47  # "PRMG"
+# How often a non-owner retries the lock. Short enough for failover; long enough to avoid spin.
+FAILOVER_POLL_S = 5.0
 
 _held: Connection | None = None
+_lock_engine: Engine | None = None  # dedicated engine so the lock does not occupy the app pool
+_sqlite_owner = False  # SQLite has no advisory lock; the single process is always the owner.
+_failover_stop: threading.Event | None = None
+_failover_thread: threading.Thread | None = None
 
 
 def _try_lock(conn: Connection, key: int) -> bool:
@@ -32,30 +40,46 @@ def _try_lock(conn: Connection, key: int) -> bool:
     return got
 
 
+def is_background_leader() -> bool:
+    """True when this process currently holds the background-worker lock (or SQLite always-owner)."""
+    return _held is not None or _sqlite_owner
+
+
 def acquire_background_leadership(engine: Engine) -> bool:
     """True when this process should start the background workers."""
-    global _held
+    global _held, _lock_engine, _sqlite_owner
     if engine.dialect.name != "postgresql":
+        _sqlite_owner = True
         return True
     if _held is not None:
         return True
-    conn = engine.connect()
+    # Separate engine/connection: holding a checkout from the app pool would stall work when
+    # pool_size is small (and still wastes a slot on the shared pool).
+    lock_engine = create_engine(engine.url, pool_size=1, max_overflow=0, pool_pre_ping=True)
+    conn = lock_engine.connect()
     try:
         got = _try_lock(conn, BACKGROUND_LOCK_KEY)
     except BaseException:
         conn.close()
+        lock_engine.dispose()
         raise
     if not got:
         conn.close()
+        lock_engine.dispose()
         return False
     _held = conn  # kept open: closing the connection would release the lock
+    _lock_engine = lock_engine
     return True
 
 
 def release_background_leadership() -> None:
-    global _held
+    global _held, _lock_engine, _sqlite_owner
+    _sqlite_owner = False
     conn, _held = _held, None
+    lock_engine, _lock_engine = _lock_engine, None
     if conn is None:
+        if lock_engine is not None:
+            lock_engine.dispose()
         return
     try:
         conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": BACKGROUND_LOCK_KEY})
@@ -64,6 +88,53 @@ def release_background_leadership() -> None:
         log.warning("could not release background-worker lock; it ends with the connection", exc_info=True)
     finally:
         conn.close()
+        if lock_engine is not None:
+            lock_engine.dispose()
+
+
+def start_failover_watch(
+    engine: Engine,
+    on_become_leader: Callable[[], None],
+    *,
+    interval_s: float = FAILOVER_POLL_S,
+) -> None:
+    """Poll for the background lock on non-owner PostgreSQL processes; call ``on_become_leader`` once acquired.
+
+    No-op on SQLite (always owner) or when this process already holds the lock. Safe to call once
+    at lifespan start; ``stop_failover_watch`` must run on shutdown.
+    """
+    global _failover_stop, _failover_thread
+    stop_failover_watch()
+    if engine.dialect.name != "postgresql" or _held is not None:
+        return
+    stop = threading.Event()
+    _failover_stop = stop
+
+    def _loop() -> None:
+        while not stop.wait(interval_s):
+            if _held is not None:
+                return
+            if acquire_background_leadership(engine):
+                log.info("background-worker lock acquired after failover poll; starting workers")
+                try:
+                    on_become_leader()
+                except Exception:
+                    log.exception("failover on_become_leader failed; releasing lock")
+                    release_background_leadership()
+                return
+
+    _failover_thread = threading.Thread(target=_loop, name="background-leader-failover", daemon=True)
+    _failover_thread.start()
+
+
+def stop_failover_watch() -> None:
+    global _failover_stop, _failover_thread
+    stop, _failover_stop = _failover_stop, None
+    thread, _failover_thread = _failover_thread, None
+    if stop is not None:
+        stop.set()
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=FAILOVER_POLL_S + 1.0)
 
 
 @contextmanager

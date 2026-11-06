@@ -58,8 +58,20 @@ def test_dhcp_move_keeps_device_ports_timestamps_and_explains_the_match(db):
     assert len(devices(db)) == 2
     moved_dev = device_by_ip(db, "10.0.0.50")
     assert moved_dev.id == device_id
+    assert moved_dev.identity_match == "mac"
+    assert moved_dev.identity_evidence == {"via": "mac", "mac": MAC_B}
     after = {p.port: p.opened_at for p in db.query(DevicePort).filter_by(device_id=device_id)}
     assert after == opened
+
+
+def test_new_device_scan_note_is_privacy_preserving(db):
+    net = make_network(db)
+    s = scan(ScriptedScanner([host("10.0.0.9", [port(80, "http")], hostname="10-0-0-9.dhcp.corp")]),
+             network_id=net.id)
+    notes = s.notes or ""
+    assert "Identity: 1 new device(s)" in notes
+    assert "10.0.0.9" not in notes  # no address in the aggregate note
+    assert "generic_or_missing_hostname" in notes or "no_usable_mac" in notes
 
 
 def test_hostname_move_is_refused_when_old_address_is_held_by_another_mac(db):
@@ -112,6 +124,17 @@ def test_shared_address_across_networks_without_mac_is_new_device():
     h = hosts_at("10.0.0.5")
     networks = {"10.0.0.5": 2}
     assert match_hosts_detailed([h], [d], networks.get)["10.0.0.5"] is None
+
+
+def test_one_sided_mac_across_networks_is_not_an_ip_match():
+    """Device has a MAC, host does not (or the reverse): overlapping RFC1918 is still not evidence."""
+    d = dev(1, "10.0.0.5", mac=MAC_A, network_id=1)
+    networks = {"10.0.0.5": 2}
+    assert match_hosts_detailed([hosts_at("10.0.0.5")], [d], networks.get)["10.0.0.5"] is None
+    d2 = dev(2, "10.0.0.5", mac=None, network_id=1)
+    assert match_hosts_detailed(
+        [hosts_at("10.0.0.5", mac=MAC_B)], [d2], networks.get
+    )["10.0.0.5"] is None
 
 
 def test_same_address_same_network_without_mac_still_matches():

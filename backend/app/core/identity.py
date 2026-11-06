@@ -161,6 +161,10 @@ def match_hosts_detailed(
         if not candidates:
             continue
         d = candidates[0]
+        # Overlapping RFC1918 ranges: an IP alone is never evidence across networks, even when only
+        # one side has a MAC (one-sided MAC). Cross-network continuity needs pass 1 (MAC) or pass 3.
+        if other_network(d, h.ip):
+            continue
         host_mac, dev_mac = usable_mac.get(h.ip), normalize_mac(d.mac)
         if host_mac and dev_mac:
             if host_mac != dev_mac:
@@ -170,9 +174,6 @@ def match_hosts_detailed(
                 continue
             if host_mac and not dev_mac and host_mac in by_mac:
                 continue  # MAC belongs to another known device (already handled or claimed)
-            # No MAC on either side: an address shared with another network is not evidence.
-            if not host_mac and not dev_mac and other_network(d, h.ip):
-                continue
         result[h.ip] = (d, "ip")
         claimed.add(id(d))
 
@@ -197,6 +198,26 @@ def match_hosts_detailed(
     for h in hosts:
         result.setdefault(h.ip, None)
     return result
+
+
+def match_evidence(via: str, h: HostObservation) -> dict[str, str]:
+    """Compact evidence for the pass that kept a device. Uses only fields already in inventory."""
+    out: dict[str, str] = {"via": via}
+    if via == "mac":
+        if (m := normalize_mac(h.mac)):
+            out["mac"] = m
+        if h.mac_source:
+            out["mac_source"] = h.mac_source
+    elif via == "hostname":
+        if (hn := identity_hostname(h.hostname, h.ip)):
+            out["hostname"] = hn
+    elif via == "ip":
+        out["ip"] = h.ip
+        if (m := normalize_mac(h.mac)):
+            out["mac"] = m
+        if h.mac_source:
+            out["mac_source"] = h.mac_source
+    return out
 
 
 def _names_conflict(h: HostObservation, d: DeviceLike) -> bool:

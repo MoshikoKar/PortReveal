@@ -399,6 +399,9 @@ class Device(Base):
     # Evidence of the last identity match that kept this device across an address change: mac | ip | hostname.
     identity_match: Mapped[str | None] = mapped_column(String(16))
     identity_matched_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # Structured last-match evidence (pass + mac/mac_source/hostname/ip used). Overwritten each match;
+    # not a history log. Values are inventory fields already stored on the device.
+    identity_evidence: Mapped[dict | None] = mapped_column(JSON)
     vendor: Mapped[str | None] = mapped_column(String(200))
     hostname: Mapped[str | None] = mapped_column(String(255), index=True)
     dns_name: Mapped[str | None] = mapped_column(String(255))

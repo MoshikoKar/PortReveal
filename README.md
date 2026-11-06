@@ -552,9 +552,10 @@ the target; keep environments on the same schema revision.
 ### Availability and capacity
 
 **Single process by design.** One app process holds the scan queue, the scheduler,
-and the web-capture worker. High availability (several replicas, failover) is a
-non-goal: two processes would run the same schedule and queue twice. The process is
-therefore a single point of failure, mitigated by:
+and the web-capture worker. Several uvicorn workers may share one PostgreSQL database:
+only the process holding a session advisory lock runs those background threads; others
+serve HTTP and poll to take over if the owner dies. Full multi-replica HA (separate
+hosts) is still a non-goal. The process remains a single point of failure, mitigated by:
 
 - **Automatic restart:** `restart: unless-stopped` (Docker); on Windows, rerun the
   Task Scheduler task or `run.ps1`.
@@ -662,9 +663,11 @@ Discovery uses ICMP/TCP (rate-capped ARP on local segments). No network-scan or
 enrichment stage sends UDP (Domain scans send rate-limited DNS queries to the configured
 resolvers only). Service detection runs `--version-light` and never
 probes telephony signaling ports (H.323 1720, SCCP 2000/2443, CTI 2748, SIP
-5060/5061), which can crash Cisco CUCM and similar call managers. Device identity prefers unique MAC, then IP/hostname rules.
-History and compressed daily snapshots are retained (default 365 days). What is
-stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy/data-and-privacy.md).
+5060/5061), which can crash Cisco CUCM and similar call managers. Device identity prefers unique MAC, then IP/hostname rules;
+NetBIOS MACs are collected before matching when enabled; cross-network IP matches are refused without MAC continuity;
+router ARP (SNMP) entries older than ten minutes are skipped when the agent exposes LastUpdated. Existing duplicate
+device rows from before these rules are not auto-merged. History and compressed daily snapshots are retained
+(default 365 days). What is stored, for how long, and how to remove it: [data and privacy](docs/data-and-privacy/data-and-privacy.md).
 
 Layout overview:
 
