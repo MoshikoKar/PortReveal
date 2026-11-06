@@ -16,9 +16,13 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from ..scanner.types import HostObservation
+
+# MAC sources that are a snapshot of someone else's table, not the device's own reply.
+WEAK_MAC_SOURCES = frozenset({"snmp"})
 
 
 class DeviceLike(Protocol):
@@ -88,9 +92,22 @@ def identity_hostname(hostname: str | None, ip: str) -> str | None:
     return None if h is None or is_generic_hostname(h, ip) else h
 
 
-def match_hosts(hosts: list[HostObservation], devices: list[DeviceLike]) -> dict[str, DeviceLike | None]:
+def match_hosts(
+    hosts: list[HostObservation], devices: list[DeviceLike], network_of: Callable[[str], Any] | None = None,
+) -> dict[str, DeviceLike | None]:
     """Return {host.ip: matched device or None (new device)}."""
-    result: dict[str, DeviceLike | None] = {}
+    return {ip: (m[0] if m else None) for ip, m in match_hosts_detailed(hosts, devices, network_of).items()}
+
+
+def match_hosts_detailed(
+    hosts: list[HostObservation], devices: list[DeviceLike], network_of: Callable[[str], Any] | None = None,
+) -> dict[str, tuple[DeviceLike, str] | None]:
+    """Return {host.ip: (matched device, pass name) or None (new device)}.
+
+    `network_of(ip)` gives the network id of an address (or None). It is only a tie-breaker: a
+    device in another network is not excluded, because real devices move between networks.
+    """
+    result: dict[str, tuple[DeviceLike, str]] = {}
     claimed: set[int] = set()
 
     mac_counts = Counter(normalize_mac(h.mac) for h in hosts if normalize_mac(h.mac))
@@ -98,6 +115,17 @@ def match_hosts(hosts: list[HostObservation], devices: list[DeviceLike]) -> dict
 
     def recency(d: DeviceLike):
         return (d.status == "active", d.last_seen)
+
+    def net_of(ip: str) -> Any:
+        return network_of(ip) if network_of else None
+
+    def same_network(d: DeviceLike, ip: str) -> bool:
+        dn, hn = getattr(d, "network_id", None), net_of(ip)
+        return dn is not None and hn is not None and dn == hn
+
+    def other_network(d: DeviceLike, ip: str) -> bool:
+        dn, hn = getattr(d, "network_id", None), net_of(ip)
+        return dn is not None and hn is not None and dn != hn
 
     by_mac: dict[str, DeviceLike] = {}
     by_ip: dict[str, list[DeviceLike]] = {}
@@ -109,20 +137,26 @@ def match_hosts(hosts: list[HostObservation], devices: list[DeviceLike]) -> dict
         if (hn := identity_hostname(d.hostname, d.current_ip)):
             by_name.setdefault(hn, []).append(d)
 
-    # Pass 1: MAC
+    # Pass 1: MAC. A MAC from a router's ARP table is only a snapshot; when it names a different
+    # non-generic hostname than the device's, it is treated as stale and not used.
     for h in hosts:
         m = usable_mac.get(h.ip)
         d = by_mac.get(m) if m else None
-        if d is not None and id(d) not in claimed:
-            result[h.ip] = d
-            claimed.add(id(d))
+        if d is None or id(d) in claimed:
+            continue
+        if h.mac_source in WEAK_MAC_SOURCES and _names_conflict(h, d):
+            continue
+        result[h.ip] = (d, "mac")
+        claimed.add(id(d))
 
     # Pass 2: same IP, no contradicting evidence
     for h in hosts:
         if h.ip in result:
             continue
         candidates = sorted(
-            (d for d in by_ip.get(h.ip, []) if id(d) not in claimed), key=recency, reverse=True
+            (d for d in by_ip.get(h.ip, []) if id(d) not in claimed),
+            key=lambda d: (same_network(d, h.ip), recency(d)),
+            reverse=True,
         )
         if not candidates:
             continue
@@ -132,13 +166,14 @@ def match_hosts(hosts: list[HostObservation], devices: list[DeviceLike]) -> dict
             if host_mac != dev_mac:
                 continue  # a different machine now uses this IP
         else:
-            hn_host = identity_hostname(h.hostname, h.ip)
-            hn_dev = identity_hostname(d.hostname, d.current_ip)
-            if hn_host and hn_dev and hn_host != hn_dev:
+            if _names_conflict(h, d):
                 continue
             if host_mac and not dev_mac and host_mac in by_mac:
                 continue  # MAC belongs to another known device (already handled or claimed)
-        result[h.ip] = d
+            # No MAC on either side: an address shared with another network is not evidence.
+            if not host_mac and not dev_mac and other_network(d, h.ip):
+                continue
+        result[h.ip] = (d, "ip")
         claimed.add(id(d))
 
     # Pass 3: hostname moved to a new IP
@@ -153,11 +188,29 @@ def match_hosts(hosts: list[HostObservation], devices: list[DeviceLike]) -> dict
             d for d in by_name.get(hn, [])
             if id(d) not in claimed
             and not (host_mac and normalize_mac(d.mac) and normalize_mac(d.mac) != host_mac)
+            and not _held_by_other_machine(d, host_mac, usable_mac)
         ]
         if len(candidates) == 1:
-            result[h.ip] = candidates[0]
+            result[h.ip] = (candidates[0], "hostname")
             claimed.add(id(candidates[0]))
 
     for h in hosts:
         result.setdefault(h.ip, None)
     return result
+
+
+def _names_conflict(h: HostObservation, d: DeviceLike) -> bool:
+    hn_host = identity_hostname(h.hostname, h.ip)
+    hn_dev = identity_hostname(d.hostname, d.current_ip)
+    return bool(hn_host and hn_dev and hn_host != hn_dev)
+
+
+def _held_by_other_machine(d: DeviceLike, host_mac: str | None, usable_mac: dict[str, str]) -> bool:
+    """A hostname move needs evidence that the device left its address. If its old address now answers
+    with a different MAC and neither side has a MAC that would settle it, the device may still be
+    elsewhere (offline, or cloned name), so a new device is safer than a merge."""
+    dev_mac = normalize_mac(d.mac)
+    if host_mac or not dev_mac:
+        return False
+    other = usable_mac.get(d.current_ip)
+    return other is not None and other != dev_mac

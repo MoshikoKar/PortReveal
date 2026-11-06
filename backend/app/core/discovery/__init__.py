@@ -48,6 +48,21 @@ def select_netbios_batch(ips: list[str], *, limit: int = MAX_NETBIOS_QUERIES_PER
     return batch
 
 
+def collect_netbios_macs(ips: list[str], *, timeout: float = 0.5) -> dict[str, str]:
+    """{ip: MAC} from NetBIOS replies, for hosts the scanner could not get a MAC for.
+
+    Runs before identity matching so a device's own adapter MAC is known when a new device would
+    otherwise be created. Best-effort: silent on error, and capped like the name query."""
+    if not ips:
+        return {}
+    macs: dict[str, str] = {}
+    try:
+        query_netbios_names(select_netbios_batch(ips), timeout=timeout, macs=macs)
+    except Exception:
+        log.debug("NetBIOS MAC discovery failed", exc_info=True)
+    return macs
+
+
 def collect_local_names(ips: list[str], *, mdns: bool = True, ssdp: bool = True, netbios: bool = True,
                         timeout: float = 2.0, netbios_timeout: float = 0.5,
                         netbios_macs: dict[str, str] | None = None) -> dict[str, tuple[str, str]]:

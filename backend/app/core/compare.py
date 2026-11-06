@@ -64,7 +64,7 @@ from ..scanner.known_ports import merge_port_scope
 from ..scanner.types import VERIFIED_METHOD, HostObservation, PortObservation
 from ..scanner.verify_services import WEAK_SERVICE_LABELS
 from ..settings_store import PresenceSettings, RetentionSettings, ScanSettings, get_section
-from .identity import identity_hostname, match_hosts, normalize_hostname, normalize_mac
+from .identity import identity_hostname, match_hosts_detailed, normalize_hostname, normalize_mac
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ class _DeviceKey:
     hostname: str | None
     status: str
     last_seen: datetime | None
+    network_id: int | None = None
 
 
 # Device ids per `IN (...)` when loading the scoped devices (well under SQLite's bound-parameter limit).
@@ -153,6 +154,7 @@ class _Applier:
         self.db, self.scan, self.outcome, self.cfg, self.now = db, scan, outcome, cfg, now
         self.correlate = correlate
         self.result = ApplyResult()
+        self.match_reasons: dict[str, str] = {}
         self.networks = [(n, AddressSet.from_specs(n.cidr))
                          for n in db.scalars(select(Network).where(Network.archived_at.is_(None))).all()]
         self._scope_cache: dict[int, PortScope | None] = {}
@@ -252,7 +254,8 @@ class _Applier:
         ips = {h.ip for h in hosts}
         macs = {m for h in hosts if (m := normalize_mac(h.mac))}
         names = {n for h in hosts if (n := identity_hostname(h.hostname, h.ip))}
-        cols = (Device.id, Device.current_ip, Device.mac, Device.hostname, Device.status, Device.last_seen)
+        cols = (Device.id, Device.current_ip, Device.mac, Device.hostname, Device.status, Device.last_seen,
+                Device.network_id)
         keys: dict[int, _DeviceKey] = {}
         for column, values in ((Device.current_ip, ips), (Device.mac, macs), (Device.hostname, names)):
             ordered = sorted(values)
@@ -270,9 +273,14 @@ class _Applier:
         "not detected", found from an (id, ip) projection of active/unknown devices); devices
         elsewhere in the inventory are never materialized.
         """
-        key_matches = match_hosts(hosts, self.identity_keys(hosts))
+        def network_of(ip: str) -> int | None:
+            net = self.network_for(ip)
+            return net.id if net else None
+
+        key_matches = match_hosts_detailed(hosts, self.identity_keys(hosts), network_of)
+        self.match_reasons = {ip: m[1] for ip, m in key_matches.items() if m is not None}
         targets = self.outcome.targets
-        wanted = {k.id for k in key_matches.values() if k is not None}
+        wanted = {m[0].id for m in key_matches.values() if m is not None}
         wanted.update(dev_id for dev_id, ip in self.db.execute(
             select(Device.id, Device.current_ip).where(Device.status.in_((DEVICE_ACTIVE, DEVICE_UNKNOWN)))
         ).tuples() if ip in targets)
@@ -284,7 +292,7 @@ class _Applier:
                 .options(selectinload(Device.ports), selectinload(Device.ips))
             ).all()
         by_id = {d.id: d for d in devices}
-        matches = {ip: (by_id[k.id] if k is not None else None) for ip, k in key_matches.items()}
+        matches = {ip: (by_id[m[0].id] if m is not None else None) for ip, m in key_matches.items()}
         return devices, matches
 
     # --- main ----------------------------------------------------------------
@@ -324,7 +332,9 @@ class _Applier:
             else:
                 label = device_label(dev)
                 if dev.current_ip != h.ip:
-                    self.emit(dev, EV_IP_CHANGED, mode, f"{label} changed IP address {dev.current_ip} -> {h.ip}",
+                    via = self.match_reasons.get(h.ip)
+                    suffix = f" (matched by {via})" if via else ""
+                    self.emit(dev, EV_IP_CHANGED, mode, f"{label} changed IP address {dev.current_ip} -> {h.ip}{suffix}",
                               ip=h.ip, old=dev.current_ip, new=h.ip)
                     dev.current_ip = h.ip
                 if dev.status == DEVICE_NOT_DETECTED:
