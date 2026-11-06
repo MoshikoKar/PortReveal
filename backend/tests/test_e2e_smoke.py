@@ -818,6 +818,7 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
         assert name_b not in text
 
         # Print report: must wait for filtered summary + findings before window.print().
+        # Report markup uses executive summary + findings table (no longer `.vuln-print-kpis`).
         def install_print_mock() -> None:
             page.evaluate(
                 """() => {
@@ -826,9 +827,9 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
                   window.__pr_print_had_findings = false;
                   window.print = () => {
                     const report = document.querySelector('.vuln-print-report');
-                    const kpis = report && report.querySelector('.vuln-print-kpis');
+                    const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
                     const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
-                    window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+                    window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
                     window.__pr_print_had_findings = !!(rows && rows.length > 0);
                     window.__pr_print_calls++;
                   };
@@ -858,9 +859,9 @@ def test_vulnerabilities_network_facet_export_and_print(live_app, browser):
             window.__pr_print_had_findings = false;
             window.print = () => {
               const report = document.querySelector('.vuln-print-report');
-              const kpis = report && report.querySelector('.vuln-print-kpis');
+              const exec = report && report.querySelector('.vuln-print-sentence, .vuln-print-exec');
               const rows = report && report.querySelectorAll('.vuln-print-table tbody tr');
-              window.__pr_print_had_summary = !!(kpis && kpis.textContent && /Findings/i.test(kpis.textContent));
+              window.__pr_print_had_summary = !!(exec && /finding/i.test(exec.textContent || ''));
               window.__pr_print_had_findings = !!(rows && rows.length > 0);
               window.__pr_print_calls++;
             };
@@ -908,10 +909,14 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
         expect(page.get_by_role("heading", name="Vulnerabilities", exact=True)).to_be_visible(timeout=15_000)
         expect(page.get_by_label("Network filter: All networks")).to_be_visible(timeout=15_000)
 
-        # Delay filtered summary responses so the Export menu observes the loading gate.
+        # Hold filtered summary responses until the Export menu has shown the loading gate.
+        import threading
+
+        release_summary = threading.Event()
+
         def handle_summary(route):
             if "network_id=" in route.request.url and route.request.method == "GET":
-                time.sleep(1.2)
+                release_summary.wait(timeout=15)
             route.continue_()
 
         page.route("**/api/vulns/summary*", handle_summary)
@@ -944,6 +949,7 @@ def test_vulnerabilities_print_waits_for_matching_network_summary(live_app, brow
         expect(print_btn).to_be_disabled(timeout=5_000)
         expect(panel.get_by_text("Waiting for the summary to load…")).to_be_visible()
 
+        release_summary.set()
         expect(print_btn).to_be_enabled(timeout=15_000)
         print_btn.click()
         page.wait_for_function("() => window.__pr_print_calls > 0", timeout=20_000)
@@ -1184,8 +1190,6 @@ def test_web_gallery_pages_filters_and_preview(live_app, browser):
         expect(cards).to_have_count(36)
         # Default is every status ("All"); Screenshot narrows to cards with a captured image.
         expect(page.get_by_role("button", name=re.compile(r"^All"))).to_have_attribute("aria-pressed", "true")
-        # Count thumbnails from the Screenshot-filtered page only (All would accumulate).
-        thumbs.clear()
         page.get_by_role("button", name=re.compile(r"^Screenshot")).click()
         expect(page).to_have_url(re.compile(r"status=ok"), timeout=10_000)
         expect(page.get_by_role("button", name=re.compile(r"^Screenshot"))).to_have_attribute("aria-pressed", "true")
@@ -1194,7 +1198,11 @@ def test_web_gallery_pages_filters_and_preview(live_app, browser):
         shown = page.get_by_text(re.compile(r"^Showing \d+ of \d+$"))
         total = int(re.search(r"of (\d+)", shown.inner_text()).group(1))
         assert total > 36
-        # Only cards near the viewport fetched their thumbnail; the rest show a placeholder.
+        # Fresh navigation so thumbnail requests are not satisfied only from the All-page HTTP cache.
+        thumbs.clear()
+        page.goto(f"{base}/web?status=ok")
+        expect(cards.first).to_be_visible(timeout=5_000)
+        expect(cards).to_have_count(36, timeout=10_000)
         page.wait_for_timeout(500)
         assert 0 < len(set(thumbs)) < 36, len(set(thumbs))
         assert page.locator(".host-card .shot-skeleton").count() > 0
