@@ -53,16 +53,20 @@ export function readEnv() {
   return { ...env, ...process.env };
 }
 
-/** Find a system Python >= 3.10 to create the virtualenv with. */
+/** Find a system Python 3.10–3.14 for the virtualenv (wheels exist; 3.15+ often needs source builds). */
 export function findSystemPython() {
+  // Prefer specific py -3.x tags first so a default 3.15 install does not win over 3.12/3.13.
   const candidates = IS_WIN
-    ? [['py', ['-3']], ['python', []], ['python3', []]]
+    ? [
+      ['py', ['-3.12']], ['py', ['-3.13']], ['py', ['-3.11']], ['py', ['-3.10']], ['py', ['-3.14']],
+      ['py', ['-3']], ['python', []], ['python3', []],
+    ]
     : [['python3', []], ['python', []]];
   for (const [cmd, pre] of candidates) {
     const out = capture(cmd, [...pre, '-c', 'import sys; print("%d.%d" % sys.version_info[:2])']);
     if (!out) continue;
     const [maj, min] = out.split(/\s+/).pop().split('.').map(Number);
-    if (maj === 3 && min >= 10) return { cmd, pre, version: `${maj}.${min}` };
+    if (maj === 3 && min >= 10 && min <= 14) return { cmd, pre, version: `${maj}.${min}` };
   }
   return null;
 }
@@ -75,18 +79,37 @@ export function requirementsHash() {
   return h.digest('hex');
 }
 
+/** True when backend/.venv's Python actually runs (false after the base install was removed). */
+export function venvPythonWorks() {
+  if (!existsSync(VENV_PYTHON)) return false;
+  return capture(VENV_PYTHON, ['-c', 'import sys']) !== null;
+}
+
 export function pythonReady() {
-  return existsSync(VENV_PYTHON) && existsSync(STAMP) && readFileSync(STAMP, 'utf8').trim() === requirementsHash();
+  return venvPythonWorks() && existsSync(STAMP) && readFileSync(STAMP, 'utf8').trim() === requirementsHash();
 }
 
 export function nodeReady() {
   return existsSync(join(ROOT, 'node_modules', 'concurrently')) && existsSync(join(ROOT, 'node_modules', 'vite'));
 }
 
+/** Common Windows install paths (winget) when PATH is stale in the current shell. */
+const WIN_NMAP_EXE = [
+  'C:\\Program Files (x86)\\Nmap\\nmap.exe',
+  'C:\\Program Files\\Nmap\\nmap.exe',
+];
+
 export function detectNmap(env = readEnv()) {
-  const nmap = env.NMAP_PATH || 'nmap';
-  const out = capture(nmap, ['--version']);
-  if (!out) return null;
-  const m = out.match(/Nmap version (\S+)/);
-  return m ? m[1] : 'unknown';
+  const configured = env.NMAP_PATH || 'nmap';
+  const candidates = [configured];
+  if (IS_WIN && !configured.includes('\\') && !configured.includes('/')) {
+    candidates.push(...WIN_NMAP_EXE);
+  }
+  for (const nmap of candidates) {
+    const out = capture(nmap, ['--version']);
+    if (!out) continue;
+    const m = out.match(/Nmap version (\S+)/);
+    return m ? m[1] : 'unknown';
+  }
+  return null;
 }

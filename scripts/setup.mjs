@@ -5,12 +5,12 @@
 //   - installs Node dependencies when missing
 //   - runs database migrations
 //   - reports Nmap availability
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   BACKEND, IS_WIN, ROOT, STAMP, VENV, VENV_PYTHON, c, capture, detectNmap, findSystemPython, log,
-  nodeReady, pythonReady, requirementsHash, run,
+  nodeReady, pythonReady, requirementsHash, run, venvPythonWorks,
 } from './lib.mjs';
 
 function fail(msg) {
@@ -29,9 +29,14 @@ export function ensureEnvFile() {
 
 export function ensurePython({ force = false } = {}) {
   if (!force && pythonReady()) return;
-  if (!existsSync(VENV_PYTHON)) {
+  // Windows venv launchers can remain after the base Python is uninstalled (exit 103).
+  if (force || !existsSync(VENV_PYTHON) || !venvPythonWorks()) {
+    if (existsSync(VENV)) {
+      log('removing broken or stale backend/.venv');
+      rmSync(VENV, { recursive: true, force: true });
+    }
     const py = findSystemPython();
-    if (!py) fail('Python 3.10+ was not found on PATH. Install Python 3.10 or newer and re-run `npm run setup`.');
+    if (!py) fail('Python 3.10–3.14 was not found on PATH. Install a supported CPython and re-run `npm run setup`.');
     log(`creating virtualenv backend/.venv with Python ${py.version}`);
     let status = run(py.cmd, [...py.pre, '-m', 'venv', VENV]);
     if (status !== 0 && capture('uv', ['--version'])) {

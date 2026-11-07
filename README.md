@@ -32,8 +32,10 @@ argument profiles - the UI and API never accept raw nmap options.
 
 ## Installation
 
-Requirements: **Node.js 20.19+** and **Python 3.10+** on `PATH`. Nmap is optional
-in development (required for real scans).
+Requirements: **Node.js 20.19+** and **Python 3.10–3.14** on `PATH` (3.15+ is skipped
+until wheels catch up). Nmap is optional in development (required for real scans).
+On Windows, setup and the scanner also look under `Program Files\Nmap` when `nmap`
+is installed but not yet on the shell `PATH`.
 
 ```bash
 git clone https://github.com/MoshikoKar/PortReveal.git
@@ -335,10 +337,12 @@ frontend typecheck/eslint, `npm run build`, and (separately) Alembic upgrade +
 Recommended when the scanner is a **Windows PC on the LAN** (Npc + Npcap).
 Docker Desktop runs **Postgres only**; the app and nmap stay on the host.
 
-Requirements: Node.js 20.19+, Python 3.10+, nmap+Npc, Docker Desktop, and on
+Requirements: Node.js 20.19+, Python 3.10–3.14, nmap+Npc, Docker Desktop, and on
 `PATH`: **ffmpeg** (RTSP) plus **FreeRDP** (`wfreerdp` / `sdl-freerdp`) if you
 want RDP stills, and **subfinder** / **dnsx** for Domain scans (installed by
-`npm run setup:capture-tools`; see [Domain scans](#domain-scans-optional)). Copy `.env.production.example` → `.env.production` and set at
+`npm run setup:capture-tools`; see [Domain scans](#domain-scans-optional)).
+Nmap is also found under the usual Windows install dirs if `PATH` is stale after
+a winget install. Copy `.env.production.example` → `.env.production` and set at
 least `POSTGRES_PASSWORD` and `APP_SECRET_KEY`.
 
 `npm run setup` (and production `run.ps1` when tools are missing) installs
@@ -702,7 +706,7 @@ docker/Dockerfile, docker-compose.yml
 ## Tech Stack
 
 - **Frontend:** React 19, React Router, TypeScript, Vite 7
-- **Backend:** Python 3.10+, FastAPI, Uvicorn, SQLAlchemy 2, Alembic, Pydantic
+- **Backend:** Python 3.10–3.14, FastAPI, Uvicorn, SQLAlchemy 2, Alembic, Pydantic
 - **Database:** SQLite (dev) or PostgreSQL 16 (prod)
 - **Scanner:** Nmap (production); MockScanner (development default)
 - **Enrichment:** Playwright (Chromium), ffmpeg (RTSP), FreeRDP (RDP; optional on host, in Docker image), built-in RFB client (VNC)

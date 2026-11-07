@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import shutil
 import time
 from dataclasses import dataclass
 
 from ..config import get_settings
 from .nmap_iface import list_nmap_interfaces
-from .nmap_scanner import nmap_is_privileged, nmap_version
+from .nmap_scanner import nmap_is_privileged, nmap_version, resolve_nmap_executable
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +66,6 @@ def scanner_host_ips() -> frozenset[str]:
             ips.add(str(ipaddress.IPv4Address(raw)))
         except ValueError:
             log.warning("ignoring invalid SCANNER_HOST_IPS entry: %r", raw[:40])
-    if scanner_status().effective_mode == "nmap" and (exe := shutil.which(s.nmap_path)):
+    if scanner_status().effective_mode == "nmap" and (exe := resolve_nmap_executable(s.nmap_path)):
         ips.update(str(i.address) for i in list_nmap_interfaces(exe) if i.up)
     return frozenset(ips)

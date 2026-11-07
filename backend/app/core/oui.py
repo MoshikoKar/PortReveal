@@ -7,7 +7,6 @@ names, no extra dependency. Best-effort: no file found -> no vendor.
 from __future__ import annotations
 
 import logging
-import shutil
 from functools import lru_cache
 from pathlib import Path
 
@@ -24,7 +23,8 @@ _SHARE_DIRS = (
 
 def _candidates() -> list[Path]:
     out: list[Path] = []
-    exe = shutil.which(get_settings().nmap_path)
+    from ..scanner.nmap_scanner import resolve_nmap_executable
+    exe = resolve_nmap_executable(get_settings().nmap_path)
     if exe:
         here = Path(exe).resolve().parent
         out += [here / _FILE, here.parent / "share" / "nmap" / _FILE]

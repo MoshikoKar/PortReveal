@@ -103,8 +103,29 @@ def nmap_is_privileged(setting: str) -> bool:
     return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
-def nmap_version(nmap_path: str) -> str | None:
+# winget/Insecure.Nmap often lands here while the installing shell's PATH is stale.
+_WIN_NMAP_EXE = (
+    r"C:\Program Files (x86)\Nmap\nmap.exe",
+    r"C:\Program Files\Nmap\nmap.exe",
+)
+
+
+def resolve_nmap_executable(nmap_path: str) -> str | None:
+    """Resolve nmap via PATH, an absolute NMAP_PATH, or common Windows install dirs."""
     exe = shutil.which(nmap_path)
+    if exe:
+        return exe
+    if os.path.isabs(nmap_path) and os.path.isfile(nmap_path):
+        return nmap_path
+    if sys.platform == "win32" and Path(nmap_path).name.lower() in ("nmap", "nmap.exe"):
+        for candidate in _WIN_NMAP_EXE:
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
+def nmap_version(nmap_path: str) -> str | None:
+    exe = resolve_nmap_executable(nmap_path)
     if not exe:
         return None
     try:
@@ -306,7 +327,7 @@ class NmapScanner:
     mode = "nmap"
 
     def __init__(self, nmap_path: str, privileged: bool, timing: str, tmp_dir: Path):
-        exe = shutil.which(nmap_path)
+        exe = resolve_nmap_executable(nmap_path)
         if not exe:
             raise ScanStageError(f"nmap executable not found ({nmap_path}). Install nmap or use SCANNER_MODE=mock.")
         self.exe = exe
